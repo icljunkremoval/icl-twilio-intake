@@ -144,7 +144,7 @@ app.get("/media-proxy", async (req, res) => {
   }
 });
 
-app.get("/admin/leads", (_req, res) => {
+app.get("/admin/leads", async (_req, res) => {
   try {
     const rows = (await pool.query("SELECT from_phone, last_event, substr(coalesce(last_body,''),1,80) AS last_body_80, substr(coalesce(address_text,''),1,60) AS address_60, zip_text, num_media, media_url0, distance_miles, last_seen_at FROM leads ORDER BY last_seen_at DESC LIMIT 50")).rows;
     const esc = (s) => String(s ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#39;");
@@ -166,7 +166,7 @@ app.get("/lead/:from", (req, res) => {
   res.json(JSON.parse(fs.readFileSync(fp, "utf8")));
 });
 
-app.get("/admin/lead/:from", (req, res) => {
+app.get("/admin/lead/:from", async (req, res) => {
   try {
     const from = req.params.from;
     const lead = (await pool.query("SELECT * FROM leads WHERE from_phone = $1", [from])).rows[0] || null;
