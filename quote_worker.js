@@ -28,7 +28,7 @@ function claimForQuoting(from_phone) {
   const info = db.prepare(`
     UPDATE leads
     SET quote_status = 'QUOTING',
-        last_error = NULL,
+
         last_seen_at = NOW()
     WHERE from_phone = ?
       AND quote_ready = 1
@@ -41,7 +41,7 @@ function setError(from_phone, err) {
   db.prepare(`
     UPDATE leads
     SET quote_status = 'ERROR',
-        last_error = ?,
+
         last_seen_at = NOW()
     WHERE from_phone = ?
   `).run(String(err && err.message ? err.message : err), from_phone);
