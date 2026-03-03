@@ -45,6 +45,7 @@ async function initDb() {
       vision_load_bucket TEXT,
       vision_access_level TEXT,
       actual_load_bucket TEXT,
+      last_error TEXT,
       status TEXT
     );
 
