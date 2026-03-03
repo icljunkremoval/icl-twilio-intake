@@ -36,7 +36,7 @@ function logEvent(from_phone, event_type, data) {
 }
 
 function setState(from_phone, state) {
-  db.prepare(`UPDATE leads SET conv_state = ?, last_seen_at = datetime('now') WHERE from_phone = ?`).run(state, from_phone);
+  db.prepare(`UPDATE leads SET conv_state = ?, last_seen_at = NOW() WHERE from_phone = ?`).run(state, from_phone);
 }
 
 async function triggerQuote(from_phone) {
@@ -68,10 +68,10 @@ function runVisionAsync(from_phone, mediaUrl) {
   analyzeJobMedia(mediaUrl).then((vision) => {
     logEvent(from_phone, "vision_analysis", vision);
     try {
-      db.prepare(`UPDATE leads SET vision_analysis=?,troll_flag=?,crew_notes=?,item_tags=?,vision_load_bucket=?,vision_access_level=?,last_seen_at=datetime('now') WHERE from_phone=?`)
+      db.prepare(`UPDATE leads SET vision_analysis=?,troll_flag=?,crew_notes=?,item_tags=?,vision_load_bucket=?,vision_access_level=?,last_seen_at=NOW() WHERE from_phone=?`)
         .run(JSON.stringify(vision), vision.troll_flag?1:0, vision.crew_notes||null, JSON.stringify(vision.data_tags||[]), vision.load_bucket||null, vision.access_level||null, from_phone);
     } catch(e) {
-      try { db.prepare(`UPDATE leads SET vision_analysis=?,troll_flag=?,crew_notes=?,item_tags=?,last_seen_at=datetime('now') WHERE from_phone=?`).run(JSON.stringify(vision),vision.troll_flag?1:0,vision.crew_notes||null,JSON.stringify(vision.data_tags||[]),from_phone); } catch(e2){}
+      try { db.prepare(`UPDATE leads SET vision_analysis=?,troll_flag=?,crew_notes=?,item_tags=?,last_seen_at=NOW() WHERE from_phone=?`).run(JSON.stringify(vision),vision.troll_flag?1:0,vision.crew_notes||null,JSON.stringify(vision.data_tags||[]),from_phone); } catch(e2){}
     }
     if (vision.troll_flag || !vision.is_valid_junk) {
       setState(from_phone, STATES.ESCALATED);
@@ -81,7 +81,7 @@ function runVisionAsync(from_phone, mediaUrl) {
     const updates=[]; const params=[];
     if (vision.load_bucket && vision.load_confidence==="HIGH") { updates.push("load_bucket=?"); params.push(vision.load_bucket); logEvent(from_phone,"vision_load_set",{load_bucket:vision.load_bucket}); }
     if (vision.access_level && vision.access_level!=="UNKNOWN" && vision.access_confidence==="HIGH") { updates.push("access_level=?"); params.push(vision.access_level); logEvent(from_phone,"vision_access_set",{access_level:vision.access_level}); }
-    if (updates.length>0) { params.push(from_phone); db.prepare("UPDATE leads SET "+updates.join(",")+",last_seen_at=datetime('now') WHERE from_phone=?").run(...params); }
+    if (updates.length>0) { params.push(from_phone); db.prepare("UPDATE leads SET "+updates.join(",")+",last_seen_at=NOW() WHERE from_phone=?").run(...params); }
   }).catch((e)=>{ logEvent(from_phone,"vision_error",{error:String(e.message||e)}); });
 }
 
@@ -108,14 +108,14 @@ async function handleConversation(payload) {
         try { upsertLead.run({from_phone,to_phone,ts:new Date().toISOString(),last_event:"media_received",last_body:body,num_media:numMedia,media_url0:mediaUrl||null}); } catch(e){}
         logEvent(from_phone,"media_received",{numMedia,mediaUrl});
         setState(from_phone,STATES.AWAITING_HAZMAT);
-        db.prepare(`UPDATE leads SET has_media=1,last_seen_at=datetime('now') WHERE from_phone=?`).run(from_phone);
+        db.prepare(`UPDATE leads SET has_media=1,last_seen_at=NOW() WHERE from_phone=?`).run(from_phone);
         if (mediaUrl) runVisionAsync(from_phone,mediaUrl);
         await sendSms(from_phone,"Got it — quick safety check: any paint, chemicals, fuel, batteries, asbestos, or medical waste in the mix?\n\nReply YES or NO");
       } else {
         setState(from_phone,STATES.AWAITING_MEDIA);
         backfillLatestMedia({from:from_phone,maxAgeSeconds:120}).then((b)=>{
           if (b&&b.mediaUrl0) {
-            try { db.prepare(`UPDATE leads SET has_media=1,num_media=?,media_url0=?,last_seen_at=datetime('now') WHERE from_phone=?`).run(b.numMedia,b.mediaUrl0,from_phone); } catch(e){}
+            try { db.prepare(`UPDATE leads SET has_media=1,num_media=?,media_url0=?,last_seen_at=NOW() WHERE from_phone=?`).run(b.numMedia,b.mediaUrl0,from_phone); } catch(e){}
             setState(from_phone,STATES.AWAITING_HAZMAT);
             logEvent(from_phone,"media_backfill_hit",b);
             runVisionAsync(from_phone,b.mediaUrl0);
@@ -145,7 +145,7 @@ async function handleConversation(payload) {
     case STATES.AWAITING_ADDRESS: {
       if (body.length<3) { await sendSms(from_phone,"Please send the service address or nearest cross streets + ZIP."); break; }
       const zipMatch=body.match(/\b(\d{5})\b/); const zip=zipMatch?zipMatch[1]:null;
-      db.prepare(`UPDATE leads SET address_text=?,zip=?,zip_text=?,last_seen_at=datetime('now') WHERE from_phone=?`).run(body,zip,zip,from_phone);
+      db.prepare(`UPDATE leads SET address_text=?,zip=?,zip_text=?,last_seen_at=NOW() WHERE from_phone=?`).run(body,zip,zip,from_phone);
       logEvent(from_phone,"address_capture",{address:body,zip});
       await advanceAfterAddress(from_phone);
       break;
@@ -155,8 +155,8 @@ async function handleConversation(payload) {
       let accessLevel=null;
       for(const [key,val] of Object.entries(ACCESS_MAP)){if(bodyUpper.includes(key)){accessLevel=val;break;}}
       if (!accessLevel) { await sendSms(from_phone,"Reply with: CURB / DRIVEWAY / GARAGE / INSIDE HOME / STAIRS / APARTMENT / OTHER"); break; }
-      try { db.prepare(`UPDATE leads SET access_level=?,customer_access_level=?,last_seen_at=datetime('now') WHERE from_phone=?`).run(accessLevel,accessLevel,from_phone); }
-      catch(e) { db.prepare(`UPDATE leads SET access_level=?,last_seen_at=datetime('now') WHERE from_phone=?`).run(accessLevel,from_phone); }
+      try { db.prepare(`UPDATE leads SET access_level=?,customer_access_level=?,last_seen_at=NOW() WHERE from_phone=?`).run(accessLevel,accessLevel,from_phone); }
+      catch(e) { db.prepare(`UPDATE leads SET access_level=?,last_seen_at=NOW() WHERE from_phone=?`).run(accessLevel,from_phone); }
       logEvent(from_phone,"access_capture",{access_level:accessLevel});
       const afterAccess=await getLead.get(from_phone);
       if (afterAccess&&afterAccess.load_bucket) { setState(from_phone,STATES.QUOTE_READY); await triggerQuote(from_phone); }
@@ -168,8 +168,8 @@ async function handleConversation(payload) {
       let loadBucket=null;
       for(const [key,val] of Object.entries(LOAD_MAP)){if(bodyUpper.includes(key)){loadBucket=val;break;}}
       if (!loadBucket) { await sendSms(from_phone,"Reply SMALL, MEDIUM, or LARGE."); break; }
-      try { db.prepare(`UPDATE leads SET load_bucket=?,customer_load_bucket=?,conv_state=?,last_seen_at=datetime('now') WHERE from_phone=?`).run(loadBucket,loadBucket,STATES.QUOTE_READY,from_phone); }
-      catch(e) { db.prepare(`UPDATE leads SET load_bucket=?,conv_state=?,last_seen_at=datetime('now') WHERE from_phone=?`).run(loadBucket,STATES.QUOTE_READY,from_phone); }
+      try { db.prepare(`UPDATE leads SET load_bucket=?,customer_load_bucket=?,conv_state=?,last_seen_at=NOW() WHERE from_phone=?`).run(loadBucket,loadBucket,STATES.QUOTE_READY,from_phone); }
+      catch(e) { db.prepare(`UPDATE leads SET load_bucket=?,conv_state=?,last_seen_at=NOW() WHERE from_phone=?`).run(loadBucket,STATES.QUOTE_READY,from_phone); }
       logEvent(from_phone,"load_capture",{load_bucket:loadBucket});
       await triggerQuote(from_phone);
       break;
@@ -184,7 +184,7 @@ async function handleConversation(payload) {
       let window=null;
       for(const [key,val] of Object.entries(WINDOW_MAP)){if(bodyUpper.includes(key)){window=val;break;}}
       if (!window) { await sendSms(from_phone,"Reply 1, 2, or 3:\n1) 9–11 AM\n2) 12–2 PM\n3) 3–5 PM"); break; }
-      db.prepare(`UPDATE leads SET timing_pref=?,conv_state=?,last_seen_at=datetime('now') WHERE from_phone=?`).run(window,STATES.WINDOW_SELECTED,from_phone);
+      db.prepare(`UPDATE leads SET timing_pref=?,conv_state=?,last_seen_at=NOW() WHERE from_phone=?`).run(window,STATES.WINDOW_SELECTED,from_phone);
       logEvent(from_phone,"window_selected",{timing_pref:window});
       await sendSms(from_phone,`Locked in. ICL Junk Removal arrives ${window}. You'll get a heads-up when we're on the way.\n\nQuestions? Reply HELP anytime.`);
       break;
