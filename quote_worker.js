@@ -1,4 +1,4 @@
-const { db, insertEvent } = require("./db");
+const { db, pool, insertEvent } = require("./db");
 const { priceQuoteV1 } = require("./pricing_v1");
 const { createSquarePaymentLink } = require("./square_quote");
 const { sendSms } = require("./twilio_sms");
@@ -24,17 +24,16 @@ function getLead(from_phone) {
   return db.prepare("SELECT * FROM leads WHERE from_phone = ?").get(from_phone);
 }
 
-function claimForQuoting(from_phone) {
-  const info = db.prepare(`
+async function claimForQuoting(from_phone) {
+  const res = await pool.query(`
     UPDATE leads
     SET quote_status = 'QUOTING',
-        last_error = NULL,
-        last_seen_at = datetime('now')
-    WHERE from_phone = ?
+        last_seen_at = NOW()
+    WHERE from_phone = $1
       AND quote_ready = 1
       AND (quote_status IS NULL OR quote_status = '' OR quote_status = 'READY' OR quote_status = 'ERROR')
-  `).run(from_phone);
-  return info.changes === 1;
+  `, [from_phone]);
+  return res.rowCount === 1;
 }
 
 function setError(from_phone, err) {
