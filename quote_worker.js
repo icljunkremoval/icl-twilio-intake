@@ -20,8 +20,9 @@ function buildQuoteSms(lead, pricing, paymentUrl) {
   ].join("\n");
 }
 
-function getLead(from_phone) {
-  return db.prepare("SELECT * FROM leads WHERE from_phone = ?").get(from_phone);
+async function getLead(from_phone) {
+  const res = await pool.query("SELECT * FROM leads WHERE from_phone = $1", [from_phone]);
+  return res.rows[0] || null;
 }
 
 async function claimForQuoting(from_phone) {
@@ -74,7 +75,7 @@ function writePricing(from_phone, pricing) {
 }
 
 async function maybeCreateQuote(from_phone) {
-  const lead0 = getLead(from_phone);
+  const lead0 = await getLead(from_phone);
   if (!lead0) return { ok: false, reason: "no_lead" };
 
   if (!claimForQuoting(from_phone)) {
@@ -82,7 +83,7 @@ async function maybeCreateQuote(from_phone) {
   }
 
   try {
-    const lead = getLead(from_phone);
+    const lead = await getLead(from_phone);
 
     const pricing = priceQuoteV1({
       load_bucket: lead.load_bucket,
