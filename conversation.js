@@ -49,7 +49,7 @@ async function triggerQuote(from_phone) {
 }
 
 async function advanceAfterAddress(from_phone) {
-  const lead = getLead.get(from_phone);
+  const lead = await getLead.get(from_phone);
   const hasLoad = lead && lead.load_bucket;
   const hasAccess = lead && lead.access_level;
   if (hasLoad && hasAccess) {
@@ -95,7 +95,7 @@ async function handleConversation(payload) {
 
   try { upsertLead.run({from_phone,to_phone,ts:new Date().toISOString(),last_event:"message",last_body:body,num_media:numMedia,media_url0:mediaUrl||null}); } catch(e){}
 
-  const lead = getLead.get(from_phone);
+  const lead = await getLead.get(from_phone);
   const state = getConvState(lead);
 
   if (bodyUpper==="URGENT") { logEvent(from_phone,"urgent_flag",{body}); await sendSms(from_phone,"Got it — flagged URGENT. We'll prioritize your job."); return; }
@@ -158,7 +158,7 @@ async function handleConversation(payload) {
       try { db.prepare(`UPDATE leads SET access_level=?,customer_access_level=?,last_seen_at=datetime('now') WHERE from_phone=?`).run(accessLevel,accessLevel,from_phone); }
       catch(e) { db.prepare(`UPDATE leads SET access_level=?,last_seen_at=datetime('now') WHERE from_phone=?`).run(accessLevel,from_phone); }
       logEvent(from_phone,"access_capture",{access_level:accessLevel});
-      const afterAccess=getLead.get(from_phone);
+      const afterAccess=await getLead.get(from_phone);
       if (afterAccess&&afterAccess.load_bucket) { setState(from_phone,STATES.QUOTE_READY); await triggerQuote(from_phone); }
       else { setState(from_phone,STATES.AWAITING_LOAD); await sendSms(from_phone,"How much are you removing?\n\nSMALL — pickup-truck bed\nMEDIUM — half a truck\nLARGE — full truck"); }
       break;
