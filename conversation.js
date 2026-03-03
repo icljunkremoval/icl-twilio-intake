@@ -36,7 +36,7 @@ function logEvent(from_phone, event_type, data) {
 }
 
 function setState(from_phone, state) {
-  db.prepare(`UPDATE leads SET conv_state = ?, last_seen_at = NOW() WHERE from_phone = ?`).run(state, from_phone);
+  pool.query('UPDATE leads SET conv_state = $1, last_seen_at = NOW() WHERE from_phone = $2', [state, from_phone]).catch(e => console.error('[setState]', e.message));
 }
 
 async function triggerQuote(from_phone) {
@@ -68,10 +68,9 @@ function runVisionAsync(from_phone, mediaUrl) {
   analyzeJobMedia(mediaUrl).then((vision) => {
     logEvent(from_phone, "vision_analysis", vision);
     try {
-      db.prepare(`UPDATE leads SET vision_analysis=?,troll_flag=?,crew_notes=?,item_tags=?,vision_load_bucket=?,vision_access_level=?,last_seen_at=NOW() WHERE from_phone=?`)
-        .run(JSON.stringify(vision), vision.troll_flag?1:0, vision.crew_notes||null, JSON.stringify(vision.data_tags||[]), vision.load_bucket||null, vision.access_level||null, from_phone);
+      pool.query('UPDATE leads SET vision_analysis=$1,troll_flag=$2,crew_notes=$3,item_tags=$4,vision_load_bucket=$5,vision_access_level=$6,last_seen_at=NOW() WHERE from_phone=$7', [JSON.stringify(vision), vision.troll_flag?1:0, vision.crew_notes||null, JSON.stringify(vision.data_tags||[]), vision.load_bucket||null, vision.access_level||null, from_phone]).catch(()=>{});
     } catch(e) {
-      try { db.prepare(`UPDATE leads SET vision_analysis=?,troll_flag=?,crew_notes=?,item_tags=?,last_seen_at=NOW() WHERE from_phone=?`).run(JSON.stringify(vision),vision.troll_flag?1:0,vision.crew_notes||null,JSON.stringify(vision.data_tags||[]),from_phone); } catch(e2){}
+      pool.query('UPDATE leads SET vision_analysis=$1,troll_flag=$2,crew_notes=$3,item_tags=$4,last_seen_at=NOW() WHERE from_phone=$5', [JSON.stringify(vision),vision.troll_flag?1:0,vision.crew_notes||null,JSON.stringify(vision.data_tags||[]),from_phone]).catch(()=>{});
     }
     if (vision.troll_flag || !vision.is_valid_junk) {
       setState(from_phone, STATES.ESCALATED);
@@ -81,7 +80,12 @@ function runVisionAsync(from_phone, mediaUrl) {
     const updates=[]; const params=[];
     if (vision.load_bucket && vision.load_confidence==="HIGH") { updates.push("load_bucket=?"); params.push(vision.load_bucket); logEvent(from_phone,"vision_load_set",{load_bucket:vision.load_bucket}); }
     if (vision.access_level && vision.access_level!=="UNKNOWN" && vision.access_confidence==="HIGH") { updates.push("access_level=?"); params.push(vision.access_level); logEvent(from_phone,"vision_access_set",{access_level:vision.access_level}); }
-    if (updates.length>0) { params.push(from_phone); db.prepare("UPDATE leads SET "+updates.join(",")+",last_seen_at=NOW() WHERE from_phone=?").run(...params); }
+    if (updates.length>0) {
+      let i = 1;
+      const pgU = updates.map(() => { const col = updates[i-1].split('=')[0]; i++; return col+'=$'+(i-1); });
+      params.push(from_phone);
+      pool.query("UPDATE leads SET "+pgU.join(",")+",last_seen_at=NOW() WHERE from_phone=$"+i, params).catch(()=>{});
+    }
   }).catch((e)=>{ logEvent(from_phone,"vision_error",{error:String(e.message||e)}); });
 }
 
@@ -108,14 +112,14 @@ async function handleConversation(payload) {
         try { upsertLead.run({from_phone,to_phone,ts:new Date().toISOString(),last_event:"media_received",last_body:body,num_media:numMedia,media_url0:mediaUrl||null}); } catch(e){}
         logEvent(from_phone,"media_received",{numMedia,mediaUrl});
         setState(from_phone,STATES.AWAITING_HAZMAT);
-        db.prepare(`UPDATE leads SET has_media=1,last_seen_at=NOW() WHERE from_phone=?`).run(from_phone);
+        pool.query('UPDATE leads SET has_media=1,last_seen_at=NOW() WHERE from_phone=$1', [from_phone]).catch(()=>{});
         if (mediaUrl) runVisionAsync(from_phone,mediaUrl);
         await sendSms(from_phone,"Got it — quick safety check: any paint, chemicals, fuel, batteries, asbestos, or medical waste in the mix?\n\nReply YES or NO");
       } else {
         setState(from_phone,STATES.AWAITING_MEDIA);
         backfillLatestMedia({from:from_phone,maxAgeSeconds:120}).then((b)=>{
           if (b&&b.mediaUrl0) {
-            try { db.prepare(`UPDATE leads SET has_media=1,num_media=?,media_url0=?,last_seen_at=NOW() WHERE from_phone=?`).run(b.numMedia,b.mediaUrl0,from_phone); } catch(e){}
+            pool.query('UPDATE leads SET has_media=1,num_media=$1,media_url0=$2,last_seen_at=NOW() WHERE from_phone=$3', [b.numMedia,b.mediaUrl0,from_phone]).catch(()=>{});
             setState(from_phone,STATES.AWAITING_HAZMAT);
             logEvent(from_phone,"media_backfill_hit",b);
             runVisionAsync(from_phone,b.mediaUrl0);
@@ -145,7 +149,7 @@ async function handleConversation(payload) {
     case STATES.AWAITING_ADDRESS: {
       if (body.length<3) { await sendSms(from_phone,"Please send the service address or nearest cross streets + ZIP."); break; }
       const zipMatch=body.match(/\b(\d{5})\b/); const zip=zipMatch?zipMatch[1]:null;
-      db.prepare(`UPDATE leads SET address_text=?,zip=?,zip_text=?,last_seen_at=NOW() WHERE from_phone=?`).run(body,zip,zip,from_phone);
+      await pool.query('UPDATE leads SET address_text=$1,zip=$2,zip_text=$2,last_seen_at=NOW() WHERE from_phone=$3', [body,zip,from_phone]);
       logEvent(from_phone,"address_capture",{address:body,zip});
       await advanceAfterAddress(from_phone);
       break;
@@ -182,7 +186,7 @@ async function handleConversation(payload) {
       let window=null;
       for(const [key,val] of Object.entries(WINDOW_MAP)){if(bodyUpper.includes(key)){window=val;break;}}
       if (!window) { await sendSms(from_phone,"Reply 1, 2, or 3:\n1) 9–11 AM\n2) 12–2 PM\n3) 3–5 PM"); break; }
-      db.prepare(`UPDATE leads SET timing_pref=?,conv_state=?,last_seen_at=NOW() WHERE from_phone=?`).run(window,STATES.WINDOW_SELECTED,from_phone);
+      await pool.query('UPDATE leads SET timing_pref=$1,conv_state=$2,last_seen_at=NOW() WHERE from_phone=$3', [window,STATES.WINDOW_SELECTED,from_phone]);
       logEvent(from_phone,"window_selected",{timing_pref:window});
       await sendSms(from_phone,`Locked in. ICL Junk Removal arrives ${window}. You'll get a heads-up when we're on the way.\n\nQuestions? Reply HELP anytime.`);
       break;

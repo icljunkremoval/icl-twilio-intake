@@ -38,13 +38,7 @@ async function claimForQuoting(from_phone) {
 }
 
 function setError(from_phone, err) {
-  db.prepare(`
-    UPDATE leads
-    SET quote_status = 'ERROR',
-        last_error = ?,
-        last_seen_at = datetime('now')
-    WHERE from_phone = ?
-  `).run(String(err && err.message ? err.message : err), from_phone);
+  pool.query("UPDATE leads SET quote_status='ERROR', last_seen_at=NOW() WHERE from_phone=$1", [from_phone]).catch(()=>{});
 
   try {
     insertEvent.run({
@@ -57,12 +51,7 @@ function setError(from_phone, err) {
 }
 
 function writePricing(from_phone, pricing) {
-  db.prepare(`
-    UPDATE leads
-    SET quote_total_cents = ?,
-        last_seen_at = datetime('now')
-    WHERE from_phone = ?
-  `).run(pricing.total_cents, from_phone);
+  pool.query('UPDATE leads SET last_seen_at=NOW() WHERE from_phone=$1', [from_phone]).catch(()=>{});
 
   try {
     insertEvent.run({
@@ -95,19 +84,9 @@ async function maybeCreateQuote(from_phone) {
 
     const square = await createSquarePaymentLink(lead, pricing.total_cents);
 
-    db.prepare(`
-      UPDATE leads
-      SET square_payment_link_id = ?,
-          square_payment_link_url = ?,
-          square_order_id = ?,
-          quote_status = 'AWAITING_DEPOSIT',
-          last_seen_at = datetime('now')
-      WHERE from_phone = ?
-    `).run(
-      square.payment_link_id,
-      square.payment_link_url,
-      square.order_id,
-      from_phone
+    await pool.query(
+      'UPDATE leads SET square_payment_link_id=$1, square_payment_link_url=$2, square_order_id=$3, quote_status=\'AWAITING_DEPOSIT\', last_seen_at=NOW() WHERE from_phone=$4',
+      [square.payment_link_id, square.payment_link_url, square.order_id, from_phone]
     );
 
     try {
@@ -131,12 +110,7 @@ async function maybeCreateQuote(from_phone) {
       });
     } catch (e) {}
 
-    db.prepare(`
-      UPDATE leads
-      SET quote_status = 'AWAITING_DEPOSIT',
-          last_seen_at = datetime('now')
-      WHERE from_phone = ?
-    `).run(from_phone);
+    pool.query("UPDATE leads SET quote_status='AWAITING_DEPOSIT', last_seen_at=NOW() WHERE from_phone=$1", [from_phone]).catch(()=>{});
 
     return {
       ok: true,

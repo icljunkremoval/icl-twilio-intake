@@ -7,7 +7,7 @@ const { handleConversation } = require("./conversation");
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
-const { db, upsertLead, insertEvent, getLead } = require("./db");
+const { db, pool, upsertLead, insertEvent, getLead } = require("./db");
 const fetch = (...args) => import("node-fetch").then(({default: f}) => f(...args));
 
 const BASE_LOCATION = "506 E Brett St, Inglewood, CA 90301";
@@ -146,7 +146,7 @@ app.get("/media-proxy", async (req, res) => {
 
 app.get("/admin/leads", (_req, res) => {
   try {
-    const rows = db.prepare("SELECT from_phone, last_event, substr(coalesce(last_body,''),1,80) AS last_body_80, substr(coalesce(address_text,''),1,60) AS address_60, zip_text, num_media, media_url0, distance_miles, last_seen_at FROM leads ORDER BY last_seen_at DESC LIMIT 50").all();
+    const rows = (await pool.query("SELECT from_phone, last_event, substr(coalesce(last_body,''),1,80) AS last_body_80, substr(coalesce(address_text,''),1,60) AS address_60, zip_text, num_media, media_url0, distance_miles, last_seen_at FROM leads ORDER BY last_seen_at DESC LIMIT 50")).rows;
     const esc = (s) => String(s ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#39;");
     const rowsHtml = rows.map(r => {
       const mediaHref = r.media_url0 ? ("/media-proxy?u=" + encodeURIComponent(r.media_url0)) : "";
@@ -169,8 +169,8 @@ app.get("/lead/:from", (req, res) => {
 app.get("/admin/lead/:from", (req, res) => {
   try {
     const from = req.params.from;
-    const lead = db.prepare("SELECT * FROM leads WHERE from_phone = ?").get(from);
-    const events = db.prepare("SELECT event_type, created_at, payload_json FROM events WHERE from_phone = ? ORDER BY id DESC LIMIT 200").all(from);
+    const lead = (await pool.query("SELECT * FROM leads WHERE from_phone = $1", [from])).rows[0] || null;
+    const events = (await pool.query("SELECT event_type, created_at, payload_json FROM events WHERE from_phone = $1 ORDER BY id DESC LIMIT 200", [from])).rows;
     const mediaUrls = [];
     for (const e of events) {
       try {

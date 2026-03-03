@@ -1,4 +1,4 @@
-const { recomputeDerived } = require("./recompute");
+const { pool, recomputeDerived } = require("./recompute");
 const express = require("express");
 const { maybeFlipQuoteReady } = require(".\/quote_orchestrator");
 const { maybeCreateQuote } = require("./quote_worker");
@@ -26,7 +26,7 @@ module.exports = function mountTwilioExtraRoutes(app, db, insertEvent) {
     } catch {}
 
     try {
-      db.prepare("UPDATE leads SET load_bucket = ?, last_seen_at = datetime(\x27now\x27) WHERE from_phone = ?").run(load_bucket, from);
+      await pool.query("UPDATE leads SET load_bucket=$1, last_seen_at=NOW() WHERE from_phone=$2", [load_bucket, from]);
     } catch (e) {
       return res.status(500).json({ ok: false, error: String(e?.message || e) });
     }
@@ -56,7 +56,7 @@ module.exports = function mountTwilioExtraRoutes(app, db, insertEvent) {
     } catch {}
 
     try {
-      db.prepare("UPDATE leads SET access_level = ?, last_seen_at = datetime(\x27now\x27) WHERE from_phone = ?").run(access_level, from);
+      await pool.query("UPDATE leads SET access_level=$1, last_seen_at=NOW() WHERE from_phone=$2", [access_level, from]);
     } catch (e) {
       return res.status(500).json({ ok: false, error: String(e?.message || e) });
     }
@@ -86,7 +86,7 @@ module.exports = function mountTwilioExtraRoutes(app, db, insertEvent) {
     } catch {}
 
     try {
-      db.prepare("UPDATE leads SET zip = ?, zip_text = ?, last_seen_at = datetime(\x27now\x27) WHERE from_phone = ?").run(zip, zip, from);
+      await pool.query("UPDATE leads SET zip=$1, zip_text=$1, last_seen_at=NOW() WHERE from_phone=$2", [zip, from]);
     } catch (e) {
       return res.status(500).json({ ok: false, error: String(e?.message || e) });
     }
