@@ -42,7 +42,7 @@ function setState(from_phone, state) {
 async function triggerQuote(from_phone) {
   await sendSms(from_phone, "Got it — here's your upfront quote.");
   try { await recomputeDerived(from_phone); } catch (e) {}
-  setTimeout(async () => {
+  setTimeout(async () => { const dbg = await getLead.get(from_phone); console.log("[quote_debug]", JSON.stringify({quote_ready: dbg?.quote_ready, load: dbg?.load_bucket, access: dbg?.access_level, has_media: dbg?.has_media, addr: dbg?.address_text}));
     try { const r = await maybeCreateQuote(from_phone); if (!r.ok) logEvent(from_phone, "quote_trigger_failed", r); }
     catch (e) { logEvent(from_phone, "quote_trigger_error", { error: String(e.message || e) }); }
   }, 500);
