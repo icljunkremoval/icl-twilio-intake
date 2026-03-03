@@ -9,7 +9,7 @@ function normPhone(v) {
 
 module.exports = function mountTwilioExtraRoutes(app, db, insertEvent) {
   // POST /twilio/q_load  { from_phone, load_bucket }
-  app.post("/twilio/q_load", (req, res) => {
+  app.post("/twilio/q_load", async (req, res) => {
     const from = normPhone(req.body.from_phone || req.body.From);
     const load_bucket = String(req.body.load_bucket || "").trim().toUpperCase();
     if (!from || !load_bucket) return res.status(400).json({ ok: false, error: "missing_from_or_load" });
@@ -31,7 +31,7 @@ module.exports = function mountTwilioExtraRoutes(app, db, insertEvent) {
       return res.status(500).json({ ok: false, error: String(e?.message || e) });
     }
 
-    const gate = maybeFlipQuoteReady(from);
+    const gate = await maybeFlipQuoteReady(from);
     if (gate && (gate.changed || gate.reason === "already_ready" || gate.reason === "already_ready")) { try { maybeCreateQuote(from); } catch (e) {} }
     try { recomputeDerived(from); } catch (e) {}
 
@@ -39,7 +39,7 @@ module.exports = function mountTwilioExtraRoutes(app, db, insertEvent) {
   });
 
   // POST /twilio/q_access  { from_phone, access_level }
-  app.post("/twilio/q_access", (req, res) => {
+  app.post("/twilio/q_access", async (req, res) => {
     const from = normPhone(req.body.from_phone || req.body.From);
     const access_level = String(req.body.access_level || "").trim().toUpperCase();
     if (!from || !access_level) return res.status(400).json({ ok: false, error: "missing_from_or_access" });
@@ -61,7 +61,7 @@ module.exports = function mountTwilioExtraRoutes(app, db, insertEvent) {
       return res.status(500).json({ ok: false, error: String(e?.message || e) });
     }
 
-    const gate = maybeFlipQuoteReady(from);
+    const gate = await maybeFlipQuoteReady(from);
     if (gate && (gate.changed || gate.reason === "already_ready" || gate.reason === "already_ready")) { try { maybeCreateQuote(from); } catch (e) {} }
     try { recomputeDerived(from); } catch (e) {}
 
@@ -69,7 +69,7 @@ module.exports = function mountTwilioExtraRoutes(app, db, insertEvent) {
   });
 
   // POST /twilio/zip_capture  { from_phone, zip }
-  app.post("/twilio/zip_capture", (req, res) => {
+  app.post("/twilio/zip_capture", async (req, res) => {
     const from = normPhone(req.body.from_phone || req.body.From);
     const zip = String(req.body.zip || req.body.Zip || "").trim();
     if (!from || !zip) return res.status(400).json({ ok: false, error: "missing_from_or_zip" });
@@ -91,7 +91,7 @@ module.exports = function mountTwilioExtraRoutes(app, db, insertEvent) {
       return res.status(500).json({ ok: false, error: String(e?.message || e) });
     }
 
-    const gate = maybeFlipQuoteReady(from);
+    const gate = await maybeFlipQuoteReady(from);
     if (gate && (gate.changed || gate.reason === "already_ready" || gate.reason === "already_ready")) { try { maybeCreateQuote(from); } catch (e) {} }
     try { recomputeDerived(from); } catch (e) {}
 

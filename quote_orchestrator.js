@@ -1,11 +1,11 @@
-const { db, insertEvent } = require("./db");
+const { pool, insertEvent } = require("./db");
 const { evaluateQuoteReadyRow } = require("./quote_gate");
 
-function maybeFlipQuoteReady(from_phone) {
-  const row = db.prepare("SELECT * FROM leads WHERE from_phone = ?").get(from_phone);
+async function maybeFlipQuoteReady(from_phone) {
+  const res = await pool.query("SELECT * FROM leads WHERE from_phone = $1", [from_phone]);
+  const row = res.rows[0] || null;
   if (!row) return { ok: false, reason: "no_lead" };
 
-  // If already flipped, no-op
   if (Number(row.quote_ready) === 1 || String(row.quote_status || "").toUpperCase() === "READY") {
     return { ok: true, changed: false, reason: "already_ready" };
   }
@@ -13,10 +13,10 @@ function maybeFlipQuoteReady(from_phone) {
   const ready = evaluateQuoteReadyRow(row);
   if (!ready) return { ok: true, changed: false, reason: "not_ready" };
 
-  // Flip exactly once
-  db.prepare(
-    "UPDATE leads SET quote_ready = 1, quote_status = 'READY', last_seen_at = NOW() WHERE from_phone = ?"
-  ).run(from_phone);
+  await pool.query(
+    "UPDATE leads SET quote_ready = 1, quote_status = 'READY', last_seen_at = NOW() WHERE from_phone = $1",
+    [from_phone]
+  );
 
   try {
     insertEvent.run({
