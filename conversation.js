@@ -1,4 +1,4 @@
-const { db, upsertLead, insertEvent, getLead } = require("./db");
+const { db, pool, upsertLead, insertEvent, getLead } = require("./db");
 const { sendSms } = require("./twilio_sms");
 const { maybeCreateQuote } = require("./quote_worker");
 const { analyzeJobMedia } = require("./vision_analyzer");
@@ -155,8 +155,7 @@ async function handleConversation(payload) {
       let accessLevel=null;
       for(const [key,val] of Object.entries(ACCESS_MAP)){if(bodyUpper.includes(key)){accessLevel=val;break;}}
       if (!accessLevel) { await sendSms(from_phone,"Reply with: CURB / DRIVEWAY / GARAGE / INSIDE HOME / STAIRS / APARTMENT / OTHER"); break; }
-      try { db.prepare(`UPDATE leads SET access_level=?,customer_access_level=?,last_seen_at=NOW() WHERE from_phone=?`).run(accessLevel,accessLevel,from_phone); }
-      catch(e) { db.prepare(`UPDATE leads SET access_level=?,last_seen_at=NOW() WHERE from_phone=?`).run(accessLevel,from_phone); }
+      await pool.query("UPDATE leads SET access_level=$1, customer_access_level=$1, last_seen_at=NOW() WHERE from_phone=$2", [accessLevel, from_phone]);
       logEvent(from_phone,"access_capture",{access_level:accessLevel});
       const afterAccess=await getLead.get(from_phone);
       if (afterAccess&&afterAccess.load_bucket) { setState(from_phone,STATES.QUOTE_READY); await triggerQuote(from_phone); }
@@ -168,8 +167,7 @@ async function handleConversation(payload) {
       let loadBucket=null;
       for(const [key,val] of Object.entries(LOAD_MAP)){if(bodyUpper.includes(key)){loadBucket=val;break;}}
       if (!loadBucket) { await sendSms(from_phone,"Reply SMALL, MEDIUM, or LARGE."); break; }
-      try { db.prepare(`UPDATE leads SET load_bucket=?,customer_load_bucket=?,conv_state=?,last_seen_at=NOW() WHERE from_phone=?`).run(loadBucket,loadBucket,STATES.QUOTE_READY,from_phone); }
-      catch(e) { db.prepare(`UPDATE leads SET load_bucket=?,conv_state=?,last_seen_at=NOW() WHERE from_phone=?`).run(loadBucket,STATES.QUOTE_READY,from_phone); }
+      await pool.query("UPDATE leads SET load_bucket=$1, customer_load_bucket=$1, conv_state=$2, last_seen_at=NOW() WHERE from_phone=$3", [loadBucket, STATES.QUOTE_READY, from_phone]);
       logEvent(from_phone,"load_capture",{load_bucket:loadBucket});
       await triggerQuote(from_phone);
       break;
