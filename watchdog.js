@@ -11,7 +11,7 @@ const HEALTH_URL = "https://intake.icljunkremoval.com/health";
 const LOCAL_HEALTH_URL = "http://127.0.0.1:8788/health";
 const ALERT_PHONE = process.env.WATCHDOG_ALERT_PHONE; // your personal cell
 const PM2 = "/opt/homebrew/bin/pm2";
-const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const CHECK_INTERVAL_MS = 60 * 1000; // 5 minutes
 
 let consecutiveFailures = 0;
 

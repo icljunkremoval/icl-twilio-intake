@@ -10,9 +10,9 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "better-sqlite3": "^12.6.2",
     "express": "^5.2.1",
     "node-fetch": "^2.7.0",
+    "pg": "^8.19.0",
     "twilio": "^5.12.2"
   }
 }
