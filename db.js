@@ -146,9 +146,43 @@ const db = {
 };
 
 // Initialize on startup
-initDb().catch(e => {
-  console.error("[db] Init failed:", e.message);
-  process.exit(1);
 });
 
 module.exports = { db, pool, upsertLead, insertEvent, getLead };
+
+// Run additional migrations for columns added after initial table creation
+async function runMigrations() {
+  const migrations = [
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_error TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS zip TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS customer_load_bucket TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS customer_access_level TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS vision_load_bucket TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS vision_access_level TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS actual_load_bucket TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS square_payment_link_id TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS square_payment_link_url TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS square_order_id TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS square_payment_id TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS deposit_paid INTEGER DEFAULT 0,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS deposit_paid_at TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS troll_flag INTEGER DEFAULT 0,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS vision_analysis TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS crew_notes TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS item_tags TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS timing_pref TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS hazmat INTEGER DEFAULT 0,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS has_media INTEGER DEFAULT 0,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS conv_state TEXT DEFAULT NEW,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS quote_status TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS quote_ready INTEGER DEFAULT 0,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS load_bucket TEXT,
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS access_level TEXT
+  ];
+  for (const sql of migrations) {
+    try { await pool.query(sql); } catch(e) {}
+  }
+  console.log('[db] Migrations complete');
+}
+
+initDb().then(runMigrations).catch(e => { console.error('[db] Init failed:', e.message); process.exit(1); });
