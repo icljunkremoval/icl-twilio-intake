@@ -41,7 +41,7 @@ function setState(from_phone, state) {
 
 async function triggerQuote(from_phone) {
   await sendSms(from_phone, "Got it — here's your upfront quote.");
-  try { recomputeDerived(from_phone); } catch (e) {}
+  try { await recomputeDerived(from_phone); } catch (e) {}
   setTimeout(async () => {
     try { const r = await maybeCreateQuote(from_phone); if (!r.ok) logEvent(from_phone, "quote_trigger_failed", r); }
     catch (e) { logEvent(from_phone, "quote_trigger_error", { error: String(e.message || e) }); }

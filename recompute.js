@@ -1,8 +1,8 @@
-const { db } = require("./db");
+const { pool } = require("./db");
 
-function recomputeDerived(from_phone) {
-  // Pull current snapshot
-  const lead = db.prepare("SELECT * FROM leads WHERE from_phone = ?").get(from_phone);
+async function recomputeDerived(from_phone) {
+  const res = await pool.query("SELECT * FROM leads WHERE from_phone = $1", [from_phone]);
+  const lead = res.rows[0] || null;
   if (!lead) return { ok: false, reason: "no_lead" };
 
   const has_media =
@@ -17,14 +17,14 @@ function recomputeDerived(from_phone) {
 
   const quote_ready = has_media && has_loc && has_access && has_load;
 
-  db.prepare(`
+  await pool.query(`
     UPDATE leads
-    SET has_media = ?,
-        zip = COALESCE(zip, ?),
-        quote_ready = ?,
+    SET has_media = $1,
+        zip = COALESCE(zip, $2),
+        quote_ready = $3,
         last_seen_at = NOW()
-    WHERE from_phone = ?
-  `).run(has_media ? 1 : 0, zip, quote_ready ? 1 : 0, from_phone);
+    WHERE from_phone = $4
+  `, [has_media ? 1 : 0, zip, quote_ready ? 1 : 0, from_phone]);
 
   return { ok: true, has_media, zip, quote_ready };
 }
