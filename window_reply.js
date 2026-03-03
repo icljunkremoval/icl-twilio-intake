@@ -31,7 +31,7 @@ async function handleWindowReply({ from_phone, body }) {
     UPDATE leads
     SET timing_pref = ?,
         quote_status = ?,
-        last_seen_at = datetime('now')
+        last_seen_at = NOW()
     WHERE from_phone = ?
   `).run(window, STATUS_WINDOW_SELECTED, from_phone);
 

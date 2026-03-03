@@ -15,7 +15,7 @@ function maybeFlipQuoteReady(from_phone) {
 
   // Flip exactly once
   db.prepare(
-    "UPDATE leads SET quote_ready = 1, quote_status = 'READY', last_seen_at = datetime('now') WHERE from_phone = ?"
+    "UPDATE leads SET quote_ready = 1, quote_status = 'READY', last_seen_at = NOW() WHERE from_phone = ?"
   ).run(from_phone);
 
   try {

@@ -22,7 +22,7 @@ function recomputeDerived(from_phone) {
     SET has_media = ?,
         zip = COALESCE(zip, ?),
         quote_ready = ?,
-        last_seen_at = datetime('now')
+        last_seen_at = NOW()
     WHERE from_phone = ?
   `).run(has_media ? 1 : 0, zip, quote_ready ? 1 : 0, from_phone);
 

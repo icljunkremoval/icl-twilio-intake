@@ -29,7 +29,7 @@ function claimForQuoting(from_phone) {
     UPDATE leads
     SET quote_status = 'QUOTING',
         last_error = NULL,
-        last_seen_at = datetime('now')
+        last_seen_at = NOW()
     WHERE from_phone = ?
       AND quote_ready = 1
       AND (quote_status IS NULL OR quote_status = '' OR quote_status = 'READY' OR quote_status = 'ERROR')
@@ -42,7 +42,7 @@ function setError(from_phone, err) {
     UPDATE leads
     SET quote_status = 'ERROR',
         last_error = ?,
-        last_seen_at = datetime('now')
+        last_seen_at = NOW()
     WHERE from_phone = ?
   `).run(String(err && err.message ? err.message : err), from_phone);
 
@@ -60,7 +60,7 @@ function writePricing(from_phone, pricing) {
   db.prepare(`
     UPDATE leads
     SET quote_total_cents = ?,
-        last_seen_at = datetime('now')
+        last_seen_at = NOW()
     WHERE from_phone = ?
   `).run(pricing.total_cents, from_phone);
 
@@ -101,7 +101,7 @@ async function maybeCreateQuote(from_phone) {
           square_payment_link_url = ?,
           square_order_id = ?,
           quote_status = 'AWAITING_DEPOSIT',
-          last_seen_at = datetime('now')
+          last_seen_at = NOW()
       WHERE from_phone = ?
     `).run(
       square.payment_link_id,
@@ -134,7 +134,7 @@ async function maybeCreateQuote(from_phone) {
     db.prepare(`
       UPDATE leads
       SET quote_status = 'AWAITING_DEPOSIT',
-          last_seen_at = datetime('now')
+          last_seen_at = NOW()
       WHERE from_phone = ?
     `).run(from_phone);
 
