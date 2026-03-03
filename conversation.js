@@ -81,10 +81,10 @@ function runVisionAsync(from_phone, mediaUrl) {
     if (vision.load_bucket && vision.load_confidence==="HIGH") { updates.push("load_bucket=?"); params.push(vision.load_bucket); logEvent(from_phone,"vision_load_set",{load_bucket:vision.load_bucket}); }
     if (vision.access_level && vision.access_level!=="UNKNOWN" && vision.access_confidence==="HIGH") { updates.push("access_level=?"); params.push(vision.access_level); logEvent(from_phone,"vision_access_set",{access_level:vision.access_level}); }
     if (updates.length>0) {
-      let i = 1;
-      const pgU = updates.map(() => { const col = updates[i-1].split('=')[0]; i++; return col+'=$'+(i-1); });
+      const cols = updates.map(u => u.split('=')[0]);
+      const pgU = cols.map((col, idx) => col+'=$'+(idx+1));
       params.push(from_phone);
-      pool.query("UPDATE leads SET "+pgU.join(",")+",last_seen_at=NOW() WHERE from_phone=$"+i, params).catch(()=>{});
+      pool.query("UPDATE leads SET "+pgU.join(",")+",last_seen_at=NOW() WHERE from_phone=$"+(cols.length+1), params).catch(()=>{});
     }
   }).catch((e)=>{ logEvent(from_phone,"vision_error",{error:String(e.message||e)}); });
 }
