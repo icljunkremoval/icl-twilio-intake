@@ -132,12 +132,12 @@ const db = {
     run: (...args) => {
       // Convert ? placeholders to $1, $2...
       let i = 0;
-      const pgSql = sql.replace(/\?/g, () => `$${++i}`);
+      const pgSql = sql.replace(/datetime\('now'\)/gi, 'NOW()').replace(/\?/g, () => `$${++i}`);
       pool.query(pgSql, args).catch(e => console.error("[db] prepare.run error:", e.message, sql));
     },
     get: async (...args) => {
       let i = 0;
-      const pgSql = sql.replace(/\?/g, () => `$${++i}`);
+      const pgSql = sql.replace(/datetime\('now'\)/gi, 'NOW()').replace(/\?/g, () => `$${++i}`);
       const res = await pool.query(pgSql, args);
       return res.rows[0] || null;
     }
