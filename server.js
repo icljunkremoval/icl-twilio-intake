@@ -84,6 +84,7 @@ function upsertLeadFile(from, patch) {
   return fp;
 }
 
+app.post("/square/webhook", handleSquareWebhook);
 app.post("/twilio/inbound", (req, res) => {
   const payload = req.body || {};
   const fromPhone = payload.From || payload.from || "unknown";
