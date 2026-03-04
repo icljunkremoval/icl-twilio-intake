@@ -1,3 +1,4 @@
+const { handleSquareWebhook } = require("./square_webhook");
 const { fetchLatest } = require("./twilio_debug");
 const { backfillLatestMedia } = require("./twilio_media_backfill");
 const { recomputeDerived } = require("./recompute");
