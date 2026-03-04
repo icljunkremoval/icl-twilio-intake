@@ -70,6 +70,7 @@ async function initDb() {
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS vision_load_bucket TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS vision_access_level TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS actual_load_bucket TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS dropoff_alerted_at TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS square_payment_link_id TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS square_payment_link_url TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS square_order_id TEXT",

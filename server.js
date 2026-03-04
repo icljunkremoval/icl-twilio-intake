@@ -1,3 +1,4 @@
+const { checkDropoffs } = require("./dropoff_monitor");
 const { handleSquareWebhook } = require("./square_webhook");
 const { fetchLatest } = require("./twilio_debug");
 const { backfillLatestMedia } = require("./twilio_media_backfill");
@@ -190,6 +191,9 @@ app.get("/admin/lead/:from", async (req, res) => {
     res.status(500).json({ ok: false, error: String(e) });
   }
 });
+
+setInterval(() => checkDropoffs().catch(e => console.error('[dropoff]', e.message)), 30*60*1000);
+setTimeout(() => checkDropoffs().catch(()=>{}), 60*1000);
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log("icl-twilio-intake listening on :" + PORT);
