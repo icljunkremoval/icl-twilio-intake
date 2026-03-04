@@ -102,7 +102,7 @@ async function handleConversation(payload) {
   const state = getConvState(lead);
 
   if (bodyUpper==="URGENT") { logEvent(from_phone,"urgent_flag",{body}); await sendSms(from_phone,"Got it — flagged URGENT. We'll prioritize your job."); return; }
-  if (bodyUpper==="HELP") { logEvent(from_phone,"help_requested",{body}); setState(from_phone,STATES.ESCALATED); await sendSms(from_phone,"A team member will reach out shortly. You can also call 855-578-5014."); return; }
+  if (bodyUpper==="HELP") { logEvent(from_phone,"help_requested",{body}); setState(from_phone,STATES.ESCALATED); await sendSms(from_phone,"A team member will reach out shortly. You can also call 855-578-5014."); await sendSms("+13233979698", "🙋 HELP REQUEST\nPhone: "+from_phone+"\nLast message: "+body+"\nCall them back ASAP."); return; }
 
   switch(state) {
     case STATES.NEW:
@@ -136,6 +136,7 @@ async function handleConversation(payload) {
       if (bodyUpper==="YES") {
         logEvent(from_phone,"hazmat_yes",{body}); setState(from_phone,STATES.ESCALATED);
         await sendSms(from_phone,"Thanks for the heads up — restricted materials need special handling. A team member will reach out to discuss options.");
+        await sendSms("+13233979698", "🚨 HAZMAT LEAD\nPhone: "+from_phone+"\nAddress: "+(lead&&lead.address_text||"not yet provided")+"\nCall them back ASAP.");
       } else if (bodyUpper.startsWith("NO")||bodyUpper==="N") {
         logEvent(from_phone,"hazmat_no",{body}); setState(from_phone,STATES.AWAITING_ADDRESS);
         await sendSms(from_phone,"What's the service address? Cross streets + ZIP works too.");

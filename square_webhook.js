@@ -31,19 +31,25 @@ async function handleSquareWebhook(req, res) {
     const event = req.body;
     const eventType = event?.type || "";
 
-    console.log("[square_webhook] event:", eventType);
+    console.log("[square_webhook] event:", eventType, JSON.stringify(event?.data?.object).substring(0, 300));
 
-    if (eventType !== "payment.completed" && eventType !== "order.updated") {
+    if (!["payment.completed", "payment.created", "payment.updated", "order.updated"].includes(eventType)) {
       return res.status(200).send("ok");
     }
 
     // Extract order_id from event
     let orderId = null;
-    if (event?.data?.object?.payment?.order_id) {
-      orderId = event.data.object.payment.order_id;
-    } else if (event?.data?.object?.order?.id) {
-      orderId = event.data.object.order.id;
+    const obj = event?.data?.object || {};
+    if (obj?.payment?.order_id) {
+      orderId = obj.payment.order_id;
+    } else if (obj?.order?.id) {
+      orderId = obj.order.id;
+    } else if (obj?.order_id) {
+      orderId = obj.order_id;
+    } else if (event?.data?.id) {
+      orderId = event.data.id;
     }
+    console.log("[square_webhook] orderId:", orderId, "keys:", Object.keys(obj));
 
     if (!orderId) {
       console.log("[square_webhook] no order_id found");
