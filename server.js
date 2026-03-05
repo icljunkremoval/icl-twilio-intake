@@ -1,4 +1,5 @@
 const { checkDropoffs } = require("./dropoff_monitor");
+const { handleOpsReply } = require("./job_complete");
 const { handleSquareWebhook } = require("./square_webhook");
 const { fetchLatest } = require("./twilio_debug");
 const { backfillLatestMedia } = require("./twilio_media_backfill");
@@ -86,6 +87,18 @@ function upsertLeadFile(from, patch) {
 }
 
 app.post("/square/webhook", handleSquareWebhook);
+// Ops reply handler — intercepts texts from business number
+app.post("/twilio/ops-reply", async (req, res) => {
+  res.set("Content-Type", "text/xml");
+  res.send("<Response></Response>");
+  try {
+    const body = req.body.Body || "";
+    await handleOpsReply(body);
+  } catch(e) {
+    console.error("[ops_reply]", e.message);
+  }
+});
+
 app.post("/twilio/inbound", (req, res) => {
   const payload = req.body || {};
   const fromPhone = payload.From || payload.from || "unknown";
