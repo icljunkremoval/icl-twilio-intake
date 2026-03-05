@@ -16,7 +16,7 @@ function verifySquareSignature(body, signature, url) {
 }
 
 function buildWindowPickerSms() {
-  return "Deposit received ✅ Your spot is locked in!\n\nReply with your arrival window:\n1) 9–11am\n2) 12–2pm\n3) 3–5pm";
+  return "Deposit received ✅ Your spot is locked in!\n\nReply with your arrival window:\n1) 8–10am\n2) 10am–12pm\n3) 12–2pm\n4) 2–4pm\n5) 4–6pm";
 }
 
 async function handleSquareWebhook(req, res) {

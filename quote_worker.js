@@ -16,7 +16,7 @@ function buildQuoteSms(lead, pricing, paymentUrl) {
     "To lock your spot, place a $" + deposit + " deposit here:",
     paymentUrl,
     "",
-    "After deposit, you pick your arrival window: 9-11, 12-2, or 3-5."
+    "After deposit, choose your arrival window: 8-10am, 10-12pm, 12-2pm, 2-4pm, or 4-6pm."
   ].join("\n");
 }
 

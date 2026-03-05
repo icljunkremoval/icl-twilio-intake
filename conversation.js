@@ -25,8 +25,9 @@ const LOAD_MAP = {
 };
 
 const WINDOW_MAP = {
-  "1": "9-11", "2": "12-2", "3": "3-5",
-  "9": "9-11", "12": "12-2", "9-11": "9-11", "12-2": "12-2", "3-5": "3-5",
+  "1": "8-10am", "2": "10-12pm", "3": "12-2pm", "4": "2-4pm", "5": "4-6pm",
+  "8": "8-10am", "10": "10-12pm", "12": "12-2pm", "2": "2-4pm", "4": "4-6pm",
+  "8-10": "8-10am", "10-12": "10-12pm", "12-2": "12-2pm", "2-4": "2-4pm", "4-6": "4-6pm",
 };
 
 function getConvState(lead) { return (lead && lead.conv_state) || STATES.NEW; }
@@ -206,10 +207,10 @@ async function handleConversation(payload) {
     case STATES.BOOKING_SENT: {
       let window=null;
       for(const [key,val] of Object.entries(WINDOW_MAP)){if(bodyUpper.includes(key)){window=val;break;}}
-      if (!window) { await sendSms(from_phone,"Reply 1, 2, or 3:\n1) 9–11 AM\n2) 12–2 PM\n3) 3–5 PM"); break; }
+      if (!window) { await sendSms(from_phone,"Reply 1–5 for your arrival window:\n1) 8–10am\n2) 10am–12pm\n3) 12–2pm\n4) 2–4pm\n5) 4–6pm"); break; }
       await pool.query('UPDATE leads SET timing_pref=$1,conv_state=$2,last_seen_at=NOW() WHERE from_phone=$3', [window,STATES.WINDOW_SELECTED,from_phone]);
       logEvent(from_phone,"window_selected",{timing_pref:window});
-      await sendSms(from_phone,`Locked in. ICL Junk Removal arrives ${window}. You'll get a heads-up when we're on the way.\n\nQuestions? Reply HELP anytime.`);
+      await sendSms(from_phone,`Locked in! ✅ ICL Junk Removal arrives ${window}. We'll text you when we're on our way.\n\nQuestions? Reply HELP anytime.`);
       break;
     }
 

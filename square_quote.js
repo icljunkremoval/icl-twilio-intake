@@ -25,7 +25,7 @@ async function createSquarePaymentLink(lead, totalCents) {
       location_id: locationId
     },
     checkout_options: {
-      redirect_url: "https://icljunkremoval.com",
+      redirect_url: "https://icljunkremoval.com/thank-you",
       ask_for_shipping_address: false
     },
     pre_populated_data: {
