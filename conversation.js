@@ -97,6 +97,14 @@ async function handleConversation(payload) {
   const bodyUpper = body.toUpperCase();
 
   try { upsertLead.run({from_phone,to_phone,ts:new Date().toISOString(),last_event:"message",last_body:body,num_media:numMedia,media_url0:mediaUrl||null}); } catch(e){}
+  // Alert ops on first contact
+  try {
+    const existingLead = await getLead.get(from_phone);
+    const eventCount = await pool.query("SELECT COUNT(*) as cnt FROM events WHERE from_phone=$1", [from_phone]);
+    if (parseInt(eventCount.rows[0].cnt) <= 1) {
+      sendSms("+12138806318", "📲 NEW LEAD\n" + from_phone + "\nJust texted in. Flow started.").catch(()=>{});
+    }
+  } catch(e) {}
 
   const lead = await getLead.get(from_phone);
   const state = getConvState(lead);
