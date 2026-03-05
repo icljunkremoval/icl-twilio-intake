@@ -24,7 +24,7 @@ async function checkDropoffs() {
     FROM leads
     WHERE last_seen_at < $1
       AND conv_state NOT IN ('AWAITING_DEPOSIT', 'DEPOSIT_PAID', 'BOOKING_SENT', 'WINDOW_SELECTED', 'ESCALATED', 'QUOTE_READY')
-      AND (dropoff_alerted_at IS NULL OR dropoff_alerted_at < $1)
+      AND dropoff_alerted_at IS NULL
     ORDER BY last_seen_at DESC
     LIMIT 20
   `, [cutoff]);
