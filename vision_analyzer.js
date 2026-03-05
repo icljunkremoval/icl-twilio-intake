@@ -110,4 +110,50 @@ Respond with ONLY the JSON object, no other text.`;
   }
 }
 
-module.exports = { analyzeJobMedia };
+
+// Analyze multiple photos and merge results
+async function analyzeAllMedia(urls) {
+  if (!urls || urls.length === 0) throw new Error("No media URLs");
+  if (urls.length === 1) return analyzeJobMedia(urls[0]);
+
+  // Analyze each photo in parallel
+  const results = await Promise.allSettled(urls.map(u => analyzeJobMedia(u)));
+  const valid = results
+    .filter(r => r.status === "fulfilled" && r.value?.is_valid_junk)
+    .map(r => r.value);
+
+  if (valid.length === 0) return results[0].value || results[0].reason;
+
+  // Merge: take highest load_bucket, merge items, merge crew_notes
+  const LOAD_ORDER = ["MIN","QTR","HALF","3Q","FULL"];
+  let merged = { ...valid[0] };
+
+  for (const v of valid.slice(1)) {
+    // Take larger load estimate
+    const curIdx = LOAD_ORDER.indexOf(merged.load_bucket);
+    const newIdx = LOAD_ORDER.indexOf(v.load_bucket);
+    if (newIdx > curIdx) {
+      merged.load_bucket = v.load_bucket;
+      merged.load_confidence = v.load_confidence;
+    }
+    // Merge items (deduplicate)
+    const allItems = [...(merged.items||[]), ...(v.items||[])];
+    merged.items = [...new Set(allItems)];
+    // Append crew notes
+    if (v.crew_notes && v.crew_notes !== merged.crew_notes) {
+      merged.crew_notes = (merged.crew_notes || "") + " " + v.crew_notes;
+    }
+    // If any photo flags troll, flag it
+    if (v.troll_flag) merged.troll_flag = true;
+    // Take more specific access level
+    if (v.access_confidence === "HIGH" && merged.access_confidence !== "HIGH") {
+      merged.access_level = v.access_level;
+      merged.access_confidence = v.access_confidence;
+    }
+  }
+
+  merged.photo_count = urls.length;
+  return merged;
+}
+
+module.exports = { analyzeJobMedia, analyzeAllMedia };

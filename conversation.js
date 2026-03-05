@@ -1,7 +1,7 @@
 const { db, pool, upsertLead, insertEvent, getLead } = require("./db");
 const { sendSms } = require("./twilio_sms");
 const { maybeCreateQuote } = require("./quote_worker");
-const { analyzeJobMedia } = require("./vision_analyzer");
+const { analyzeJobMedia, analyzeAllMedia } = require("./vision_analyzer");
 const { backfillLatestMedia } = require("./twilio_media_backfill");
 const { recomputeDerived } = require("./recompute");
 
@@ -63,8 +63,9 @@ async function advanceAfterAddress(from_phone) {
   }
 }
 
-function runVisionAsync(from_phone, mediaUrl) {
-  analyzeJobMedia(mediaUrl).then((vision) => {
+function runVisionAsync(from_phone, mediaUrl, allUrls) {
+  const urlsToAnalyze = allUrls && allUrls.length > 0 ? allUrls : [mediaUrl];
+  analyzeAllMedia(urlsToAnalyze).then((vision) => {
     logEvent(from_phone, "vision_analysis", vision);
     try {
       pool.query('UPDATE leads SET vision_analysis=$1,troll_flag=$2,crew_notes=$3,item_tags=$4,vision_load_bucket=$5,vision_access_level=$6,last_seen_at=NOW() WHERE from_phone=$7', [JSON.stringify(vision), vision.troll_flag?1:0, vision.crew_notes||null, JSON.stringify(vision.data_tags||[]), vision.load_bucket||null, vision.access_level||null, from_phone]).catch(()=>{});
@@ -94,6 +95,12 @@ async function handleConversation(payload) {
   const body = (payload.Body || "").trim();
   const numMedia = Number(payload.NumMedia || 0);
   const mediaUrl = payload.MediaUrl0 || "";
+  // Capture all media URLs for multi-photo support
+  const allMediaUrls = [];
+  for (let i = 0; i < Math.min(numMedia, 10); i++) {
+    const u = payload["MediaUrl" + i];
+    if (u) allMediaUrls.push(u);
+  }
   const bodyUpper = body.toUpperCase();
 
   try { upsertLead.run({from_phone,to_phone,ts:new Date().toISOString(),last_event:"message",last_body:body,num_media:numMedia,media_url0:mediaUrl||null}); } catch(e){}
@@ -120,7 +127,7 @@ async function handleConversation(payload) {
         logEvent(from_phone,"media_received",{numMedia,mediaUrl});
         setState(from_phone,STATES.AWAITING_HAZMAT);
         pool.query('UPDATE leads SET has_media=1,last_seen_at=NOW() WHERE from_phone=$1', [from_phone]).catch(()=>{});
-        if (mediaUrl) runVisionAsync(from_phone,mediaUrl);
+        if (allMediaUrls.length>0) runVisionAsync(from_phone, allMediaUrls[0], allMediaUrls);
         await sendSms(from_phone,"Got it — quick safety check: any paint, chemicals, fuel, batteries, asbestos, or medical waste in the mix?\n\nReply YES or NO");
       } else {
         setState(from_phone,STATES.AWAITING_MEDIA);
@@ -129,7 +136,7 @@ async function handleConversation(payload) {
             pool.query('UPDATE leads SET has_media=1,num_media=$1,media_url0=$2,last_seen_at=NOW() WHERE from_phone=$3', [b.numMedia,b.mediaUrl0,from_phone]).catch(()=>{});
             setState(from_phone,STATES.AWAITING_HAZMAT);
             logEvent(from_phone,"media_backfill_hit",b);
-            runVisionAsync(from_phone,b.mediaUrl0);
+            runVisionAsync(from_phone,b.mediaUrl0,[b.mediaUrl0]);
             sendSms(from_phone,"Got it — quick safety check: any paint, chemicals, fuel, batteries, asbestos, or medical waste?\n\nReply YES or NO").catch(()=>{});
           } else {
             sendSms(from_phone,"Hi! Thanks for texting ICL Junk Removal.\n\nSend us a photo of what you need removed and we'll build your upfront quote.").catch(()=>{});
@@ -140,7 +147,7 @@ async function handleConversation(payload) {
     }
 
     case STATES.AWAITING_HAZMAT: {
-      if (numMedia>0||mediaUrl) { if(mediaUrl) runVisionAsync(from_phone,mediaUrl); await sendSms(from_phone,"Got the photo. Any paint, chemicals, fuel, batteries, asbestos, or medical waste?\n\nReply YES or NO"); break; }
+      if (numMedia>0||mediaUrl) { if(allMediaUrls.length>0) runVisionAsync(from_phone,allMediaUrls[0],allMediaUrls); await sendSms(from_phone,"Got the photo. Any paint, chemicals, fuel, batteries, asbestos, or medical waste?\n\nReply YES or NO"); break; }
       if (bodyUpper==="YES") {
         logEvent(from_phone,"hazmat_yes",{body}); setState(from_phone,STATES.ESCALATED);
         await sendSms(from_phone,"Thanks for the heads up — restricted materials need special handling. A team member will reach out to discuss options.");
