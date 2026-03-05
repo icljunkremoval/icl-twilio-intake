@@ -1,6 +1,7 @@
 // square_webhook.js - handles Square payment webhooks
 const crypto = require("crypto");
 const { pool, insertEvent } = require("./db");
+const { sendCrewBrief } = require("./crew_brief");
 const { sendSms } = require("./twilio_sms");
 
 const SQUARE_WEBHOOK_SIGNATURE_KEY = process.env.SQUARE_WEBHOOK_SIGNATURE_KEY || "";
@@ -91,6 +92,7 @@ async function handleSquareWebhook(req, res) {
     // Send window picker SMS
     const sms = await sendSms(lead.from_phone, buildWindowPickerSms());
     console.log("[square_webhook] window picker sent to:", lead.from_phone);
+    sendCrewBrief(lead).catch(()=>{});
 
     await pool.query(
       "UPDATE leads SET quote_status='BOOKING_SENT', conv_state='BOOKING_SENT', last_seen_at=NOW() WHERE from_phone=$1",
