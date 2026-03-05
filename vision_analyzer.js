@@ -36,6 +36,8 @@ async function analyzeJobMedia(mediaUrl) {
 
   const prompt = `You are analyzing a photo for ICL Junk Removal, a junk removal company in Los Angeles.
 
+ICL operates with military precision and deep respect for every client. Your analysis helps the crew walk in prepared — knowing what to expect, what to protect, and what has value.
+
 Analyze this image and respond ONLY with a JSON object in this exact format:
 {
   "is_valid_junk": true or false,
@@ -45,8 +47,13 @@ Analyze this image and respond ONLY with a JSON object in this exact format:
   "load_confidence": "HIGH" or "MEDIUM" or "LOW",
   "access_level": "CURB" or "DRIVEWAY" or "GARAGE" or "INSIDE_HOME" or "STAIRS" or "APARTMENT" or "UNKNOWN",
   "access_confidence": "HIGH" or "MEDIUM" or "LOW",
-  "items": ["list", "of", "visible", "items"],
-  "crew_notes": "brief notes to help the crew prepare - hazards, heavy items, tight spaces, etc.",
+  "items": ["specific", "visible", "items", "with", "descriptors"],
+  "resell_items": ["items likely worth reselling or donating — furniture, appliances, bikes, tools, electronics in good condition"],
+  "resell_notes": "brief note on resell potential, or null if none",
+  "sentimental_risk": true or false,
+  "sentimental_notes": "note if photos, religious items, personal keepsakes visible — crew should handle with care, or null",
+  "crew_notes": "2-3 sentences: space condition, access challenges, heavy items, sequencing advice",
+  "space_type": "garage" or "bedroom" or "living_room" or "yard" or "storage_unit" or "basement" or "office" or "kitchen" or "other",
   "data_tags": ["furniture", "appliances", "electronics", "construction", "yard_waste", "mattress", "clothing", "boxes", "mixed", "other"]
 }
 
@@ -54,11 +61,19 @@ Load bucket guide:
 - MIN ($150): single item or small pile, fits in pickup truck bed
 - QTR ($450): small load, quarter of a truck
 - HALF ($850): medium load, half a truck
-- 3Q ($1200): large load, three quarters of a truck  
+- 3Q ($1200): large load, three quarters of a truck
 - FULL ($1500): full truckload, entire space packed
 
-troll_flag should be true if: the image is clearly not junk (random street photo, selfie, meme, explicit content, etc.)
+Resell guide — flag these if they appear to be in decent condition:
+- Furniture: couches, sofas, chairs, dressers, tables, desks, bookshelves, cabinets
+- Appliances: refrigerators, washers, dryers, microwaves, fans, AC units
+- Electronics: TVs, monitors, speakers, computers
+- Equipment: bikes, treadmills, tools, ladders, dollies
+- Decor: lamps, mirrors, artwork, shelving
+
+troll_flag should be true if: image is clearly not junk (selfie, meme, random street photo, explicit content)
 is_valid_junk should be false if you cannot identify any items that need removal.
+sentimental_risk should be true if you see: photo albums, framed family photos, religious items, children's items, urns, personal documents.
 
 Respond with ONLY the JSON object, no other text.`;
 
