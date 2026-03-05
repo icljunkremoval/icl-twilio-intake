@@ -1,11 +1,11 @@
 // PRICING & ADDERS v1 — ICL Junk Removal
 
 const BASE_BY_BUCKET_CENTS = {
-  MIN: 15000,
-  QTR: 45000,
-  HALF: 85000,
-  "3Q": 120000,
-  FULL: 150000,
+  MIN:  14700,   // $147  — precise, less challengeable than $150
+  QTR:  42300,   // $423  — precise, anchored below $450
+  HALF: 82300,   // $823  — precise, anchored below $850
+  "3Q": 124700,  // $1,247 — precise, feels calculated not rounded
+  FULL: 154700,  // $1,547 — precise, above $1,500 feels premium
 };
 
 const INCLUDED_RADIUS_MILES = 10;
