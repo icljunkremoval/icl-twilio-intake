@@ -139,7 +139,13 @@ async function handleConversation(payload) {
             runVisionAsync(from_phone,b.mediaUrl0,[b.mediaUrl0]);
             sendSms(from_phone,"Got it — quick safety check: any paint, chemicals, fuel, batteries, asbestos, or medical waste?\n\nReply YES or NO").catch(()=>{});
           } else {
-            sendSms(from_phone,"Hi! Thanks for texting ICL Junk Removal.\n\nSend us a photo of what you need removed and we'll build your upfront quote.").catch(()=>{});
+            pool.query("SELECT COUNT(*) as cnt FROM events WHERE from_phone=$1", [from_phone]).then(evtR => {
+              const isCaller = parseInt(evtR.rows[0].cnt) <= 1;
+              const msg = isCaller
+                ? "Hey! You just called us — glad you reached out. Go ahead and send a photo of what needs to go and we'll get your quote built. 📦"
+                : "Hi! Thanks for texting ICL Junk Removal.\n\nSend us a photo of what you need removed and we'll build your upfront quote.";
+              sendSms(from_phone, msg).catch(()=>{});
+            }).catch(()=>{ sendSms(from_phone,"Hi! Thanks for texting ICL Junk Removal.\n\nSend us a photo of what you need removed and we'll build your upfront quote.").catch(()=>{}); });
           }
         }).catch(()=>{ sendSms(from_phone,"Hi! Thanks for texting ICL Junk Removal.\n\nSend us a photo of what you need removed and we'll build your upfront quote.").catch(()=>{}); });
       }
@@ -219,7 +225,17 @@ async function handleConversation(payload) {
 
     default: {
       setState(from_phone,STATES.NEW);
+      // Check if caller followup
+    try {
+      const evtCheck2 = await pool.query("SELECT COUNT(*) as cnt FROM events WHERE from_phone=$1", [from_phone]);
+      const isCallerFollowup2 = parseInt(evtCheck2.rows[0].cnt) <= 1;
+      const greeting2 = isCallerFollowup2
+        ? "Hey! You just called us — glad you reached out. Go ahead and send a photo of what needs to go and we'll get your quote built. 📦"
+        : "Hi! Thanks for texting ICL Junk Removal. Send us a photo of what needs to go and we'll get you a quote.";
+      await sendSms(from_phone, greeting2);
+    } catch(e) {
       await sendSms(from_phone,"Hi! Thanks for texting ICL Junk Removal. Send us a photo of what needs to go and we'll get you a quote.");
+    }
     }
   }
 }
