@@ -1,12 +1,19 @@
 // PRICING & ADDERS v1 — ICL Junk Removal
 
 const BASE_BY_BUCKET_CENTS = {
-  MIN:  14700,   // $147  — precise, less challengeable than $150
-  QTR:  42300,   // $423  — precise, anchored below $450
-  HALF: 82300,   // $823  — precise, anchored below $850
-  "3Q": 124700,  // $1,247 — precise, feels calculated not rounded
-  FULL: 154700,  // $1,547 — precise, above $1,500 feels premium
+  MIN:  14700,   // $147  — entry point, below market friction
+  QTR:  32300,   // $323  — at market average, high conversion
+  HALF: 62300,   // $623  — under $650 psychological ceiling
+  "3Q": 104700,  // $1,047 — premium but justifiable
+  FULL: 124700,  // $1,247 — competitive with high end of market
 };
+
+// SALVAGE TARGETS (20-30% of service revenue recovered through resell)
+// MIN:  $29  target salvage
+// QTR:  $65  target salvage
+// HALF: $125 target salvage
+// 3Q:   $209 target salvage
+// FULL: $249 target salvage
 
 const INCLUDED_RADIUS_MILES = 10;
 const DISTANCE_RATE_CENTS_PER_MILE_ONE_WAY = 300; // $3/mi one-way after included radius
