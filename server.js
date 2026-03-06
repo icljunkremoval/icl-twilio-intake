@@ -105,7 +105,8 @@ app.post("/twilio/inbound", (req, res) => {
   const ts = new Date().toISOString();
 
   // Always respond immediately to Twilio
-  res.json({ ok: true });
+  res.set("Content-Type", "text/xml");
+  res.send("<Response></Response>");
 
   // Log raw event
   try {
