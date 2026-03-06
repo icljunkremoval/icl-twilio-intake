@@ -10,7 +10,7 @@ const STATES = {
   AWAITING_ADDRESS: "AWAITING_ADDRESS", AWAITING_ACCESS: "AWAITING_ACCESS",
   AWAITING_LOAD: "AWAITING_LOAD", QUOTE_READY: "QUOTE_READY",
   AWAITING_DEPOSIT: "AWAITING_DEPOSIT", BOOKING_SENT: "BOOKING_SENT",
-  WINDOW_SELECTED: "WINDOW_SELECTED", ESCALATED: "ESCALATED",
+  WINDOW_SELECTED: "WINDOW_SELECTED", AWAITING_DAY: "AWAITING_DAY", ESCALATED: "ESCALATED",
 };
 
 const ACCESS_MAP = {
@@ -208,14 +208,77 @@ async function handleConversation(payload) {
       let window=null;
       for(const [key,val] of Object.entries(WINDOW_MAP)){if(bodyUpper.includes(key)){window=val;break;}}
       if (!window) { await sendSms(from_phone,"Reply 1–5 for your arrival window:\n1) 8–10am\n2) 10am–12pm\n3) 12–2pm\n4) 2–4pm\n5) 4–6pm"); break; }
-      await pool.query('UPDATE leads SET timing_pref=$1,conv_state=$2,last_seen_at=NOW() WHERE from_phone=$3', [window,STATES.WINDOW_SELECTED,from_phone]);
+      // Save window temporarily, ask for day
+      await pool.query('UPDATE leads SET timing_pref=$1,conv_state=$2,last_seen_at=NOW() WHERE from_phone=$3', [window,STATES.AWAITING_DAY,from_phone]);
       logEvent(from_phone,"window_selected",{timing_pref:window});
-      await sendSms(from_phone,`Locked in! ✅ ICL Junk Removal arrives ${window}. We'll text you when we're on our way.\n\nQuestions? Reply HELP anytime.`);
+      // Build day options with 4hr buffer for same-day
+      const now = new Date();
+      const days = [];
+      const dayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+      const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      // Window start hours
+      const windowStarts = {"8-10am":8,"10-12pm":10,"12-2pm":12,"2-4pm":14,"4-6pm":16};
+      const winStart = windowStarts[window] || 8;
+      for (let d=0; d<3; d++) {
+        const date = new Date(now);
+        date.setDate(now.getDate() + d);
+        if (d===0) {
+          // Same day: only show if window start is 4+ hours away
+          const hoursUntil = winStart - now.getHours();
+          if (hoursUntil < 4) continue;
+        }
+        const label = dayNames[date.getDay()] + " " + monthNames[date.getMonth()] + " " + date.getDate();
+        days.push(label);
+      }
+      // If same-day was skipped, add a 4th day
+      while (days.length < 3) {
+        const date = new Date(now);
+        date.setDate(now.getDate() + days.length + (days[0] && days[0].startsWith(dayNames[now.getDay()]) ? 0 : 1));
+        const label = dayNames[date.getDay()] + " " + monthNames[date.getMonth()] + " " + date.getDate();
+        if (!days.includes(label)) days.push(label);
+      }
+      const dayMenu = days.map((d,i) => (i+1) + ") " + d).join("\n");
+      await sendSms(from_phone, "Got it! What day works for you?\n\n" + dayMenu + "\n\nReply 1, 2, or 3.");
+      break;
+    }
+
+    case STATES.AWAITING_DAY: {
+      const dayChoice = body.trim();
+      const now2 = new Date();
+      const dayNames2 = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+      const monthNames2 = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      const windowStarts2 = {"8-10am":8,"10-12pm":10,"12-2pm":12,"2-4pm":14,"4-6pm":16};
+      const savedWindow = lead && lead.timing_pref ? lead.timing_pref : "";
+      const winStart2 = windowStarts2[savedWindow] || 8;
+      const availDays = [];
+      for (let d=0; d<3; d++) {
+        const date = new Date(now2);
+        date.setDate(now2.getDate() + d);
+        if (d===0) { if ((winStart2 - now2.getHours()) < 4) continue; }
+        availDays.push(dayNames2[date.getDay()] + " " + monthNames2[date.getMonth()] + " " + date.getDate());
+      }
+      while (availDays.length < 3) {
+        const date = new Date(now2);
+        date.setDate(now2.getDate() + availDays.length + 1);
+        const label = dayNames2[date.getDay()] + " " + monthNames2[date.getMonth()] + " " + date.getDate();
+        if (!availDays.includes(label)) availDays.push(label);
+      }
+      const idx = parseInt(dayChoice) - 1;
+      if (isNaN(idx) || idx < 0 || idx >= availDays.length) {
+        const dayMenu2 = availDays.map((d,i) => (i+1) + ") " + d).join("\n");
+        await sendSms(from_phone, "Please reply 1, 2, or 3:\n\n" + dayMenu2);
+        break;
+      }
+      const chosenDay = availDays[idx];
+      const fullTiming = chosenDay + ", " + savedWindow;
+      await pool.query('UPDATE leads SET timing_pref=$1,conv_state=$2,last_seen_at=NOW() WHERE from_phone=$3', [fullTiming,STATES.WINDOW_SELECTED,from_phone]);
+      logEvent(from_phone,"day_selected",{timing_pref:fullTiming});
+      await sendSms(from_phone, "Locked in! ✅ ICL Junk Removal arrives " + fullTiming + ".\n\nWe'll text you when we're on our way. Questions? Reply HELP anytime.");
       break;
     }
 
     case STATES.WINDOW_SELECTED: {
-      await sendSms(from_phone,`You're all set — arrival window ${lead&&lead.timing_pref?lead.timing_pref:"confirmed"}. Reply HELP if anything changes.`);
+      await sendSms(from_phone,`You're all set — ${lead&&lead.timing_pref?lead.timing_pref:"arrival confirmed"}. Reply HELP if anything changes.`);
       break;
     }
 
