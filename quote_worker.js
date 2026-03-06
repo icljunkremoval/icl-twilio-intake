@@ -8,16 +8,26 @@ function buildQuoteSms(lead, pricing, paymentUrl) {
   const total = (pricing.total_cents / 100).toFixed(0);
   const deposit = 50;
 
-  return [
+  let itemLines = "";
+  try {
+    const vision = typeof lead.vision_analysis === "string" ? JSON.parse(lead.vision_analysis) : lead.vision_analysis;
+    if (vision && vision.items && vision.items.length > 0) {
+      itemLines = "Items flagged for removal:\n" + vision.items.map(i => "• " + i).join("\n");
+    }
+  } catch(e) {}
+
+  const parts = [
     "Your ICL Junk Removal quote is ready.",
     "",
     "Load: " + bucket + "  |  Total: $" + total,
-    "",
-    "To lock your spot, place a $" + deposit + " deposit here:",
-    paymentUrl,
-    "",
-    "After deposit, choose your arrival window: 8-10am, 10-12pm, 12-2pm, 2-4pm, or 4-6pm."
-  ].join("\n");
+    ""
+  ];
+  if (itemLines) { parts.push(itemLines); parts.push(""); }
+  parts.push("To lock your spot, place a $" + deposit + " deposit here:");
+  parts.push(paymentUrl);
+  parts.push("");
+  parts.push("After deposit, choose your arrival window: 8-10am, 10-12pm, 12-2pm, 2-4pm, or 4-6pm.");
+  return parts.join("\n");
 }
 
 async function getLead(from_phone) {
