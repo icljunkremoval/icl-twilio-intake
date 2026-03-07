@@ -72,7 +72,7 @@ Resell guide — flag these if they appear to be in decent condition:
 - Decor: lamps, mirrors, artwork, shelving
 
 troll_flag should be true if: image is clearly not junk (selfie, meme, random street photo, explicit content)
-is_valid_junk should be false if you cannot identify any items that need removal.
+is_valid_junk should be false ONLY if the image is clearly not junk-related (selfie, meme, blank wall, street scene). If ANY household item, furniture, appliance, or debris is visible — even if it looks like it could stay — set is_valid_junk to true. When in doubt, set true.
 sentimental_risk should be true if you see: photo albums, framed family photos, religious items, children's items, urns, personal documents.
 
 Respond with ONLY the JSON object, no other text.`;
@@ -85,7 +85,7 @@ Respond with ONLY the JSON object, no other text.`;
       "content-type": "application/json"
     },
     body: JSON.stringify({
-      model: "claude-opus-4-6",
+      model: "claude-opus-4-20250514",
       max_tokens: 1024,
       messages: [
         {
