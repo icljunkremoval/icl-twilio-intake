@@ -142,6 +142,8 @@ async function handleConversation(payload) {
   switch(state) {
     case STATES.NEW:
     case STATES.AWAITING_MEDIA: {
+      const isVideo = (payload.MediaContentType0||"").includes("video");
+      if (isVideo) { await sendSms(from_phone, "Got it! Videos don't come through our system — can you send still photos instead? Different angles help us give you the most accurate quote."); break; }
       if (numMedia>0||mediaUrl) {
         try { upsertLead.run({from_phone,to_phone,ts:new Date().toISOString(),last_event:"media_received",last_body:body,num_media:numMedia,media_url0:mediaUrl||null}); } catch(e){}
         logEvent(from_phone,"media_received",{numMedia,mediaUrl});
@@ -173,7 +175,7 @@ async function handleConversation(payload) {
     }
 
     case STATES.AWAITING_HAZMAT: {
-      if (numMedia>0||mediaUrl) { if(allMediaUrls.length>0) runVisionAsync(from_phone,allMediaUrls[0],allMediaUrls); await sendSms(from_phone,"Got the photo. Any paint, chemicals, fuel, batteries, asbestos, or medical waste?\n\nReply YES or NO"); break; }
+      if (numMedia>0||mediaUrl) { if(allMediaUrls.length>0) runVisionAsync(from_phone,allMediaUrls[0],allMediaUrls); await sendSms(from_phone,"Got your photos! Any paint, chemicals, fuel, batteries, asbestos, or medical waste?\n\nReply YES or NO"); break; }
       if (bodyUpper==="YES") {
         logEvent(from_phone,"hazmat_yes",{body}); setState(from_phone,STATES.ESCALATED);
         await sendSms(from_phone,"Thanks for the heads up — restricted materials need special handling. A team member will reach out to discuss options.");
@@ -192,6 +194,7 @@ async function handleConversation(payload) {
       const zipMatch=body.match(/\b(\d{5})\b/); const zip=zipMatch?zipMatch[1]:null;
       await pool.query('UPDATE leads SET address_text=$1,zip=$2,zip_text=$2,last_seen_at=NOW() WHERE from_phone=$3', [body,zip,from_phone]);
       logEvent(from_phone,"address_capture",{address:body,zip});
+      await sendSms(from_phone, "Got it — " + body + " confirmed. Hang tight while we build your quote.");
       await advanceAfterAddress(from_phone);
       break;
     }
