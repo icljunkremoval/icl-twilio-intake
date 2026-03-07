@@ -1,4 +1,5 @@
 const { db, pool, upsertLead, insertEvent, getLead } = require("./db");
+const twilio = require("twilio");
 const { sendSms } = require("./twilio_sms");
 const { maybeCreateQuote } = require("./quote_worker");
 const { analyzeJobMedia, analyzeAllMedia } = require("./vision_analyzer");
@@ -118,7 +119,25 @@ async function handleConversation(payload) {
   const state = getConvState(lead);
 
   if (bodyUpper==="URGENT") { logEvent(from_phone,"urgent_flag",{body}); await sendSms(from_phone,"Got it — flagged URGENT. We'll prioritize your job."); return; }
-  if (bodyUpper==="HELP") { logEvent(from_phone,"help_requested",{body}); setState(from_phone,STATES.ESCALATED); await sendSms(from_phone,"A team member will reach out shortly. You can also call 855-578-5014."); await sendSms("+12138806318", "🙋 HELP REQUEST\nPhone: "+from_phone+"\nLast message: "+body+"\nCall them back ASAP."); return; }
+  if (bodyUpper==="HELP") {
+    logEvent(from_phone,"help_requested",{body});
+    setState(from_phone,STATES.ESCALATED);
+    await sendSms(from_phone,"Connecting you now — expect a call from 213-880-6318 in seconds.");
+    await sendSms("+12138806318", "HELP REQUEST\nPhone: "+from_phone+"\nLast message: "+body+"\nCalling them now.");
+    try {
+      const twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+      await twilioClient.calls.create({
+        to: from_phone,
+        from: "+12138806318",
+        twiml: "<Response><Say voice=\"Google.en-US-Neural2-F\">This is ICL Junk Removal. A team member will be with you shortly. Please hold.</Say><Dial>+12138806318</Dial></Response>"
+      });
+      logEvent(from_phone,"help_call_initiated",{});
+    } catch(e) {
+      console.error("[help] call failed:", e.message);
+      await sendSms(from_phone,"Please call us directly at 213-880-6318 and we will take care of you.");
+    }
+    return;
+  }
 
   switch(state) {
     case STATES.NEW:
