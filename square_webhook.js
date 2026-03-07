@@ -35,7 +35,7 @@ async function handleSquareWebhook(req, res) {
 
     console.log("[square_webhook] event:", eventType, JSON.stringify(event?.data?.object).substring(0, 300));
 
-    if (!["payment.completed", "payment.created", "payment.updated", "order.updated"].includes(eventType)) {
+    if (eventType !== "payment.completed") {
       return res.status(200).send("ok");
     }
 
