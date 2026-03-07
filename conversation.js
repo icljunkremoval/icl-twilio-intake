@@ -283,7 +283,18 @@ async function handleConversation(payload) {
     }
 
     case STATES.ESCALATED: {
-      await sendSms(from_phone,"A team member will be in touch shortly. Reply HELP to flag this again.");
+      if (numMedia > 0 || mediaUrl) {
+        setState(from_phone, STATES.AWAITING_MEDIA);
+        if (allMediaUrls.length > 0) runVisionAsync(from_phone, allMediaUrls[0], allMediaUrls);
+        await sendSms(from_phone, "Got your photo — analyzing now. We'll have your quote ready shortly.");
+        break;
+      }
+      if (bodyUpper === "HELP") {
+        await sendSms(from_phone, "A team member will be in touch shortly. You can also call 855-578-5014.");
+        await sendSms("+12138806318", "HELP FOLLOW-UP\nPhone: " + from_phone + "\nCall them back ASAP.");
+        break;
+      }
+      await sendSms(from_phone, "We're here! You can:\n\nSend a photo to get a quote\nCall 855-578-5014\nReply HELP to reach our team");
       break;
     }
 
