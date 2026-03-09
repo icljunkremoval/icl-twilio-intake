@@ -166,7 +166,9 @@ async function handleConversation(payload) {
               const msg = isCaller
                 ? "Hey! You just called us — glad you reached out. Go ahead and send up to 10 photos of what needs to go — different angles help us give you the most accurate quote. 📦\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote."
                 : "Hi! Thanks for texting ICL Junk Removal.\n\nSend us up to 10 photos of what you need removed — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.";
-              sendSms(from_phone, msg).catch(()=>{});
+              sendSms(from_phone, msg).then(() => {
+              sendSms(from_phone, "Save our contact card: https://icl-twilio-intake-production.up.railway.app/contact.vcf").catch(()=>{});
+            }).catch(()=>{});
             }).catch(()=>{ sendSms(from_phone,"Hi! Thanks for texting ICL Junk Removal.\n\nSend us up to 10 photos of what you need removed — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.").catch(()=>{}); });
           }
         }).catch(()=>{ sendSms(from_phone,"Hi! Thanks for texting ICL Junk Removal.\n\nSend us up to 10 photos of what you need removed — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.").catch(()=>{}); });

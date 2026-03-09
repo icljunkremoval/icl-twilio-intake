@@ -38,6 +38,7 @@ async function geocodeOSM(q) {
 }
 
 const app = express();
+app.use("/public", require("express").static(require("path").join(__dirname, "public")));
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
@@ -132,6 +133,23 @@ app.post("/twilio/inbound", (req, res) => {
 });
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
+
+app.get("/contact.vcf", (_req, res) => {
+  const vcard = [
+    "BEGIN:VCARD",
+    "VERSION:3.0",
+    "FN:ICL Junk Removal",
+    "ORG:ICL Junk Removal",
+    "TEL;TYPE=CELL:+18555785014",
+    "EMAIL:info@icljunkremoval.com",
+    "URL:https://icljunkremoval.com",
+    "PHOTO;VALUE=URL:https://icl-twilio-intake-production.up.railway.app/public/logo.jpg",
+    "END:VCARD"
+  ].join("\n");
+  res.set("Content-Type", "text/vcard");
+  res.set("Content-Disposition", "attachment; filename=ICL-Junk-Removal.vcf");
+  res.send(vcard);
+});
 
 app.get("/admin/twilio-latest", async (req, res) => {
   try {
