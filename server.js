@@ -141,7 +141,7 @@ app.get("/contact.vcf", (_req, res) => {
     "FN:ICL Junk Removal",
     "ORG:ICL Junk Removal",
     "TEL;TYPE=CELL:+18555785014",
-    "EMAIL:info@icljunkremoval.com",
+    "EMAIL:admin@icljunkremoval.com",
     "URL:https://icljunkremoval.com",
     "PHOTO;VALUE=URL:https://icl-twilio-intake-production.up.railway.app/public/logo.jpg",
     "END:VCARD"
