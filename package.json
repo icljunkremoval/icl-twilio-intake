@@ -12,6 +12,7 @@
   "license": "ISC",
   "dependencies": {
     "express": "^5.2.1",
+    "googleapis": "^171.4.0",
     "node-fetch": "^2.7.0",
     "pg": "^8.19.0",
     "twilio": "^5.12.2"

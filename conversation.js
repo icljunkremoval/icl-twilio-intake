@@ -5,6 +5,7 @@ const { maybeCreateQuote } = require("./quote_worker");
 const { analyzeJobMedia, analyzeAllMedia } = require("./vision_analyzer");
 const { backfillLatestMedia } = require("./twilio_media_backfill");
 const { recomputeDerived } = require("./recompute");
+const { createJobEvent } = require("./calendar");
 
 const STATES = {
   NEW: "NEW", AWAITING_MEDIA: "AWAITING_MEDIA", AWAITING_HAZMAT: "AWAITING_HAZMAT",
@@ -297,6 +298,8 @@ async function handleConversation(payload) {
       const fullTiming = chosenDay + ", " + savedWindow;
       await pool.query('UPDATE leads SET timing_pref=$1,conv_state=$2,last_seen_at=NOW() WHERE from_phone=$3', [fullTiming,STATES.WINDOW_SELECTED,from_phone]);
       logEvent(from_phone,"day_selected",{timing_pref:fullTiming});
+      const updatedLead = (await pool.query('SELECT * FROM leads WHERE from_phone=$1',[from_phone])).rows[0];
+      createJobEvent(updatedLead).catch(e=>console.error('[calendar] event error:',e));
       await sendSms(from_phone, "Locked in! ✅ ICL Junk Removal arrives " + fullTiming + ".\n\nWe'll text you when we're on our way. Questions? Reply HELP anytime.");
       break;
     }
