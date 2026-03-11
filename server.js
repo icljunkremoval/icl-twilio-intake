@@ -71,10 +71,19 @@ function leadLifecycle(row) {
   return { stage: "red", label: "Lead (pre-deposit)" };
 }
 
+function hasValidLeadGeo(lat, lng) {
+  return (
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    lat > 33.85 && lat < 34.15 &&
+    lng > -118.55 && lng < -118.15
+  );
+}
+
 async function resolveLeadCoordinates(row) {
   const lat = Number(row.geo_lat);
   const lng = Number(row.geo_lng);
-  if (Number.isFinite(lat) && Number.isFinite(lng)) {
+  if (hasValidLeadGeo(lat, lng)) {
     return { lat, lng, source: row.geo_source || "cached" };
   }
 
@@ -273,7 +282,7 @@ app.get("/api/dashboard/leads", async (req, res) => {
       let lat = Number(row.geo_lat);
       let lng = Number(row.geo_lng);
       let source = row.geo_source || "cached";
-      if ((!Number.isFinite(lat) || !Number.isFinite(lng)) && geocodeAttempts < 12) {
+      if (!hasValidLeadGeo(lat, lng) && geocodeAttempts < 12) {
         geocodeAttempts += 1;
         const geo = await resolveLeadCoordinates(row);
         if (geo) {
@@ -282,7 +291,7 @@ app.get("/api/dashboard/leads", async (req, res) => {
           source = geo.source;
         }
       }
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      if (!hasValidLeadGeo(lat, lng)) {
         const zip = String(row.zip || row.zip_text || "").match(/\b\d{5}\b/)?.[0] || "";
         if (ZIP_CENTROIDS[zip]) {
           lat = ZIP_CENTROIDS[zip].lat;
@@ -290,7 +299,7 @@ app.get("/api/dashboard/leads", async (req, res) => {
           source = "zip_fallback";
         }
       }
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      if (!hasValidLeadGeo(lat, lng)) continue;
       const life = leadLifecycle(row);
       pins.push({
         phone: row.from_phone,
