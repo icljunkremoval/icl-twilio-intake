@@ -36,9 +36,8 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .nav-tab.on{color:var(--tx);border-bottom-color:var(--blue)}
 
 /* ── PAGES ── */
-.page{padding:20px;flex-direction:column;gap:16px;min-height:0}
-.page.on{display:flex}
-.page.off{display:none}
+.page{display:none;padding:20px;flex-direction:column;gap:16px;min-height:0}
+.page[data-active="true"]{display:flex}
 
 /* ── GRID UTILS ── */
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
@@ -219,15 +218,15 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 
 <!-- NAV -->
 <div class="nav">
-  <button class="nav-tab on"   onclick="go('overview',this)">Overview</button>
-  <button class="nav-tab"      onclick="go('map',this)">Territory Map</button>
-  <button class="nav-tab"      onclick="go('leads',this)">Leads</button>
-  <button class="nav-tab"      onclick="go('referrals',this)">Referrals</button>
-  <button class="nav-tab"      onclick="go('kanban',this)">Next Steps</button>
+  <button class="nav-tab on" data-page="overview" onclick="go('overview',this)">Overview</button>
+  <button class="nav-tab" data-page="map" onclick="go('map',this)">Territory Map</button>
+  <button class="nav-tab" data-page="leads" onclick="go('leads',this)">Leads</button>
+  <button class="nav-tab" data-page="referrals" onclick="go('referrals',this)">Referrals</button>
+  <button class="nav-tab" data-page="kanban" onclick="go('kanban',this)">Next Steps</button>
 </div>
 
 <!-- ═══════════════ OVERVIEW ═══════════════ -->
-<div class="page on" id="page-overview" style="display:flex">
+<div class="page" id="page-overview" data-active="true">
 
   <div>
     <div class="alert a-red"><span class="a-ico">⚠</span><div><strong>A2P 10DLC unregistered</strong> — 323-307-7855 carrier-filtered. Fix before marketing. <a href="https://console.twilio.com" target="_blank">Twilio Console →</a></div></div>
@@ -322,7 +321,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 </div>
 
 <!-- ═══════════════ MAP ═══════════════ -->
-<div class="page off" id="page-map">
+<div class="page" id="page-map">
   <div class="card">
     <div class="ch">
       <div class="ct">Territory 001 · Choropleth</div>
@@ -364,7 +363,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 </div>
 
 <!-- ═══════════════ LEADS ═══════════════ -->
-<div class="page off" id="page-leads">
+<div class="page" id="page-leads">
   <div class="card">
     <div class="ch"><div class="ct">All Leads</div><span class="tag tag-live">Railway · PostgreSQL</span></div>
     <div class="cb"><div id="leads-full"><div class="skel" style="width:80%;margin:8px 0"></div><div class="skel" style="width:60%;margin:8px 0"></div><div class="skel" style="width:75%;margin:8px 0"></div></div></div>
@@ -372,7 +371,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 </div>
 
 <!-- ═══════════════ REFERRALS ═══════════════ -->
-<div class="page off" id="page-referrals">
+<div class="page" id="page-referrals">
   <div class="card">
     <div class="ch"><div class="ct">Referral Partner Stack</div><span style="font-size:9px;color:var(--tx3)">0 / 7 signed · build before paid ads</span></div>
     <div class="cb">
@@ -403,7 +402,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 </div>
 
 <!-- ═══════════════ KANBAN ═══════════════ -->
-<div class="page off" id="page-kanban">
+<div class="page" id="page-kanban">
   <div class="card">
     <div class="ch"><div class="ct">Next Steps</div><span style="font-size:9px;color:var(--tx3)">Drag cards anywhere · Click × to delete · + to add</span></div>
     <div class="cb"><div class="kanban" id="kanban"></div></div>
@@ -431,17 +430,25 @@ setInterval(tick,1000);tick();
 // ── PAGE NAV ─────────────────────────────────────────────────────────────────
 let mapBuilt=false;
 function go(id,btn){
-  document.querySelectorAll('.page').forEach(p=>{
-    p.classList.remove('on');
-    p.classList.add('off');
-  });
+  document.querySelectorAll('.page').forEach(p=>p.removeAttribute('data-active'));
   document.querySelectorAll('.nav-tab').forEach(b=>b.classList.remove('on'));
   const pg=document.getElementById('page-'+id);
-  pg.classList.remove('off');
-  pg.classList.add('on');
-  btn.classList.add('on');
+  if(!pg)return;
+  pg.setAttribute('data-active','true');
+  (btn||document.querySelector(`.nav-tab[data-page="${id}"]`))?.classList.add('on');
   if(id==='map'){
-    setTimeout(()=>{buildMap();mapBuilt=true;},50);
+    setTimeout(()=>{
+      try{
+        if(!mapBuilt){
+          buildMap();
+          mapBuilt=true;
+        }else{
+          updateMap(curLayer);
+        }
+      }catch(e){
+        console.error('[dashboard] map render failed',e);
+      }
+    },50);
   }
 }
 
