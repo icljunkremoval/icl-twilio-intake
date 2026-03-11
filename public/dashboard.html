@@ -696,6 +696,41 @@ function buildMap(){
   renderMap(curLayer);
 }
 
+function svgEl(tag,attrs){
+  const el=document.createElementNS('http://www.w3.org/2000/svg',tag);
+  Object.entries(attrs||{}).forEach(([k,v])=>el.setAttribute(k,String(v)));
+  return el;
+}
+
+function renderMapDomFallback(metric){
+  const svg=document.getElementById('map-svg');
+  if(!svg)return;
+  while(svg.firstChild)svg.removeChild(svg.firstChild);
+  svg.appendChild(svgEl('rect',{width:800,height:520,fill:'#0d1422'}));
+  for(let i=1;i<5;i++){
+    const y=i*520/5;
+    svg.appendChild(svgEl('line',{x1:0,y1:y,x2:800,y2:y,stroke:'#1a2840','stroke-width':'.5'}));
+  }
+  for(let i=1;i<8;i++){
+    const x=i*800/8;
+    svg.appendChild(svgEl('line',{x1:x,y1:0,x2:x,y2:520,stroke:'#1a2840','stroke-width':'.5'}));
+  }
+  Object.entries(ZONES).forEach(([zip,zone])=>{
+    const val=getZipVal(zip,metric);
+    const col=getColor(val,metric);
+    const poly=svgEl('polygon',{
+      'data-zip':zip,
+      points:pts(zone.coords),
+      fill:col,
+      'fill-opacity':'0.78',
+      stroke:'#3b82f6',
+      'stroke-width':'1.5',
+      style:'cursor:pointer'
+    });
+    svg.appendChild(poly);
+  });
+}
+
 function renderMap(metric){
   curLayer=metric;
   const svg=document.getElementById('map-svg');
@@ -750,6 +785,10 @@ function renderMap(metric){
   });
 
   svg.innerHTML=html;
+  // Browser-safe fallback: some engines can be flaky with SVG innerHTML.
+  if(!svg.querySelector('polygon[data-zip]')){
+    renderMapDomFallback(metric);
+  }
 
   // Hover events on polygons
   svg.querySelectorAll('polygon[data-zip]').forEach(poly=>{
@@ -808,6 +847,17 @@ function setLayer(metric,btn){
   btn.classList.add('on');
   curLayer=metric;
   if(mapBuilt)renderMap(metric);
+}
+
+function ensureMapRendered(){
+  try{
+    const svg=document.getElementById('map-svg');
+    if(!svg)return;
+    if(svg.querySelector('polygon[data-zip]'))return;
+    buildMap();
+  }catch(e){
+    console.error('[dashboard] ensureMapRendered failed',e);
+  }
 }
 
 function renderLegend(metric){
@@ -1040,6 +1090,8 @@ window.addEventListener('DOMContentLoaded',()=>{
   try{fetchCensus();}catch(e){}
   try{buildRefs();}catch(e){}
   try{loadK();renderK();}catch(e){KS=JSON.parse(JSON.stringify(DEFAULT));try{renderK();}catch(e2){}}
+  // Pre-render once so map tab doesn't depend solely on click timing.
+  setTimeout(()=>{try{ensureMapRendered();}catch(e){}},150);
   setInterval(()=>{try{fetchLeads();}catch(e){}},60000);
 });
 </script>
