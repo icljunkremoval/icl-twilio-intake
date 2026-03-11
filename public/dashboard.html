@@ -218,7 +218,6 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 <!-- TOPBAR -->
 <div class="bar">
   <div class="logo"><div class="dot"></div>ICL Junk Removal</div>
-  <div class="bar-mid">Territory 001 · Baldwin Hills · Windsor Hills · View Park · Park Mesa</div>
   <div class="bar-r">
     <span id="clock" style="color:var(--tx3)">—</span>
     <div class="live-pill"><div class="live-dot"></div>Live</div>
@@ -447,14 +446,15 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 // ── CLOCK & COUNTDOWN ────────────────────────────────────────────────────────
 function tick(){
   const now=new Date();
-  document.getElementById('clock').textContent=
-    now.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true})+' PT';
-  const t=new Date('2028-07-14T20:00:00-07:00')-now;
-  if(t>0){
-    document.getElementById('cd-d').textContent=Math.floor(t/86400000);
-    document.getElementById('cd-h').textContent=Math.floor(t%86400000/3600000);
-    document.getElementById('cd-m').textContent=Math.floor(t%3600000/60000);
-    document.getElementById('cd-s').textContent=Math.floor(t%60000/1000);
+  const d=now.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const timeTxt=now.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true});
+  document.getElementById('clock').textContent=`${d} · ${timeTxt} PT`;
+  const countdownMs=new Date('2028-07-14T20:00:00-07:00')-now;
+  if(countdownMs>0){
+    document.getElementById('cd-d').textContent=Math.floor(countdownMs/86400000);
+    document.getElementById('cd-h').textContent=Math.floor(countdownMs%86400000/3600000);
+    document.getElementById('cd-m').textContent=Math.floor(countdownMs%3600000/60000);
+    document.getElementById('cd-s').textContent=Math.floor(countdownMs%60000/1000);
   }
 }
 setInterval(tick,1000);tick();
@@ -1068,6 +1068,7 @@ function ensureStreetMap(){
   renderStreetZips();
   renderStreetLeads();
   renderLegend(curLayer);
+  fitStreetToTerritory();
   setTimeout(()=>{try{streetMap.invalidateSize();}catch(e){}},60);
 }
 function renderStreetTerritory(){
