@@ -6,6 +6,8 @@
 <title>ICL · Territory 001</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
 <style>
 :root{
   --bg:#070912;--bg2:#0f1623;--bg3:#162032;--bg4:#1c2a42;
@@ -117,6 +119,7 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 #street-map-wrap{position:relative;background:var(--bg3);border-radius:0 0 6px 6px;overflow:hidden}
 #street-map{width:100%;height:520px}
 .leaflet-container{background:#0d1422}
+.lead-dot{width:14px;height:14px;border-radius:50%;border:2px solid rgba(8,13,23,.95);box-shadow:0 0 0 1px rgba(255,255,255,.2)}
 .map-tooltip{
   position:absolute;pointer-events:none;
   background:var(--bg2);border:1px solid var(--bd2);border-radius:6px;
@@ -341,7 +344,14 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
       <button class="mc mc-layer" onclick="setLayer('owner',this)">Owner-Occupancy</button>
       <button class="mc mc-layer" onclick="setLayer('seniors',this)">65+ Population</button>
       <button class="mc mc-layer" onclick="setLayer('revenue',this)">Est. ICL Revenue</button>
+      <button class="mc on" id="neighborhoods-toggle" onclick="toggleNeighborhoods(this)">Neighborhoods</button>
       <button class="mc on" id="territory-toggle" onclick="toggleTerritoryEdge(this)">Territory Edge</button>
+      <button class="mc on" id="legend-toggle" onclick="toggleMapLegend(this)">Legend</button>
+      <span class="mc-lbl" style="margin-left:10px">Leads:</span>
+      <button class="mc mc-lead-filter on" onclick="setLeadFilter('all',this)">All</button>
+      <button class="mc mc-lead-filter" onclick="setLeadFilter('red',this)">Red</button>
+      <button class="mc mc-lead-filter" onclick="setLeadFilter('yellow',this)">Yellow</button>
+      <button class="mc mc-lead-filter" onclick="setLeadFilter('green',this)">Green</button>
       <button class="mc mc-mode on" onclick="setMapMode('street',this)">Street Map</button>
       <button class="mc mc-mode" onclick="setMapMode('choropleth',this)">Choropleth</button>
       <button class="mc" onclick="openStreetView()">Street View ↗</button>
@@ -428,6 +438,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script>
 'use strict';
 
@@ -501,6 +512,12 @@ const fPct=v=>v?v+'%':'—';
 function fPhone(p){if(!p)return'—';const d=p.replace(/\D/g,'').slice(-10);return d.length===10?`(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`:p;}
 function fAgo(ts){if(!ts)return'';const m=Math.floor((Date.now()-new Date(ts))/60000);if(m<60)return m+'m';if(m<1440)return Math.floor(m/60)+'h';return Math.floor(m/1440)+'d';}
 let MAP_LEAD_PINS=[];
+let MAP_VISIBLE_PINS=[];
+function getVisiblePins(){
+  const pins=Array.isArray(MAP_LEAD_PINS)?MAP_LEAD_PINS:[];
+  if(leadFilter==='all')return pins;
+  return pins.filter(p=>p.stage===leadFilter);
+}
 
 // ── LEADS ─────────────────────────────────────────────────────────────────────
 function stateCls(s){
@@ -739,7 +756,7 @@ const BASEMAP_LABELS=[
   {name:'West Adams',lng:-118.346,lat:34.019},
 ];
 // Territory edge from user's shared Google Maps route waypoints
-const TERRITORY_EDGE=[
+const TERRITORY_WAYPOINTS=[
   [-118.3523303,33.9776848],
   [-118.3306842,33.9890145],
   [-118.3357807,34.0112725],
@@ -751,9 +768,41 @@ const TERRITORY_EDGE=[
   [-118.3533638,33.9617947],
   [-118.3701489,33.9616531],
   [-118.3615260,33.9618030],
-  [-118.3523303,33.9776848], // close polygon
 ];
 let showTerritoryEdge=true;
+let showNeighborhoods=true;
+let showMapLegend=true;
+let leadFilter='all';
+
+function segsCross(a,b,c,d){
+  const ccw=(p1,p2,p3)=>((p3[1]-p1[1])*(p2[0]-p1[0])>(p2[1]-p1[1])*(p3[0]-p1[0]));
+  return ccw(a,c,d)!==ccw(b,c,d)&&ccw(a,b,c)!==ccw(a,b,d);
+}
+function buildSimpleTerritoryPolygon(points){
+  const uniq=[];const seen=new Set();
+  points.forEach(p=>{const k=`${p[0].toFixed(6)},${p[1].toFixed(6)}`;if(!seen.has(k)){seen.add(k);uniq.push(p);}});
+  const cx=uniq.reduce((s,p)=>s+p[0],0)/uniq.length;
+  const cy=uniq.reduce((s,p)=>s+p[1],0)/uniq.length;
+  const poly=[...uniq].sort((a,b)=>Math.atan2(a[1]-cy,a[0]-cx)-Math.atan2(b[1]-cy,b[0]-cx));
+  let changed=true,guard=0;
+  while(changed&&guard<80){
+    changed=false;guard++;
+    for(let i=0;i<poly.length;i++){
+      const i2=(i+1)%poly.length;
+      for(let j=i+2;j<poly.length;j++){
+        const j2=(j+1)%poly.length;
+        if(i===j2||(i2===j))continue;
+        if(segsCross(poly[i],poly[i2],poly[j],poly[j2])){
+          const mid=poly.slice(i2,j+1).reverse();
+          poly.splice(i2,j-i, ...mid);
+          changed=true;
+        }
+      }
+    }
+  }
+  return [...poly,poly[0]];
+}
+const TERRITORY_EDGE=buildSimpleTerritoryPolygon(TERRITORY_WAYPOINTS);
 
 function basemapHtml(){
   let out='<g id="basemap-layer">';
@@ -914,9 +963,11 @@ function jitterFromPhone(phone){
   return {dx:(h%9)-4,dy:(Math.floor(h/9)%9)-4};
 }
 function renderLeadPinsHtml(){
-  if(!Array.isArray(MAP_LEAD_PINS)||MAP_LEAD_PINS.length===0)return'';
+  const visible=getVisiblePins();
+  MAP_VISIBLE_PINS=visible;
+  if(visible.length===0)return'';
   let out='';
-  MAP_LEAD_PINS.forEach((p,idx)=>{
+  visible.forEach((p,idx)=>{
     const lng=Number(p.lng),lat=Number(p.lat);
     if(!Number.isFinite(lng)||!Number.isFinite(lat))return;
     const [x0,y0]=project(clamp(lng,VB.minLng,VB.maxLng),clamp(lat,VB.minLat,VB.maxLat));
@@ -931,8 +982,10 @@ function renderLeadPinsHtml(){
   return out;
 }
 function appendLeadPinsDom(svg){
-  if(!Array.isArray(MAP_LEAD_PINS)||MAP_LEAD_PINS.length===0)return;
-  MAP_LEAD_PINS.forEach((p,idx)=>{
+  const visible=getVisiblePins();
+  MAP_VISIBLE_PINS=visible;
+  if(visible.length===0)return;
+  visible.forEach((p,idx)=>{
     const lng=Number(p.lng),lat=Number(p.lat);
     if(!Number.isFinite(lng)||!Number.isFinite(lat))return;
     const [x0,y0]=project(clamp(lng,VB.minLng,VB.maxLng),clamp(lat,VB.minLat,VB.maxLat));
@@ -981,6 +1034,7 @@ function ensureStreetMap(){
   renderStreetTerritory();
   renderStreetZips();
   renderStreetLeads();
+  renderLegend(curLayer);
   setTimeout(()=>{try{streetMap.invalidateSize();}catch(e){}},60);
 }
 function renderStreetTerritory(){
@@ -1001,6 +1055,7 @@ function renderStreetTerritory(){
 function renderStreetZips(){
   if(!streetMap||typeof L==='undefined')return;
   if(streetLayers.zips){streetMap.removeLayer(streetLayers.zips);}
+  if(!showNeighborhoods){streetLayers.zips=null;return;}
   const grp=L.layerGroup();
   Object.entries(ZONES).forEach(([zip,zone])=>{
     const val=getZipVal(zip,curLayer);
@@ -1020,13 +1075,22 @@ function renderStreetZips(){
 function renderStreetLeads(){
   if(!streetMap||typeof L==='undefined')return;
   if(streetLayers.leads){streetMap.removeLayer(streetLayers.leads);}
-  const grp=L.layerGroup();
-  (MAP_LEAD_PINS||[]).forEach(lead=>{
+  const visible=getVisiblePins();
+  MAP_VISIBLE_PINS=visible;
+  const grp=(typeof L.markerClusterGroup==='function')
+    ? L.markerClusterGroup({showCoverageOnHover:false,spiderfyOnMaxZoom:true,maxClusterRadius:42})
+    : L.layerGroup();
+  visible.forEach(lead=>{
     const lat=Number(lead.lat),lng=Number(lead.lng);
     if(!Number.isFinite(lat)||!Number.isFinite(lng))return;
     const c=pinColor(lead.stage);
-    const marker=L.circleMarker([lat,lng],{
-      radius:7,color:'#0b1220',weight:1.5,fillColor:c,fillOpacity:.92
+    const marker=L.marker([lat,lng],{
+      icon:L.divIcon({
+        className:'',
+        html:`<div class="lead-dot" style="background:${c}"></div>`,
+        iconSize:[14,14],
+        iconAnchor:[7,7]
+      })
     });
     marker.bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px;line-height:1.45">
       <div style="font-weight:700;color:${c};margin-bottom:4px">${lead.stage_label||'Lead'}</div>
@@ -1116,30 +1180,32 @@ function renderMapDomFallback(metric){
       if(i%2===0)svg.appendChild(svgEl('text',{x:x+6,y:y-6,fill:'rgba(191,219,254,.75)','font-size':'7.5','font-family':'DM Mono,monospace'})).textContent=String(i+1);
     });
   }
-  Object.entries(ZONES).forEach(([zip,zone])=>{
-    const val=getZipVal(zip,metric);
-    const col=getColor(val,metric);
-    const poly=svgEl('polygon',{
-      'data-zip':zip,
-      points:pts(zone.coords),
-      fill:col,
-      'fill-opacity':'0.9',
-      stroke:'#93c5fd',
-      'stroke-width':'2.2',
-      style:'cursor:pointer'
+  if(showNeighborhoods){
+    Object.entries(ZONES).forEach(([zip,zone])=>{
+      const val=getZipVal(zip,metric);
+      const col=getColor(val,metric);
+      const poly=svgEl('polygon',{
+        'data-zip':zip,
+        points:pts(zone.coords),
+        fill:col,
+        'fill-opacity':'0.9',
+        stroke:'#93c5fd',
+        'stroke-width':'2.2',
+        style:'cursor:pointer'
+      });
+      svg.appendChild(poly);
+      const cx=zone.coords.reduce((s,[ln])=>s+ln,0)/zone.coords.length;
+      const cy=zone.coords.reduce((s,[,la])=>s+la,0)/zone.coords.length;
+      const [px,py]=project(cx,cy);
+      svg.appendChild(svgEl('text',{
+        x:px,y:py,'text-anchor':'middle',
+        fill:'rgba(255,255,255,0.95)',
+        'font-size':'11',
+        'font-family':'DM Mono,monospace',
+        'font-weight':'700'
+      })).textContent=zip;
     });
-    svg.appendChild(poly);
-    const cx=zone.coords.reduce((s,[ln])=>s+ln,0)/zone.coords.length;
-    const cy=zone.coords.reduce((s,[,la])=>s+la,0)/zone.coords.length;
-    const [px,py]=project(cx,cy);
-    svg.appendChild(svgEl('text',{
-      x:px,y:py,'text-anchor':'middle',
-      fill:'rgba(255,255,255,0.95)',
-      'font-size':'11',
-      'font-family':'DM Mono,monospace',
-      'font-weight':'700'
-    })).textContent=zip;
-  });
+  }
   appendLeadPinsDom(svg);
   VENUES.forEach(([lng,lat])=>{
     const [vx,vy]=project(lng,lat);
@@ -1169,32 +1235,34 @@ function renderMap(metric){
   html+=territoryEdgeHtml();
 
   // Zone polygons
-  Object.entries(ZONES).forEach(([zip,zone])=>{
-    const val=getZipVal(zip,metric);
-    const col=getColor(val,metric); // always returns a valid color (breaks[0] color as default)
-    const isHov=hoveredZip===zip;
-    const polygon=`<polygon
-      data-zip="${zip}"
-      points="${pts(zone.coords)}"
-      fill="${col}"
-      fill-opacity="${isHov?0.95:0.78}"
-      stroke="${isHov?'#fff':'#3b82f6'}"
-      stroke-width="${isHov?2.5:1.5}"
-      style="cursor:pointer;transition:fill-opacity .15s"
-    />`;
-    html+=polygon;
-
-    // Zip label
-    const cx=zone.coords.reduce((s,[ln])=>s+ln,0)/zone.coords.length;
-    const cy=zone.coords.reduce((s,[,la])=>s+la,0)/zone.coords.length;
-    const [px,py]=project(cx,cy);
-    html+=`<text x="${px}" y="${py-8}" text-anchor="middle" fill="rgba(255,255,255,0.9)" font-size="11" font-family="DM Mono,monospace" font-weight="500">${zip}</text>`;
-    html+=`<text x="${px}" y="${py+8}" text-anchor="middle" fill="rgba(255,255,255,0.55)" font-size="8.5" font-family="DM Mono,monospace">${zone.name}</text>`;
-    if(CD&&CD[zip]){
+  if(showNeighborhoods){
+    Object.entries(ZONES).forEach(([zip,zone])=>{
       const val=getZipVal(zip,metric);
-      html+=`<text x="${px}" y="${py+22}" text-anchor="middle" fill="rgba(255,255,255,0.85)" font-size="9" font-family="DM Mono,monospace" font-weight="500">${SCALES[metric].fmt(val)}</text>`;
-    }
-  });
+      const col=getColor(val,metric); // always returns a valid color (breaks[0] color as default)
+      const isHov=hoveredZip===zip;
+      const polygon=`<polygon
+        data-zip="${zip}"
+        points="${pts(zone.coords)}"
+        fill="${col}"
+        fill-opacity="${isHov?0.95:0.78}"
+        stroke="${isHov?'#fff':'#3b82f6'}"
+        stroke-width="${isHov?2.5:1.5}"
+        style="cursor:pointer;transition:fill-opacity .15s"
+      />`;
+      html+=polygon;
+
+      // Zip label
+      const cx=zone.coords.reduce((s,[ln])=>s+ln,0)/zone.coords.length;
+      const cy=zone.coords.reduce((s,[,la])=>s+la,0)/zone.coords.length;
+      const [px,py]=project(cx,cy);
+      html+=`<text x="${px}" y="${py-8}" text-anchor="middle" fill="rgba(255,255,255,0.9)" font-size="11" font-family="DM Mono,monospace" font-weight="500">${zip}</text>`;
+      html+=`<text x="${px}" y="${py+8}" text-anchor="middle" fill="rgba(255,255,255,0.55)" font-size="8.5" font-family="DM Mono,monospace">${zone.name}</text>`;
+      if(CD&&CD[zip]){
+        const val=getZipVal(zip,metric);
+        html+=`<text x="${px}" y="${py+22}" text-anchor="middle" fill="rgba(255,255,255,0.85)" font-size="9" font-family="DM Mono,monospace" font-weight="500">${SCALES[metric].fmt(val)}</text>`;
+      }
+    });
+  }
   html+=renderLeadPinsHtml();
 
   // Venue markers
@@ -1232,7 +1300,7 @@ function renderMap(metric){
   svg.querySelectorAll('g.lead-pin').forEach(pin=>{
     pin.addEventListener('mouseenter',e=>{
       const idx=Number(pin.dataset.pinIdx);
-      const lead=MAP_LEAD_PINS[idx];
+      const lead=MAP_VISIBLE_PINS[idx];
       if(lead)showLeadTooltip(e,lead);
       pin.querySelector('.lead-pin-ring')?.setAttribute('opacity','1');
     });
@@ -1295,11 +1363,29 @@ function setLayer(metric,btn){
   if(mapBuilt)renderMap(metric);
   if(streetMap)renderStreetZips();
 }
+function setLeadFilter(filter,btn){
+  leadFilter=filter;
+  document.querySelectorAll('.mc-lead-filter').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  if(mapBuilt)renderMap(curLayer);
+  if(streetMap)renderStreetLeads();
+}
+function toggleNeighborhoods(btn){
+  showNeighborhoods=!showNeighborhoods;
+  btn.classList.toggle('on',showNeighborhoods);
+  if(mapBuilt)renderMap(curLayer);
+  if(streetMap)renderStreetZips();
+}
 function toggleTerritoryEdge(btn){
   showTerritoryEdge=!showTerritoryEdge;
   btn.classList.toggle('on',showTerritoryEdge);
   if(mapBuilt)renderMap(curLayer);
   if(streetMap)renderStreetTerritory();
+}
+function toggleMapLegend(btn){
+  showMapLegend=!showMapLegend;
+  btn.classList.toggle('on',showMapLegend);
+  renderLegend(curLayer);
 }
 
 function ensureMapRendered(){
@@ -1317,8 +1403,12 @@ function ensureMapRendered(){
 
 function renderLegend(metric){
   const sc=SCALES[metric];
+  const legendEl=document.getElementById('map-legend');
+  if(!legendEl)return;
+  legendEl.style.display=showMapLegend?'flex':'none';
+  if(!showMapLegend)return;
   const pinCounts=(MAP_LEAD_PINS||[]).reduce((a,p)=>{const k=p.stage||'red';a[k]=(a[k]||0)+1;return a;},{red:0,yellow:0,green:0});
-  document.getElementById('map-legend').innerHTML=
+  legendEl.innerHTML=
     `<div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:7px">${sc.label}</div>`+
     [...sc.colors].reverse().map((c,i)=>{
       const idx=sc.colors.length-1-i;
