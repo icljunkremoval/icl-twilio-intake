@@ -436,6 +436,8 @@ function go(id,btn){
   if(!pg)return;
   pg.setAttribute('data-active','true');
   (btn||document.querySelector(`.nav-tab[data-page="${id}"]`))?.classList.add('on');
+  // Keep tab switches deterministic: jump to top so shorter pages do not look blank.
+  window.scrollTo(0,0);
   if(id==='map'){
     setTimeout(()=>{
       try{
@@ -445,6 +447,7 @@ function go(id,btn){
         }else{
           updateMap(curLayer);
         }
+        ensureMapRendered();
       }catch(e){
         console.error('[dashboard] map render failed',e);
       }
