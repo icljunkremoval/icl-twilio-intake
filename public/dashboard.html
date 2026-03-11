@@ -332,11 +332,12 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
     </div>
     <div class="map-ctrl">
       <span class="mc-lbl">Color by:</span>
-      <button class="mc on" onclick="setLayer('income',this)">Median Income</button>
-      <button class="mc" onclick="setLayer('homevalue',this)">Home Value</button>
-      <button class="mc" onclick="setLayer('owner',this)">Owner-Occupancy</button>
-      <button class="mc" onclick="setLayer('seniors',this)">65+ Population</button>
-      <button class="mc" onclick="setLayer('revenue',this)">Est. ICL Revenue</button>
+      <button class="mc mc-layer on" onclick="setLayer('income',this)">Median Income</button>
+      <button class="mc mc-layer" onclick="setLayer('homevalue',this)">Home Value</button>
+      <button class="mc mc-layer" onclick="setLayer('owner',this)">Owner-Occupancy</button>
+      <button class="mc mc-layer" onclick="setLayer('seniors',this)">65+ Population</button>
+      <button class="mc mc-layer" onclick="setLayer('revenue',this)">Est. ICL Revenue</button>
+      <button class="mc on" id="territory-toggle" onclick="toggleTerritoryEdge(this)">Territory Edge</button>
     </div>
     <div class="cb0" id="map-svg-wrap" style="position:relative;background:#0d1422;min-height:520px">
       <div class="map-tooltip" id="map-tt"></div>
@@ -714,6 +715,22 @@ const BASEMAP_LABELS=[
   {name:'View Park',lng:-118.366,lat:33.979},
   {name:'West Adams',lng:-118.346,lat:34.019},
 ];
+// Territory edge from user's shared Google Maps route waypoints
+const TERRITORY_EDGE=[
+  [-118.3523303,33.9776848],
+  [-118.3306842,33.9890145],
+  [-118.3357807,34.0112725],
+  [-118.3540878,34.0266921],
+  [-118.3584891,33.9885698],
+  [-118.3709630,33.9880464],
+  [-118.3575469,33.9762973],
+  [-118.3533233,33.9655623],
+  [-118.3533638,33.9617947],
+  [-118.3701489,33.9616531],
+  [-118.3615260,33.9618030],
+  [-118.3523303,33.9776848], // close polygon
+];
+let showTerritoryEdge=true;
 
 function basemapHtml(){
   let out='<g id="basemap-layer">';
@@ -729,6 +746,22 @@ function basemapHtml(){
   BASEMAP_LABELS.forEach(l=>{
     const [x,y]=project(l.lng,l.lat);
     out+=`<text x="${x}" y="${y}" fill="rgba(131,162,209,.55)" font-size="8.2" font-family="DM Mono,monospace" text-anchor="middle">${l.name}</text>`;
+  });
+  out+='</g>';
+  return out;
+}
+function territoryEdgeHtml(){
+  if(!showTerritoryEdge)return'';
+  const p=linePts(TERRITORY_EDGE);
+  let out=`<g id="territory-edge-layer">
+    <polygon points="${p}" fill="rgba(59,130,246,.05)" stroke="none"/>
+    <polyline points="${p}" fill="none" stroke="rgba(147,197,253,.95)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="${p}" fill="none" stroke="rgba(30,64,175,.9)" stroke-width="1.1" stroke-dasharray="5 4" stroke-linecap="round"/>
+  `;
+  TERRITORY_EDGE.slice(0,-1).forEach(([lng,lat],i)=>{
+    const [x,y]=project(lng,lat);
+    out+=`<circle cx="${x}" cy="${y}" r="3.2" fill="rgba(191,219,254,.95)" stroke="rgba(30,64,175,.9)" stroke-width="1"/>`;
+    if(i%2===0)out+=`<text x="${x+6}" y="${y-6}" fill="rgba(191,219,254,.75)" font-size="7.5" font-family="DM Mono,monospace">${i+1}</text>`;
   });
   out+='</g>';
   return out;
@@ -843,6 +876,21 @@ function renderMapDomFallback(metric){
       x,y,fill:'rgba(131,162,209,.55)','font-size':'8.2','font-family':'DM Mono,monospace','text-anchor':'middle'
     })).textContent=l.name;
   });
+  if(showTerritoryEdge){
+    const p=linePts(TERRITORY_EDGE);
+    svg.appendChild(svgEl('polygon',{points:p,fill:'rgba(59,130,246,.05)',stroke:'none'}));
+    svg.appendChild(svgEl('polyline',{
+      points:p,fill:'none',stroke:'rgba(147,197,253,.95)','stroke-width':'2.4','stroke-linecap':'round','stroke-linejoin':'round'
+    }));
+    svg.appendChild(svgEl('polyline',{
+      points:p,fill:'none',stroke:'rgba(30,64,175,.9)','stroke-width':'1.1','stroke-dasharray':'5 4','stroke-linecap':'round'
+    }));
+    TERRITORY_EDGE.slice(0,-1).forEach(([lng,lat],i)=>{
+      const [x,y]=project(lng,lat);
+      svg.appendChild(svgEl('circle',{cx:x,cy:y,r:'3.2',fill:'rgba(191,219,254,.95)',stroke:'rgba(30,64,175,.9)','stroke-width':'1'}));
+      if(i%2===0)svg.appendChild(svgEl('text',{x:x+6,y:y-6,fill:'rgba(191,219,254,.75)','font-size':'7.5','font-family':'DM Mono,monospace'})).textContent=String(i+1);
+    });
+  }
   Object.entries(ZONES).forEach(([zip,zone])=>{
     const val=getZipVal(zip,metric);
     const col=getColor(val,metric);
@@ -891,6 +939,7 @@ function renderMap(metric){
     html+=`<line x1="${x}" y1="0" x2="${x}" y2="520" stroke="#24375a" stroke-width=".6"/>`;
   }
   html+=basemapHtml();
+  html+=territoryEdgeHtml();
 
   // Zone polygons
   Object.entries(ZONES).forEach(([zip,zone])=>{
@@ -1011,10 +1060,15 @@ function updateMap(metric){
   if(mapBuilt)renderMap(metric);
 }
 function setLayer(metric,btn){
-  document.querySelectorAll('.mc').forEach(b=>b.classList.remove('on'));
+  document.querySelectorAll('.mc-layer').forEach(b=>b.classList.remove('on'));
   btn.classList.add('on');
   curLayer=metric;
   if(mapBuilt)renderMap(metric);
+}
+function toggleTerritoryEdge(btn){
+  showTerritoryEdge=!showTerritoryEdge;
+  btn.classList.toggle('on',showTerritoryEdge);
+  if(mapBuilt)renderMap(curLayer);
 }
 
 function ensureMapRendered(){
