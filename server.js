@@ -451,6 +451,7 @@ async function fireNextBestActionAutomation() {
          ) AS has_completed_event
        FROM leads l
        WHERE COALESCE(l.troll_flag, 0) = 0
+        AND l.archived_at IS NULL
        ORDER BY l.last_seen_at DESC
        LIMIT 280`
     )
@@ -1024,6 +1025,7 @@ app.get("/api/dashboard/leads", async (req, res) => {
             AND e.event_type = 'job_completed'
         ) AS has_completed_event
       FROM leads l
+      WHERE l.archived_at IS NULL
       ORDER BY l.last_seen_at DESC
       LIMIT $1`,
       [limit]
@@ -1214,9 +1216,33 @@ app.get("/media-proxy", async (req, res) => {
   }
 });
 
-app.get("/admin/leads", async (_req, res) => {
+app.get("/admin/leads", async (req, res) => {
   try {
-    const rows = (await pool.query("SELECT from_phone, last_event, substr(coalesce(last_body,''),1,80) AS last_body_80, substr(coalesce(address_text,''),1,60) AS address_60, zip_text, num_media, media_url0, distance_miles, last_seen_at FROM leads ORDER BY last_seen_at DESC LIMIT 50")).rows;
+    const mode = String(req.query.show || "active").toLowerCase();
+    const where =
+      mode === "archived"
+        ? "WHERE l.archived_at IS NOT NULL"
+        : mode === "all"
+          ? ""
+          : "WHERE l.archived_at IS NULL";
+    const rows = (await pool.query(
+      `SELECT
+        l.from_phone,
+        l.last_event,
+        substr(coalesce(l.last_body,''),1,80) AS last_body_80,
+        substr(coalesce(l.address_text,''),1,60) AS address_60,
+        l.zip_text,
+        l.num_media,
+        l.has_media,
+        l.media_url0,
+        l.distance_miles,
+        l.last_seen_at,
+        l.archived_at
+      FROM leads l
+      ${where}
+      ORDER BY l.last_seen_at DESC
+      LIMIT 200`
+    )).rows;
     const esc = (s) => String(s ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#39;");
     const rowsHtml = rows.map(r => {
       const mediaHref = r.media_url0 ? ("/media-proxy?u=" + encodeURIComponent(r.media_url0)) : "";
@@ -1226,12 +1252,61 @@ app.get("/admin/leads", async (_req, res) => {
           "</a>"
         : "<span style='color:#888'>—</span>";
       const mediaCell = mediaHref ? "<a target='_blank' href='" + mediaHref + "'>Open</a>" : "";
-      return "<tr><td><a href='/admin/lead/" + esc(String(r.from_phone).replaceAll("+","%2B")) + "'>" + esc(r.from_phone) + "</a></td><td>" + esc(r.last_event) + "</td><td>" + esc(r.last_body_80) + "</td><td>" + esc(r.address_60) + "</td><td>" + esc(r.zip_text) + "</td><td>" + esc(r.num_media) + "</td><td>" + previewCell + "</td><td>" + mediaCell + "</td><td>" + esc(r.distance_miles) + "</td><td>" + esc(r.last_seen_at) + "</td></tr>";
+      const mediaCount = Number(r.num_media || 0);
+      const mediaSent = mediaCount > 0 || Number(r.has_media || 0) === 1 || !!r.media_url0;
+      const mediaSentCell = mediaSent
+        ? "<span style='display:inline-block;padding:2px 8px;border-radius:999px;background:#e7f7ef;border:1px solid #8fd3ac;color:#166534;font-size:11px'>Yes (" + mediaCount + ")</span>"
+        : "<span style='display:inline-block;padding:2px 8px;border-radius:999px;background:#f4f4f5;border:1px solid #d4d4d8;color:#52525b;font-size:11px'>No</span>";
+      const encodedPhone = encodeURIComponent(String(r.from_phone));
+      const returnTo = "/admin/leads?show=" + (mode === "archived" ? "archived" : mode === "all" ? "all" : "active");
+      const actionCell = r.archived_at
+        ? "<form method='POST' action='/admin/lead/" + encodedPhone + "/unarchive' style='margin:0'><input type='hidden' name='return_to' value='" + esc(returnTo) + "'/><button type='submit' style='font-size:11px;padding:5px 8px;border:1px solid #0ea5e9;border-radius:6px;background:#f0f9ff;color:#0369a1;cursor:pointer'>Unarchive</button></form>"
+        : "<form method='POST' action='/admin/lead/" + encodedPhone + "/archive' style='margin:0' onsubmit='return confirm(\"Archive this lead?\")'><input type='hidden' name='return_to' value='" + esc(returnTo) + "'/><button type='submit' style='font-size:11px;padding:5px 8px;border:1px solid #f59e0b;border-radius:6px;background:#fffbeb;color:#92400e;cursor:pointer'>Archive</button></form>";
+      return "<tr><td><a href='/admin/lead/" + encodedPhone + "'>" + esc(r.from_phone) + "</a></td><td>" + esc(r.last_event) + "</td><td>" + esc(r.last_body_80) + "</td><td>" + esc(r.address_60) + "</td><td>" + esc(r.zip_text) + "</td><td>" + mediaSentCell + "</td><td>" + esc(r.num_media) + "</td><td>" + previewCell + "</td><td>" + mediaCell + "</td><td>" + esc(r.distance_miles) + "</td><td>" + esc(r.last_seen_at) + "</td><td>" + actionCell + "</td></tr>";
     }).join("");
+    const modeActive = mode === "active" || (mode !== "archived" && mode !== "all");
+    const modeArchived = mode === "archived";
+    const modeAll = mode === "all";
     res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.end("<html><head><title>ICL Leads</title><style>body{font-family:system-ui;padding:16px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;font-size:13px}th{background:#f6f6f6}</style></head><body><h2>ICL Intake Leads</h2><table><thead><tr><th>From</th><th>Last Event</th><th>Last Message</th><th>Address</th><th>ZIP</th><th>Media#</th><th>Media Preview</th><th>Media</th><th>Miles</th><th>Last Seen</th></tr></thead><tbody>" + rowsHtml + "</tbody></table></body></html>");
+    res.end(
+      "<html><head><title>ICL Leads</title><style>body{font-family:system-ui;padding:16px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;font-size:13px;vertical-align:top}th{background:#f6f6f6}.tabs{display:flex;gap:8px;margin:8px 0 14px}.tab{padding:6px 10px;border:1px solid #ddd;border-radius:8px;background:#fff;color:#333;text-decoration:none;font-size:12px}.tab.on{background:#111827;color:#fff;border-color:#111827}</style></head><body>" +
+      "<h2>ICL Intake Leads</h2>" +
+      "<div class='tabs'>" +
+      "<a class='tab " + (modeActive ? "on" : "") + "' href='/admin/leads?show=active'>Active</a>" +
+      "<a class='tab " + (modeArchived ? "on" : "") + "' href='/admin/leads?show=archived'>Archived</a>" +
+      "<a class='tab " + (modeAll ? "on" : "") + "' href='/admin/leads?show=all'>All</a>" +
+      "</div>" +
+      "<table><thead><tr><th>From</th><th>Last Event</th><th>Last Message</th><th>Address</th><th>ZIP</th><th>Media Sent</th><th>Media#</th><th>Media Preview</th><th>Media</th><th>Miles</th><th>Last Seen</th><th>Action</th></tr></thead><tbody>" +
+      rowsHtml +
+      "</tbody></table></body></html>"
+    );
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+function adminReturnPath(req, fallback = "/admin/leads") {
+  const candidate = String(req.body?.return_to || req.query?.return_to || fallback);
+  return candidate.startsWith("/admin/") ? candidate : fallback;
+}
+
+app.post("/admin/lead/:from/archive", async (req, res) => {
+  try {
+    const from = String(req.params.from || "");
+    await pool.query("UPDATE leads SET archived_at = NOW(), archived_reason = COALESCE($1, archived_reason), last_seen_at = NOW() WHERE from_phone = $2", [String(req.body?.reason || "manual_archive"), from]);
+    return res.redirect(adminReturnPath(req, "/admin/leads?show=active"));
+  } catch (e) {
+    return res.status(500).send(String(e));
+  }
+});
+
+app.post("/admin/lead/:from/unarchive", async (req, res) => {
+  try {
+    const from = String(req.params.from || "");
+    await pool.query("UPDATE leads SET archived_at = NULL, archived_reason = NULL, last_seen_at = NOW() WHERE from_phone = $1", [from]);
+    return res.redirect(adminReturnPath(req, "/admin/leads?show=archived"));
+  } catch (e) {
+    return res.status(500).send(String(e));
   }
 });
 
@@ -1266,8 +1341,15 @@ app.get("/admin/lead/:from", async (req, res) => {
     const esc = (s) => String(s ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#39;");
     const evHtml = events.map(e => "<tr><td>" + esc(e.created_at) + "</td><td>" + esc(e.event_type) + "</td><td><pre style='white-space:pre-wrap;margin:0'>" + esc(e.payload_json) + "</pre></td></tr>").join("");
     const mediaHtml = !mediaUrls.length ? "<p>No media.</p>" : mediaUrls.map((u,i) => "<div style='margin:10px 0'><a href='/media-proxy?u=" + encodeURIComponent(u) + "' target='_blank'>Open media " + (i+1) + "</a><br/><img src='/media-proxy?u=" + encodeURIComponent(u) + "' loading='lazy' style='max-width:360px;border:1px solid #ddd;border-radius:10px;margin-top:6px'/></div>").join("");
+    const encodedPhone = encodeURIComponent(String(from));
+    const archiveControl = lead?.archived_at
+      ? "<form method='POST' action='/admin/lead/" + encodedPhone + "/unarchive' style='display:inline;margin-left:10px'><input type='hidden' name='return_to' value='/admin/lead/" + encodedPhone + "'/><button type='submit' style='padding:6px 10px;border-radius:8px;border:1px solid #0ea5e9;background:#f0f9ff;color:#0369a1;cursor:pointer'>Unarchive</button></form>"
+      : "<form method='POST' action='/admin/lead/" + encodedPhone + "/archive' style='display:inline;margin-left:10px' onsubmit='return confirm(\"Archive this lead?\")'><input type='hidden' name='return_to' value='/admin/lead/" + encodedPhone + "'/><button type='submit' style='padding:6px 10px;border-radius:8px;border:1px solid #f59e0b;background:#fffbeb;color:#92400e;cursor:pointer'>Archive</button></form>";
+    const archivedBadge = lead?.archived_at
+      ? "<span style='display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;background:#fef3c7;border:1px solid #f59e0b;color:#92400e;font-size:11px'>Archived</span>"
+      : "";
     res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.end("<html><head><title>Lead " + esc(from) + "</title><style>body{font-family:system-ui;padding:16px}a{color:#0366d6}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;font-size:12px;vertical-align:top}th{background:#f6f6f6}pre{max-width:100%;overflow-x:auto}</style></head><body><div><a href='/admin/leads'>← Back</a></div><h2>Lead: " + esc(from) + "</h2><pre>" + esc(JSON.stringify(lead,null,2)) + "</pre><h3>Media</h3>" + mediaHtml + "<h3>Events</h3><table><thead><tr><th>Time</th><th>Type</th><th>Payload</th></tr></thead><tbody>" + evHtml + "</tbody></table></body></html>");
+    res.end("<html><head><title>Lead " + esc(from) + "</title><style>body{font-family:system-ui;padding:16px}a{color:#0366d6}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;font-size:12px;vertical-align:top}th{background:#f6f6f6}pre{max-width:100%;overflow-x:auto}</style></head><body><div><a href='/admin/leads'>← Back</a></div><h2>Lead: " + esc(from) + archivedBadge + archiveControl + "</h2><pre>" + esc(JSON.stringify(lead,null,2)) + "</pre><h3>Media</h3>" + mediaHtml + "<h3>Events</h3><table><thead><tr><th>Time</th><th>Type</th><th>Payload</th></tr></thead><tbody>" + evHtml + "</tbody></table></body></html>");
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }

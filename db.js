@@ -64,7 +64,9 @@ async function initDb() {
       next_action_sent_at TEXT,
       next_action_sent_count INTEGER DEFAULT 0,
       next_action_last_kind TEXT,
-      next_action_last_error TEXT
+      next_action_last_error TEXT,
+      archived_at TEXT,
+      archived_reason TEXT
     );
 
     CREATE TABLE IF NOT EXISTS events (
@@ -133,7 +135,9 @@ async function initDb() {
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_action_sent_at TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_action_sent_count INTEGER DEFAULT 0",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_action_last_kind TEXT",
-    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_action_last_error TEXT"
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_action_last_error TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS archived_at TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS archived_reason TEXT"
   ];
 
   for (const sql of migrations) {
