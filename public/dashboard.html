@@ -338,6 +338,10 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
       <button class="mc mc-layer" onclick="setLayer('seniors',this)">65+ Population</button>
       <button class="mc mc-layer" onclick="setLayer('revenue',this)">Est. ICL Revenue</button>
       <button class="mc on" id="territory-toggle" onclick="toggleTerritoryEdge(this)">Territory Edge</button>
+      <span class="mc-lbl" style="margin-left:10px">Map:</span>
+      <button class="mc" onclick="mapZoomIn()">＋</button>
+      <button class="mc" onclick="mapZoomOut()">－</button>
+      <button class="mc" onclick="mapResetView()">Reset</button>
     </div>
     <div class="cb0" id="map-svg-wrap" style="position:relative;background:#0d1422;min-height:520px">
       <div class="map-tooltip" id="map-tt"></div>
@@ -794,6 +798,89 @@ function getColor(val,metric){
 const PIN_COLORS={red:'#ef4444',yellow:'#f59e0b',green:'#10b981'};
 function clamp(v,min,max){return Math.min(max,Math.max(min,v));}
 function pinColor(stage){return PIN_COLORS[stage]||PIN_COLORS.red;}
+const MAP_VB_DEFAULT={x:0,y:0,w:800,h:520};
+let mapView={...MAP_VB_DEFAULT};
+let mapDrag=null;
+let mapInteractionsBound=false;
+function clampMapView(){
+  const minX=MAP_VB_DEFAULT.x+MAP_VB_DEFAULT.w-mapView.w;
+  const maxX=MAP_VB_DEFAULT.x;
+  const minY=MAP_VB_DEFAULT.y+MAP_VB_DEFAULT.h-mapView.h;
+  const maxY=MAP_VB_DEFAULT.y;
+  mapView.x=clamp(mapView.x,minX,maxX);
+  mapView.y=clamp(mapView.y,minY,maxY);
+}
+function applyMapView(){
+  const svg=document.getElementById('map-svg');
+  if(!svg)return;
+  svg.setAttribute('viewBox',`${mapView.x} ${mapView.y} ${mapView.w} ${mapView.h}`);
+}
+function svgPointFromEvent(evt){
+  const svg=document.getElementById('map-svg');
+  if(!svg)return{x:mapView.x+mapView.w/2,y:mapView.y+mapView.h/2};
+  const rect=svg.getBoundingClientRect();
+  if(!rect.width||!rect.height)return{x:mapView.x+mapView.w/2,y:mapView.y+mapView.h/2};
+  const px=(evt.clientX-rect.left)/rect.width;
+  const py=(evt.clientY-rect.top)/rect.height;
+  return{x:mapView.x+px*mapView.w,y:mapView.y+py*mapView.h};
+}
+function zoomAt(sx,sy,factor){
+  const nextW=clamp(mapView.w*factor,180,1400);
+  const nextH=nextW*(MAP_VB_DEFAULT.h/MAP_VB_DEFAULT.w);
+  const relX=(sx-mapView.x)/mapView.w;
+  const relY=(sy-mapView.y)/mapView.h;
+  mapView.w=nextW;mapView.h=nextH;
+  mapView.x=sx-relX*mapView.w;
+  mapView.y=sy-relY*mapView.h;
+  clampMapView();
+  applyMapView();
+}
+function mapZoomIn(){zoomAt(mapView.x+mapView.w/2,mapView.y+mapView.h/2,0.82);}
+function mapZoomOut(){zoomAt(mapView.x+mapView.w/2,mapView.y+mapView.h/2,1.22);}
+function mapResetView(){
+  mapView={...MAP_VB_DEFAULT};
+  applyMapView();
+}
+function bindMapInteractions(){
+  if(mapInteractionsBound)return;
+  const svg=document.getElementById('map-svg');
+  if(!svg)return;
+  mapInteractionsBound=true;
+  svg.addEventListener('wheel',e=>{
+    e.preventDefault();
+    const p=svgPointFromEvent(e);
+    zoomAt(p.x,p.y,e.deltaY<0?0.88:1.14);
+  },{passive:false});
+  svg.addEventListener('dblclick',e=>{
+    const p=svgPointFromEvent(e);
+    zoomAt(p.x,p.y,0.75);
+  });
+  svg.addEventListener('mousedown',e=>{
+    if(e.button!==0)return;
+    mapDrag={x:e.clientX,y:e.clientY,startX:mapView.x,startY:mapView.y};
+    svg.style.cursor='grabbing';
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove',e=>{
+    if(!mapDrag)return;
+    const s=document.getElementById('map-svg');
+    if(!s)return;
+    const rect=s.getBoundingClientRect();
+    if(!rect.width||!rect.height)return;
+    const dx=(e.clientX-mapDrag.x)/rect.width*mapView.w;
+    const dy=(e.clientY-mapDrag.y)/rect.height*mapView.h;
+    mapView.x=mapDrag.startX-dx;
+    mapView.y=mapDrag.startY-dy;
+    clampMapView();
+    applyMapView();
+  });
+  window.addEventListener('mouseup',()=>{
+    if(!mapDrag)return;
+    mapDrag=null;
+    const s=document.getElementById('map-svg');
+    if(s)s.style.cursor='crosshair';
+  });
+}
 function jitterFromPhone(phone){
   const s=String(phone||'');
   let h=0;
@@ -920,6 +1007,8 @@ function renderMapDomFallback(metric){
     const [vx,vy]=project(lng,lat);
     svg.appendChild(svgEl('circle',{cx:vx,cy:vy,r:'6.6',fill:'#f59e0b','fill-opacity':'.9',stroke:'#fcd34d','stroke-width':'1.4'}));
   });
+  applyMapView();
+  bindMapInteractions();
 }
 
 function renderMap(metric){
@@ -1017,6 +1106,8 @@ function renderMap(metric){
   });
 
   renderLegend(metric);
+  applyMapView();
+  bindMapInteractions();
 }
 
 function showTooltip(e,zip){
