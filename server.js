@@ -14,6 +14,7 @@ const { db, pool, upsertLead, insertEvent, getLead } = require("./db");
 const fetch = (...args) => import("node-fetch").then(({default: f}) => f(...args));
 
 const BASE_LOCATION = "506 E Brett St, Inglewood, CA 90301";
+const BASE_COORD = { lat: 33.9776848, lon: -118.3523303 };
 const ZIP_CENTROIDS = {
   "90008": { lat: 34.0075, lng: -118.3498 },
   "90016": { lat: 34.0151, lng: -118.3554 },
@@ -69,6 +70,78 @@ function leadLifecycle(row) {
     conv === "WINDOW_SELECTED";
   if (depositLike) return { stage: "yellow", label: "Deposit paid / scheduled" };
   return { stage: "red", label: "Lead (pre-deposit)" };
+}
+
+function getPacificHour(d = new Date()) {
+  const p = new Date(d.toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+  return p.getHours();
+}
+
+function trafficMultiplier(now = new Date()) {
+  const h = getPacificHour(now);
+  if ((h >= 7 && h <= 10) || (h >= 15 && h <= 19)) return 1.35;
+  if (h >= 11 && h <= 14) return 1.2;
+  return 1.05;
+}
+
+function estimateEtaMinutes(distanceMiles, now = new Date()) {
+  const mph = 23;
+  const m = trafficMultiplier(now);
+  const mins = (distanceMiles / mph) * 60 * m;
+  return Math.max(6, Math.round(mins));
+}
+
+function computeRisk(stage, convState, inactivityMin) {
+  const u = String(convState || "").toUpperCase();
+  if (u === "ESCALATED") return "high";
+  if (stage === "red" && inactivityMin >= 30) return "high";
+  if (stage === "yellow" && inactivityMin >= 180) return "high";
+  if (stage === "red" && inactivityMin >= 12) return "medium";
+  if (stage === "yellow" && inactivityMin >= 60) return "medium";
+  return "low";
+}
+
+function computePriority(stage, risk, inactivityMin, etaMin) {
+  const s = stage === "red" ? 55 : stage === "yellow" ? 35 : 5;
+  const r = risk === "high" ? 35 : risk === "medium" ? 15 : 0;
+  const inactivity = Math.min(40, Math.floor(inactivityMin / 5));
+  return Math.round(s + r + inactivity - Math.min(18, etaMin * 0.35));
+}
+
+function buildRouteSuggestion(pins, maxStops = 8) {
+  const candidates = pins
+    .filter((p) => p.stage !== "green")
+    .sort((a, b) => (b.priority_score || 0) - (a.priority_score || 0))
+    .slice(0, 20)
+    .map((p) => ({ ...p }));
+  const route = [];
+  let cur = { lat: BASE_COORD.lat, lng: BASE_COORD.lon };
+  while (candidates.length && route.length < maxStops) {
+    let bestIdx = 0;
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < candidates.length; i += 1) {
+      const p = candidates[i];
+      const d = haversineMiles(cur.lat, cur.lng, p.lat, p.lng);
+      if (d < bestDist) {
+        bestDist = d;
+        bestIdx = i;
+      }
+    }
+    const next = candidates.splice(bestIdx, 1)[0];
+    route.push({
+      stop: route.length + 1,
+      phone: next.phone,
+      stage: next.stage,
+      stage_label: next.stage_label,
+      risk: next.risk,
+      eta_minutes_est: next.eta_minutes_est,
+      leg_miles: Number(bestDist.toFixed(2)),
+      address: next.address,
+      conv_state: next.conv_state
+    });
+    cur = { lat: next.lat, lng: next.lng };
+  }
+  return route;
 }
 
 function hasValidLeadGeo(lat, lng) {
@@ -276,6 +349,7 @@ app.get("/api/dashboard/leads", async (req, res) => {
     }));
 
     let geocodeAttempts = 0;
+    const now = new Date();
     const pins = [];
     for (const row of rows) {
       if (!row.address_text) continue;
@@ -301,6 +375,11 @@ app.get("/api/dashboard/leads", async (req, res) => {
       }
       if (!hasValidLeadGeo(lat, lng)) continue;
       const life = leadLifecycle(row);
+      const miles = haversineMiles(BASE_COORD.lat, BASE_COORD.lon, lat, lng);
+      const etaMin = estimateEtaMinutes(miles, now);
+      const inactivityMin = Math.max(0, Math.floor((Date.now() - new Date(row.last_seen_at || row.first_seen_at || Date.now()).getTime()) / 60000));
+      const risk = computeRisk(life.stage, row.conv_state, inactivityMin);
+      const priorityScore = computePriority(life.stage, risk, inactivityMin, etaMin);
       pins.push({
         phone: row.from_phone,
         address: row.address_text,
@@ -311,11 +390,33 @@ app.get("/api/dashboard/leads", async (req, res) => {
         stage_label: life.label,
         conv_state: row.conv_state || null,
         quote_status: row.quote_status || null,
-        source
+        source,
+        eta_minutes_est: etaMin,
+        distance_miles_to_base: Number(miles.toFixed(2)),
+        inactivity_minutes: inactivityMin,
+        risk,
+        priority_score: priorityScore
       });
     }
-
-    res.json({ ok: true, leads, pins, meta: { total: leads.length, pins: pins.length } });
+    const stageCounts = pins.reduce((a, p) => { a[p.stage] = (a[p.stage] || 0) + 1; return a; }, { red: 0, yellow: 0, green: 0 });
+    const riskCounts = pins.reduce((a, p) => { a[p.risk] = (a[p.risk] || 0) + 1; return a; }, { high: 0, medium: 0, low: 0 });
+    const active = pins.filter((p) => p.stage !== "green");
+    const avgEta = active.length ? Math.round(active.reduce((s, p) => s + (p.eta_minutes_est || 0), 0) / active.length) : 0;
+    const routeSuggestion = buildRouteSuggestion(pins, 8);
+    res.json({
+      ok: true,
+      leads,
+      pins,
+      route_suggestion: routeSuggestion,
+      meta: {
+        total: leads.length,
+        pins: pins.length,
+        stage_counts: stageCounts,
+        risk_counts: riskCounts,
+        avg_eta_min: avgEta,
+        generated_at: new Date().toISOString()
+      }
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }

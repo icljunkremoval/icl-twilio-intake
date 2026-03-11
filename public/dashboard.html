@@ -140,6 +140,14 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .leg-sw{width:13px;height:13px;border-radius:2px;flex-shrink:0}
 .lead-pin-dot{stroke:rgba(8,13,23,.95);stroke-width:1.6}
 .lead-pin-ring{fill:none;stroke-width:1.2;opacity:.65}
+.ops-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:10px}
+.ops-k{background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:9px}
+.ops-kv{font-family:'Syne',sans-serif;font-size:20px;font-weight:800;line-height:1}
+.ops-kl{font-size:8px;color:var(--tx3);letter-spacing:.7px;text-transform:uppercase;margin-top:3px}
+.ops-route{display:flex;flex-direction:column;gap:6px}
+.ops-r{display:flex;justify-content:space-between;gap:8px;padding:7px 8px;background:var(--bg3);border:1px solid var(--bd);border-radius:5px}
+.ops-rl{font-size:9px;color:var(--tx)}
+.ops-rr{font-size:9px;color:var(--tx2);text-align:right;white-space:nowrap}
 
 /* ── BAR CHART ── */
 .bc{display:flex;flex-direction:column;gap:8px}
@@ -260,6 +268,22 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
         <div class="pi"><div class="pid" style="background:var(--green)"></div>Booked</div>
       </div>
       <div id="leads-mini"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="ch"><div class="ct">Ops Command Center</div><span class="tag tag-live">ETA · RISK · ROUTE</span></div>
+    <div class="cb">
+      <div class="ops-grid">
+        <div class="ops-k"><div class="ops-kv" id="ops-risk-high" style="color:var(--red)">0</div><div class="ops-kl">High Risk Leads</div></div>
+        <div class="ops-k"><div class="ops-kv" id="ops-risk-med" style="color:var(--amber)">0</div><div class="ops-kl">Medium Risk</div></div>
+        <div class="ops-k"><div class="ops-kv" id="ops-risk-low" style="color:var(--green)">0</div><div class="ops-kl">Low Risk</div></div>
+        <div class="ops-k"><div class="ops-kv" id="ops-eta-avg" style="color:var(--blue)">—</div><div class="ops-kl">Avg ETA (min)</div></div>
+      </div>
+      <div style="font-size:8px;color:var(--tx3);letter-spacing:.6px;text-transform:uppercase;margin-bottom:6px">Suggested Dispatch Route</div>
+      <div id="ops-route" class="ops-route">
+        <div style="font-size:9px;color:var(--tx3)">No active route suggestions.</div>
+      </div>
     </div>
   </div>
 
@@ -568,6 +592,31 @@ function setPipe(leads){
     <div class="ps pb" style="width:${c.b/t*100}%"></div>`;
 }
 
+function renderOpsIntel(raw){
+  const m=(raw&&raw.meta)||{};
+  const rc=m.risk_counts||{high:0,medium:0,low:0};
+  const avgEta=Number.isFinite(Number(m.avg_eta_min))?Number(m.avg_eta_min):0;
+  const setTxt=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=String(v);};
+  setTxt('ops-risk-high',rc.high||0);
+  setTxt('ops-risk-med',rc.medium||0);
+  setTxt('ops-risk-low',rc.low||0);
+  setTxt('ops-eta-avg',avgEta?avgEta:'—');
+  const route=Array.isArray(raw&&raw.route_suggestion)?raw.route_suggestion:[];
+  const routeEl=document.getElementById('ops-route');
+  if(!routeEl)return;
+  if(!route.length){
+    routeEl.innerHTML='<div style="font-size:9px;color:var(--tx3)">No active route suggestions.</div>';
+    return;
+  }
+  routeEl.innerHTML=route.slice(0,6).map(r=>{
+    const c=pinColor(r.stage);
+    return `<div class="ops-r">
+      <div class="ops-rl"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${c};margin-right:6px"></span>#${r.stop} ${fPhone(r.phone)}<div style="color:var(--tx3)">${r.address||'—'}</div></div>
+      <div class="ops-rr">${r.eta_minutes_est||'—'} min<br><span style="color:var(--tx3)">${r.leg_miles||'—'} mi</span></div>
+    </div>`;
+  }).join('');
+}
+
 async function fetchLeads(){
   try{
     const r=await fetch('/api/dashboard/leads',{headers:{'Accept':'application/json'}});
@@ -576,6 +625,7 @@ async function fetchLeads(){
     const leads=Array.isArray(raw)?raw:(raw.leads||raw.data||[]);
     MAP_LEAD_PINS=Array.isArray(raw.pins)?raw.pins:[];
     updateLeadFilterCount();
+    renderOpsIntel(raw);
     const today=new Date().toDateString();
     const todayCt=leads.filter(l=>new Date(l.created_at||l.createdAt||0).toDateString()===today).length;
     const quoted=leads.filter(l=>(l.state||'').toUpperCase().includes('QUOTE')).length;
@@ -595,6 +645,7 @@ async function fetchLeads(){
   }catch(e){
     MAP_LEAD_PINS=[];
     updateLeadFilterCount();
+    renderOpsIntel(null);
     ['kpi-tot','kpi-q','kpi-bk','kpi-rev'].forEach(id=>document.getElementById(id).textContent='—');
     const fb=`<div style="padding:14px;background:var(--bg3);border-radius:5px;text-align:center;font-size:10px;color:var(--tx3)">Live leads unavailable right now.</div>`;
     ['leads-mini','leads-full'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML=fb;});
