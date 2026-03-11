@@ -1047,8 +1047,6 @@ app.get("/api/dashboard/leads", async (req, res) => {
       next_action_sent_count: Number(r.next_action_sent_count || 0)
     }));
 
-    const capillary = loadCapillaryNetwork();
-    const activeCapillarySegments = capillarySegments(capillary.streets);
     let geocodeAttempts = 0;
     const now = new Date();
     const pins = [];
@@ -1080,9 +1078,7 @@ app.get("/api/dashboard/leads", async (req, res) => {
       const etaMin = estimateEtaMinutes(miles, now);
       const inactivityMin = Math.max(0, Math.floor((Date.now() - new Date(row.last_seen_at || row.first_seen_at || Date.now()).getTime()) / 60000));
       const risk = computeRisk(life.stage, row.conv_state, inactivityMin);
-      const capillaryDistanceMi = minCapillaryDistanceMiles(lat, lng, activeCapillarySegments);
-      const plannerBonus = capillaryBonus(capillaryDistanceMi);
-      const priorityScore = computePriority(life.stage, risk, inactivityMin, etaMin, plannerBonus);
+      const priorityScore = computePriority(life.stage, risk, inactivityMin, etaMin, 0);
       pins.push({
         phone: row.from_phone,
         address: row.address_text,
@@ -1096,8 +1092,6 @@ app.get("/api/dashboard/leads", async (req, res) => {
         source,
         eta_minutes_est: etaMin,
         distance_miles_to_base: Number(miles.toFixed(2)),
-        planner_corridor_distance_mi: Number(capillaryDistanceMi.toFixed(2)),
-        planner_bonus: plannerBonus,
         inactivity_minutes: inactivityMin,
         risk,
         priority_score: priorityScore
@@ -1153,8 +1147,6 @@ app.get("/api/dashboard/leads", async (req, res) => {
     const squareConnected = Boolean(process.env.SQUARE_ACCESS_TOKEN || process.env.SQUARE_API_TOKEN || process.env.SQUARE_TOKEN);
     const active = pins.filter((p) => p.stage !== "green");
     const slaRedCount = active.filter((p) => Number(p.inactivity_minutes || 0) >= 60).length;
-    const corridorFitCount = active.filter((p) => Number(p.planner_corridor_distance_mi || 99) <= 0.4).length;
-    const corridorFitPct = active.length ? Math.round((corridorFitCount / active.length) * 100) : 0;
     const automationCount = rows.reduce((sum, r) => sum + Number(r.next_action_sent_count || 0), 0);
     const avgEta = active.length ? Math.round(active.reduce((s, p) => s + (p.eta_minutes_est || 0), 0) / active.length) : 0;
     res.json({
@@ -1162,12 +1154,6 @@ app.get("/api/dashboard/leads", async (req, res) => {
       leads,
       pins,
       route_suggestion: routeSuggestion,
-      capillary: {
-        source: capillary.source,
-        loaded_at: capillary.loaded_at,
-        street_count: capillary.streets.length,
-        segment_count: activeCapillarySegments.length
-      },
       meta: {
         total: leads.length,
         pins: pins.length,
@@ -1181,9 +1167,7 @@ app.get("/api/dashboard/leads", async (req, res) => {
         margin_truth_jobs: settledRows.length,
         square_connected: squareConnected,
         sla_red_count: slaRedCount,
-        corridor_fit_pct: corridorFitPct,
         next_actions_sent_total: automationCount,
-        capillary_source: capillary.source,
         eta_mode: etaMode,
         generated_at: new Date().toISOString()
       }

@@ -268,8 +268,8 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
       <div id="ns-note" style="font-size:8px;color:var(--tx3);margin:-2px 0 8px">Waiting on settled payment + cost signals.</div>
       <div style="display:grid;grid-template-columns:repeat(4,minmax(90px,1fr));gap:7px;margin-bottom:12px">
         <div style="background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:8px 9px">
-          <div id="gv-corridor" style="font:800 15px/1 Syne,sans-serif;color:var(--blue)">—</div>
-          <div style="font-size:7px;color:var(--tx3);margin-top:3px;letter-spacing:.4px;text-transform:uppercase">Corridor fit</div>
+          <div id="gv-eta" style="font:800 15px/1 Syne,sans-serif;color:var(--blue)">—</div>
+          <div style="font-size:7px;color:var(--tx3);margin-top:3px;letter-spacing:.4px;text-transform:uppercase">Avg ETA</div>
         </div>
         <div style="background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:8px 9px">
           <div id="gv-sla-red" style="font:800 15px/1 Syne,sans-serif;color:var(--red)">—</div>
@@ -389,7 +389,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
   <div class="card">
     <div class="ch">
       <div class="ct">Territory 001 · Choropleth</div>
-      <span class="tag tag-acs" id="map-capillary-src">Capillary: v1</span>
+      <span class="tag tag-acs">ACS 2023</span>
     </div>
     <div class="map-ctrl">
       <span class="mc-lbl">Color by:</span>
@@ -400,8 +400,6 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
       <button class="mc mc-layer" onclick="setLayer('revenue',this)">Est. ICL Revenue</button>
       <button class="mc on" id="neighborhoods-toggle" onclick="toggleNeighborhoods(this)">Neighborhoods</button>
       <button class="mc on" id="territory-toggle" onclick="toggleTerritoryEdge(this)">Territory Edge</button>
-      <button class="mc on" id="capillary-toggle" onclick="toggleCapillary(this)">Capillary</button>
-      <button class="mc" onclick="fetchCapillary(true)">Refresh Corridors</button>
       <button class="mc on" id="legend-toggle" onclick="toggleMapLegend(this)">Legend</button>
       <span class="mc-lbl" style="margin-left:10px">Leads:</span>
       <button class="mc mc-lead-filter on" onclick="setLeadFilter('all',this)">All</button>
@@ -438,8 +436,6 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
         <div style="flex:1;min-width:180px">
           <div style="font-size:9px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Stack</div>
           <div style="font-size:9px;color:var(--tx3);line-height:1.8">
-            Corridors: <span id="map-capillary-source-inline">v1 screenshot inference</span><br>
-            Export: <a href="/api/dashboard/capillary.geojson" target="_blank">GeoJSON</a> · <a href="/api/dashboard/capillary.kml" target="_blank">KML</a><br>
             Demographics: ACS 2023<br>
             Routing: Google/OSRM
           </div>
@@ -711,10 +707,9 @@ async function fetchLeads(){
     const avgRev=Number(raw?.meta?.avg_revenue_job||0);
     const avgMargin=Number(raw?.meta?.avg_margin_job||0);
     const truthJobs=Number(raw?.meta?.margin_truth_jobs||0);
-    const corridorFit=Number(raw?.meta?.corridor_fit_pct||0);
     const slaRed=Number(raw?.meta?.sla_red_count||0);
     const autoActions=Number(raw?.meta?.next_actions_sent_total||0);
-    setCapillarySourceLabel(raw?.meta?.capillary_source||raw?.capillary?.source||capillarySource);
+    const avgEta=Number(raw?.meta?.avg_eta_min||0);
     const squareConnected=Boolean(raw?.meta?.square_connected);
     document.getElementById('kpi-tot').textContent=leadsEnriched.length;
     document.getElementById('kpi-q').textContent=quoted;
@@ -729,13 +724,13 @@ async function fetchLeads(){
     document.getElementById('ns-avg-rev').textContent=avgRev>0?f$(avgRev):'—';
     document.getElementById('ns-margin-job').textContent=Number.isFinite(avgMargin)?f$(avgMargin):'—';
     const setTxt=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=String(v);};
-    setTxt('gv-corridor',`${corridorFit}%`);
+    setTxt('gv-eta',avgEta?`${avgEta}m`:'—');
     setTxt('gv-sla-red',slaRed);
     setTxt('gv-actions',autoActions);
     setTxt('gv-truth',truthJobs);
     document.getElementById('ns-note').textContent=squareConnected
-      ? `Square settled + cost truth · ${capillarySource}`
-      : `Square token missing · ${capillarySource}`;
+      ? 'Square settled + cost truth live'
+      : 'Square token missing';
     setPipe(leadsEnriched);
     document.getElementById('leads-mini').innerHTML=leadsEnriched.slice(0,5).map(leadHtml).join('');
     document.getElementById('leads-full').innerHTML=leadsEnriched.map(leadHtml).join('')||'<div style="padding:8px;font-size:10px;color:var(--tx3)">No leads yet.</div>';
@@ -748,7 +743,7 @@ async function fetchLeads(){
     renderOpsIntel(null);
     ['kpi-tot','kpi-q','kpi-bk','kpi-rev'].forEach(id=>document.getElementById(id).textContent='—');
     ['ns-booked-day','ns-deposit-rate','ns-avg-rev','ns-margin-job'].forEach(id=>document.getElementById(id).textContent='—');
-    ['gv-corridor','gv-sla-red','gv-actions','gv-truth'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent='—';});
+    ['gv-eta','gv-sla-red','gv-actions','gv-truth'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent='—';});
     const nsNote=document.getElementById('ns-note');if(nsNote)nsNote.textContent='North-star KPIs unavailable right now.';
     const fb=`<div style="padding:14px;background:var(--bg3);border-radius:5px;text-align:center;font-size:10px;color:var(--tx3)">Live leads unavailable right now.</div>`;
     ['leads-mini','leads-full'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML=fb;});
@@ -914,40 +909,7 @@ const BASEMAP_ROADS=[
   {name:'Slauson Ave',coords:[[-118.410,33.989],[-118.391,33.989],[-118.372,33.989],[-118.353,33.989],[-118.334,33.989],[-118.318,33.989]],major:false},
   {name:'MLK Jr Blvd',coords:[[-118.404,34.008],[-118.385,34.008],[-118.366,34.008],[-118.347,34.008],[-118.329,34.008]],major:false},
 ];
-let CAPILLARY_STREETS=[
-  {name:'Stocker St',coords:[[-118.364,34.001],[-118.354,33.999],[-118.345,33.997],[-118.336,33.995],[-118.329,33.993]]},
-  {name:'Windsor Arterial',coords:[[-118.360,33.986],[-118.353,33.982],[-118.346,33.978],[-118.340,33.974],[-118.335,33.970]]},
-  {name:'Park-Windsor East/West',coords:[[-118.356,33.972],[-118.349,33.972],[-118.342,33.972],[-118.336,33.972],[-118.329,33.972]]},
-  {name:'Baldwin Village Connector',coords:[[-118.353,34.012],[-118.346,34.008],[-118.339,34.003],[-118.333,33.999]]},
-  {name:'Crenshaw Inner Spine',coords:[[-118.346,34.006],[-118.344,33.999],[-118.342,33.992],[-118.340,33.985],[-118.338,33.978]]},
-  {name:'Slauson Ave',coords:[[-118.371,33.989],[-118.350,33.989],[-118.329,33.989]]},
-];
-let capillarySource='v1 screenshot inference';
-function setCapillarySourceLabel(source){
-  capillarySource=source||capillarySource||'v1';
-  const compact=String(capillarySource).replace(/^geojson:/i,'GJ:').replace(/^kml:/i,'KML:');
-  const mapTag=document.getElementById('map-capillary-src');
-  if(mapTag)mapTag.textContent=`Capillary: ${compact}`;
-  const inline=document.getElementById('map-capillary-source-inline');
-  if(inline)inline.textContent=String(capillarySource);
-}
-async function fetchCapillary(forceRender){
-  try{
-    const r=await fetch('/api/dashboard/capillary',{headers:{'Accept':'application/json'}});
-    if(!r.ok)throw new Error(r.status);
-    const raw=await r.json();
-    const streets=Array.isArray(raw&&raw.streets)?raw.streets:[];
-    if(streets.length)CAPILLARY_STREETS=streets;
-    setCapillarySourceLabel(raw&&raw.source?raw.source:'v1');
-    if(forceRender){
-      if(mapBuilt)renderMap(curLayer);
-      if(streetMap)renderStreetCapillary();
-      renderLegend(curLayer);
-    }
-  }catch(e){
-    setCapillarySourceLabel(capillarySource||'v1');
-  }
-}
+const CAPILLARY_STREETS=[];
 const BASEMAP_LABELS=[
   {name:'Inglewood',lng:-118.401,lat:33.956},
   {name:'Leimert Park',lng:-118.334,lat:33.986},
@@ -971,7 +933,7 @@ const TERRITORY_WAYPOINTS=[
 let showTerritoryEdge=true;
 let showNeighborhoods=true;
 let showMapLegend=true;
-let showCapillary=true;
+let showCapillary=false;
 let leadFilter='all';
 
 function segsCross(a,b,c,d){
@@ -1681,10 +1643,7 @@ function renderLegend(metric){
     <div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px">Lead Lifecycle Pins</div>
     <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.red};border-radius:99px"></div>Lead (${pinCounts.red||0})</div>
     <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.yellow};border-radius:99px"></div>Deposit paid (${pinCounts.yellow||0})</div>
-    <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.green};border-radius:99px"></div>Completed / review (${pinCounts.green||0})</div>
-    <div style="height:1px;background:var(--bd);margin:8px 0"></div>
-    <div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px">Planner Layer</div>
-    <div class="leg-item"><div class="leg-sw" style="background:#be185d;border-radius:99px"></div>Capillary (${showCapillary?'ON':'OFF'}) · ${capillarySource}</div>`;
+    <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.green};border-radius:99px"></div>Completed / review (${pinCounts.green||0})</div>`;
 }
 
 // ── REFERRALS ─────────────────────────────────────────────────────────────────
@@ -1720,7 +1679,7 @@ function buildRefs(){
 
 const DEFAULT={
   critical:[
-    {id:'k1',tag:'dat',title:'Import exact capillary corridors',note:'POST /admin/capillary/import with GeoJSON/KML from MyMaps export.'},
+    {id:'k1',tag:'dat',title:'Close-rate model by lead source',note:'Break out quote/deposit/close by source and ZIP.'},
     {id:'k2',tag:'sys',title:'Ops cost capture daily',note:'Crew sends COST [phone] | labor | disposal | fuel | other at job close.'},
     {id:'k3',tag:'sys',title:'A2P 10DLC registration',note:'Unblock delivery quality before paid traffic scale.'},
   ],
@@ -1729,7 +1688,7 @@ const DEFAULT={
     {id:'k5',tag:'sys',title:'SLA auto-action tuning',note:'Tune cooldown windows + message variants by conversion lift.'},
   ],
   upcoming:[
-    {id:'k6',tag:'dat',title:'Corridor-level close-rate model',note:'Correlate corridor distance vs quote/deposit/close by week.'},
+    {id:'k6',tag:'dat',title:'Route-level close-rate model',note:'Correlate ETA and inactivity vs quote/deposit/close by week.'},
     {id:'k7',tag:'biz',title:'Route profitability board',note:'Group jobs by corridor cluster and margin-per-mile.'},
     {id:'k8',tag:'sys',title:'Automation A/B prompts',note:'Test CTA verbs for red SLA recoveries.'},
     {id:'k9',tag:'grow',title:'Referral SLA scoreboard',note:'Track partner lead latency + conversion quality.'},
@@ -1739,7 +1698,7 @@ const DEFAULT={
     {id:'k11',tag:'sys',title:'Auto Next Best Action engine',note:'SLA-red leads now auto-trigger customer + ops SMS reminders.'},
     {id:'k12',tag:'dat',title:'Square settled revenue ingestion',note:'payment.completed now writes settled_revenue_cents into lead records.'},
     {id:'k13',tag:'dat',title:'True margin fields in pipeline',note:'Labor/disposal/fuel/other costs + computed margin_cents live.'},
-    {id:'k14',tag:'dat',title:'Capillary import API + source tags',note:'GeoJSON/KML import endpoint + source shown on map/dashboard.'},
+    {id:'k14',tag:'sys',title:'Map controls simplification',note:'Removed unstable corridor layer to keep map reliable.'},
   ],
 };
 
@@ -1904,7 +1863,6 @@ function delCard(id,colId){
 // ── INIT ─────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded',()=>{
   try{applyPageVisibility('overview');}catch(e){}
-  try{fetchCapillary(false);}catch(e){}
   try{fetchLeads();}catch(e){}
   try{fetchCensus();}catch(e){}
   try{buildRefs();}catch(e){}
@@ -1915,7 +1873,6 @@ window.addEventListener('DOMContentLoaded',()=>{
   setTimeout(()=>{try{if(mapMode==='choropleth')ensureMapRendered();}catch(e){}},150);
   [500,1000,2000].forEach(ms=>setTimeout(()=>{try{if(mapMode==='choropleth')ensureMapRendered();}catch(e){}},ms));
   setInterval(()=>{try{fetchLeads();}catch(e){}},60000);
-  setInterval(()=>{try{fetchCapillary(true);}catch(e){}},5*60*1000);
 });
 </script>
 </body>
