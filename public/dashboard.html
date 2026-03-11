@@ -532,7 +532,8 @@ async function fetchCensus(){
   const ZIPS=['90008','90043','90016','90056'];
   const NAMES={'90008':'Baldwin Hills','90043':'View Park','90016':'West Adams','90056':'Ladera Heights'};
   const VARS='B19013_001E,B25077_001E,B25003_002E,B25003_001E,B11001_001E,B01002_001E,B01001_020E,B01001_021E,B01001_022E,B01001_023E,B01001_024E,B01001_025E,B01001_044E,B01001_045E,B01001_046E,B01001_047E,B01001_048E,B01001_049E,B01003_001E';
-  const url=`https://api.census.gov/data/2023/acs/acs5?get=NAME,${VARS}&for=zip+code+tabulation+area:${ZIPS.join(',')}&in=state:06`;
+  // ZCTA queries do not accept `in=state:*`; include ZIP list only.
+  const url=`https://api.census.gov/data/2023/acs/acs5?get=NAME,${VARS}&for=zip+code+tabulation+area:${ZIPS.join(',')}`;
   try{
     const r=await fetch(url);if(!r.ok)throw new Error();
     const rows=await r.json(),hdr=rows[0];
@@ -863,8 +864,10 @@ function ensureMapRendered(){
   try{
     const svg=document.getElementById('map-svg');
     if(!svg)return;
+    if(svg.getBoundingClientRect().height===0)svg.style.height='520px';
     if(svg.querySelector('polygon[data-zip]'))return;
     buildMap();
+    if(!svg.querySelector('polygon[data-zip]'))renderMapDomFallback(curLayer);
   }catch(e){
     console.error('[dashboard] ensureMapRendered failed',e);
   }
@@ -1102,6 +1105,8 @@ window.addEventListener('DOMContentLoaded',()=>{
   try{loadK();renderK();}catch(e){KS=JSON.parse(JSON.stringify(DEFAULT));try{renderK();}catch(e2){}}
   // Pre-render once so map tab doesn't depend solely on click timing.
   setTimeout(()=>{try{ensureMapRendered();}catch(e){}},150);
+  // Retry a few times for slow browsers/layout passes.
+  [500,1000,2000].forEach(ms=>setTimeout(()=>{try{ensureMapRendered();}catch(e){}},ms));
   setInterval(()=>{try{fetchLeads();}catch(e){}},60000);
 });
 </script>
