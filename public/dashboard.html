@@ -370,6 +370,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
       <button class="mc on" id="neighborhoods-toggle" onclick="toggleNeighborhoods(this)">Neighborhoods</button>
       <button class="mc on" id="territory-toggle" onclick="toggleTerritoryEdge(this)">Territory Edge</button>
       <button class="mc on" id="legend-toggle" onclick="toggleMapLegend(this)">Legend</button>
+      <button class="mc on" id="opportunity-toggle" onclick="toggleOpportunities(this)">Opportunities</button>
       <span class="mc-lbl" style="margin-left:10px">Leads:</span>
       <button class="mc mc-lead-filter on" onclick="setLeadFilter('all',this)">All</button>
       <button class="mc mc-lead-filter" onclick="setLeadFilter('red',this)">Red</button>
@@ -409,6 +410,10 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
             Demographics: <a href="https://api.census.gov" target="_blank">ACS 2023 · api.census.gov</a><br>
             Rendered in SVG — no external tile server
           </div>
+        </div>
+        <div style="flex:1;min-width:220px">
+          <div style="font-size:9px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Opportunity Signals</div>
+          <div id="opp-summary" style="font-size:9px;color:var(--tx3);line-height:1.8">Loading public development and budget signals…</div>
         </div>
       </div>
     </div>
@@ -539,6 +544,7 @@ function fPhone(p){if(!p)return'—';const d=p.replace(/\D/g,'').slice(-10);retu
 function fAgo(ts){if(!ts)return'';const m=Math.floor((Date.now()-new Date(ts))/60000);if(m<60)return m+'m';if(m<1440)return Math.floor(m/60)+'h';return Math.floor(m/1440)+'d';}
 let MAP_LEAD_PINS=[];
 let MAP_VISIBLE_PINS=[];
+let MAP_OPP={permits:[],housing:[],corridors:[],transit:[],budget_signals:{by_cd:[],topical:{amount_total:0,txn_count:0}},city_budget_signals:[],meta:{}};
 function getVisiblePins(){
   const pins=Array.isArray(MAP_LEAD_PINS)?MAP_LEAD_PINS:[];
   if(leadFilter==='all')return pins;
@@ -550,6 +556,27 @@ function updateLeadFilterCount(){
   const total=(Array.isArray(MAP_LEAD_PINS)?MAP_LEAD_PINS.length:0);
   const shown=getVisiblePins().length;
   el.textContent=`Showing: ${shown} / ${total} leads`;
+}
+function oppCountText(){
+  return `${(MAP_OPP.permits||[]).length} permits · ${(MAP_OPP.housing||[]).length} housing · ${(MAP_OPP.corridors||[]).length} corridors · ${(MAP_OPP.transit||[]).length} transit`;
+}
+function renderOpportunitySummary(){
+  const el=document.getElementById('opp-summary');
+  if(!el)return;
+  const permits=(MAP_OPP.permits||[]).length;
+  const housing=(MAP_OPP.housing||[]).length;
+  const corridors=(MAP_OPP.corridors||[]).length;
+  const transit=(MAP_OPP.transit||[]).length;
+  const topical=((MAP_OPP.budget_signals||{}).topical||{});
+  const topicalAmt=Number(topical.amount_total||0);
+  const cityBud=(MAP_OPP.city_budget_signals||[])[0];
+  const cityBudTxt=cityBud&&cityBud.total_budget?`${cityBud.fiscal_year}: ${f$(cityBud.total_budget)}`:'n/a';
+  el.innerHTML=`<div>Signals in territory: <span style="color:var(--tx)">${permits + housing + corridors + transit}</span></div>
+    <div>Construction permits: <span style="color:var(--amber)">${permits}</span></div>
+    <div>Affordable housing projects: <span style="color:var(--green)">${housing}</span></div>
+    <div>Corridor/transit projects: <span style="color:var(--blue)">${corridors+transit}</span></div>
+    <div>Discretionary infra-like spend (CD8/9/10/11): <span style="color:var(--purple)">${f$(topicalAmt)}</span></div>
+    <div>Citywide relevant budget (latest FY): <span style="color:var(--tx)">${cityBudTxt}</span></div>`;
 }
 
 // ── LEADS ─────────────────────────────────────────────────────────────────────
@@ -596,6 +623,7 @@ function renderOpsIntel(raw){
   const m=(raw&&raw.meta)||{};
   const rc=m.risk_counts||{high:0,medium:0,low:0};
   const avgEta=Number.isFinite(Number(m.avg_eta_min))?Number(m.avg_eta_min):0;
+  const etaMode=String(m.eta_mode||'').toUpperCase();
   const setTxt=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=String(v);};
   setTxt('ops-risk-high',rc.high||0);
   setTxt('ops-risk-med',rc.medium||0);
@@ -614,7 +642,7 @@ function renderOpsIntel(raw){
       <div class="ops-rl"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${c};margin-right:6px"></span>#${r.stop} ${fPhone(r.phone)}<div style="color:var(--tx3)">${r.address||'—'}</div></div>
       <div class="ops-rr">${r.eta_minutes_est||'—'} min<br><span style="color:var(--tx3)">${r.leg_miles||'—'} mi</span></div>
     </div>`;
-  }).join('');
+  }).join('')+`<div style="font-size:8px;color:var(--tx3);margin-top:4px">ETA mode: ${etaMode||'HEURISTIC'}</div>`;
 }
 
 async function fetchLeads(){
@@ -652,6 +680,28 @@ async function fetchLeads(){
     if(mapBuilt)renderMap(curLayer);
     if(streetMap)renderStreetLeads();
   }
+}
+
+async function fetchOpportunities(){
+  try{
+    const r=await fetch('/api/dashboard/opportunities',{headers:{'Accept':'application/json'}});
+    if(!r.ok)throw new Error(r.status);
+    const raw=await r.json();
+    MAP_OPP={
+      permits:Array.isArray(raw.permits)?raw.permits:[],
+      housing:Array.isArray(raw.housing)?raw.housing:[],
+      corridors:Array.isArray(raw.corridors)?raw.corridors:[],
+      transit:Array.isArray(raw.transit)?raw.transit:[],
+      budget_signals:raw.budget_signals||{by_cd:[],topical:{amount_total:0,txn_count:0}},
+      city_budget_signals:Array.isArray(raw.city_budget_signals)?raw.city_budget_signals:[],
+      meta:raw.meta||{}
+    };
+  }catch(e){
+    MAP_OPP={permits:[],housing:[],corridors:[],transit:[],budget_signals:{by_cd:[],topical:{amount_total:0,txn_count:0}},city_budget_signals:[],meta:{}};
+  }
+  renderOpportunitySummary();
+  if(streetMap)renderStreetOpportunities();
+  renderLegend(curLayer);
 }
 
 // ── CENSUS ────────────────────────────────────────────────────────────────────
@@ -1087,8 +1137,9 @@ let curLayer='income';
 let hoveredZip=null;
 let mapMode='street';
 let streetMap=null;
-let streetLayers={territory:null,zips:null,leads:null};
+let streetLayers={territory:null,zips:null,leads:null,opps:null};
 let selectedStreetLatLng=null;
+let showOpportunities=true;
 
 function toLatLng(coords){return coords.map(([lng,lat])=>[lat,lng]);}
 function fitStreetToTerritory(){
@@ -1118,6 +1169,7 @@ function ensureStreetMap(){
   renderStreetTerritory();
   renderStreetZips();
   renderStreetLeads();
+  renderStreetOpportunities();
   renderLegend(curLayer);
   fitStreetToTerritory();
   setTimeout(()=>{try{streetMap.invalidateSize();}catch(e){}},60);
@@ -1188,6 +1240,37 @@ function renderStreetLeads(){
   });
   grp.addTo(streetMap);
   streetLayers.leads=grp;
+}
+function renderStreetOpportunities(){
+  if(!streetMap||typeof L==='undefined')return;
+  if(streetLayers.opps){streetMap.removeLayer(streetLayers.opps);}
+  if(!showOpportunities){streetLayers.opps=null;return;}
+  const grp=L.layerGroup();
+  const addPoint=(lat,lng,color,title,subtitle,url,type)=>{
+    if(!Number.isFinite(lat)||!Number.isFinite(lng))return;
+    const m=L.circleMarker([lat,lng],{radius:type==='permit'?4.5:5.5,color:'#111827',weight:1,fillColor:color,fillOpacity:.88});
+    const link=url?`<div><a href="${url}" target="_blank" rel="noopener">Open source ↗</a></div>`:'';
+    m.bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px;line-height:1.45"><div style="font-weight:700">${title||'Opportunity'}</div><div style="opacity:.8">${subtitle||''}</div>${link}</div>`);
+    m.addTo(grp);
+  };
+  (MAP_OPP.permits||[]).forEach(p=>addPoint(Number(p.lat),Number(p.lng),'#f59e0b',p.title,p.subtitle,p.url,'permit'));
+  (MAP_OPP.housing||[]).forEach(p=>addPoint(Number(p.lat),Number(p.lng),'#10b981',p.title,p.subtitle,p.url,'housing'));
+  (MAP_OPP.corridors||[]).forEach(c=>{
+    const path=(c.path||[]).map(pt=>[Number(pt.lat),Number(pt.lng)]).filter(pt=>Number.isFinite(pt[0])&&Number.isFinite(pt[1]));
+    if(path.length<2)return;
+    const pl=L.polyline(path,{color:'#a78bfa',weight:3,opacity:.9});
+    pl.bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px"><strong>${c.title||'Corridor'}</strong><br>${c.subtitle||''}</div>`);
+    pl.addTo(grp);
+  });
+  (MAP_OPP.transit||[]).forEach(c=>{
+    const path=(c.path||[]).map(pt=>[Number(pt.lat),Number(pt.lng)]).filter(pt=>Number.isFinite(pt[0])&&Number.isFinite(pt[1]));
+    if(path.length<2)return;
+    const pl=L.polyline(path,{color:'#22d3ee',weight:2.8,dashArray:'8 5',opacity:.95});
+    pl.bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px"><strong>${c.title||'Transit project'}</strong><br>${c.subtitle||''}</div>`);
+    pl.addTo(grp);
+  });
+  grp.addTo(streetMap);
+  streetLayers.opps=grp;
 }
 function setMapMode(mode,btn){
   mapMode=mode;
@@ -1455,6 +1538,7 @@ function setLeadFilter(filter,btn){
   updateLeadFilterCount();
   if(mapBuilt)renderMap(curLayer);
   if(streetMap)renderStreetLeads();
+  renderLegend(curLayer);
 }
 function toggleNeighborhoods(btn){
   showNeighborhoods=!showNeighborhoods;
@@ -1467,6 +1551,12 @@ function toggleTerritoryEdge(btn){
   btn.classList.toggle('on',showTerritoryEdge);
   if(mapBuilt)renderMap(curLayer);
   if(streetMap)renderStreetTerritory();
+}
+function toggleOpportunities(btn){
+  showOpportunities=!showOpportunities;
+  btn.classList.toggle('on',showOpportunities);
+  if(streetMap)renderStreetOpportunities();
+  renderLegend(curLayer);
 }
 function toggleMapLegend(btn){
   showMapLegend=!showMapLegend;
@@ -1504,7 +1594,14 @@ function renderLegend(metric){
     <div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px">Lead Lifecycle Pins</div>
     <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.red};border-radius:99px"></div>Lead (${pinCounts.red||0})</div>
     <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.yellow};border-radius:99px"></div>Deposit paid (${pinCounts.yellow||0})</div>
-    <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.green};border-radius:99px"></div>Completed / review (${pinCounts.green||0})</div>`;
+    <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.green};border-radius:99px"></div>Completed / review (${pinCounts.green||0})</div>
+    <div style="height:1px;background:var(--bd);margin:8px 0"></div>
+    <div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px">Opportunity Layer ${showOpportunities?'ON':'OFF'}</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#f59e0b;border-radius:99px"></div>Permits (${(MAP_OPP.permits||[]).length})</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#10b981;border-radius:99px"></div>Housing (${(MAP_OPP.housing||[]).length})</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#a78bfa;border-radius:99px"></div>Corridors (${(MAP_OPP.corridors||[]).length})</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#22d3ee;border-radius:99px"></div>Transit (${(MAP_OPP.transit||[]).length})</div>
+    <div class="note" style="border-top:none;margin-top:4px;padding-top:4px">Public sources: LA GeoHub ArcGIS + Open LA budgets.</div>`;
 }
 
 // ── REFERRALS ─────────────────────────────────────────────────────────────────
@@ -1725,6 +1822,7 @@ function delCard(id,colId){
 window.addEventListener('DOMContentLoaded',()=>{
   try{applyPageVisibility('overview');}catch(e){}
   try{fetchLeads();}catch(e){}
+  try{fetchOpportunities();}catch(e){}
   try{fetchCensus();}catch(e){}
   try{buildRefs();}catch(e){}
   try{loadK();renderK();}catch(e){KS=JSON.parse(JSON.stringify(DEFAULT));try{renderK();}catch(e2){}}
@@ -1734,6 +1832,7 @@ window.addEventListener('DOMContentLoaded',()=>{
   setTimeout(()=>{try{if(mapMode==='choropleth')ensureMapRendered();}catch(e){}},150);
   [500,1000,2000].forEach(ms=>setTimeout(()=>{try{if(mapMode==='choropleth')ensureMapRendered();}catch(e){}},ms));
   setInterval(()=>{try{fetchLeads();}catch(e){}},60000);
+  setInterval(()=>{try{fetchOpportunities();}catch(e){}},10*60*1000);
 });
 </script>
 </body>

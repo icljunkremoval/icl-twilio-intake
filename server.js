@@ -15,6 +15,9 @@ const fetch = (...args) => import("node-fetch").then(({default: f}) => f(...args
 
 const BASE_LOCATION = "506 E Brett St, Inglewood, CA 90301";
 const BASE_COORD = { lat: 33.9776848, lon: -118.3523303 };
+const SOCRATA_APP_TOKEN = process.env.OPENLA_SOCRATA_APP_TOKEN || process.env.SOCRATA_APP_TOKEN || "";
+const SOCRATA_USERNAME = process.env.OPENLA_SOCRATA_USERNAME || "";
+const SOCRATA_PASSWORD = process.env.OPENLA_SOCRATA_PASSWORD || "";
 const ZIP_CENTROIDS = {
   "90008": { lat: 34.0075, lng: -118.3498 },
   "90016": { lat: 34.0151, lng: -118.3554 },
@@ -55,6 +58,19 @@ async function geocodeOSM(q, timeoutMs = 2800) {
   }
 }
 
+async function socrataFetchJson(url) {
+  const headers = {};
+  if (SOCRATA_APP_TOKEN) headers["X-App-Token"] = SOCRATA_APP_TOKEN;
+  if (SOCRATA_USERNAME && SOCRATA_PASSWORD) {
+    headers.Authorization = "Basic " + Buffer.from(`${SOCRATA_USERNAME}:${SOCRATA_PASSWORD}`).toString("base64");
+  }
+  const r = await fetch(url, { headers });
+  if (!r.ok) throw new Error(`socrata_http_${r.status}`);
+  const j = await r.json();
+  if (j && j.error) throw new Error(`socrata_error_${j.message || "unknown"}`);
+  return j;
+}
+
 function leadLifecycle(row) {
   const quote = String(row.quote_status || "").toUpperCase();
   const conv = String(row.conv_state || "").toUpperCase();
@@ -91,6 +107,101 @@ function estimateEtaMinutes(distanceMiles, now = new Date()) {
   return Math.max(6, Math.round(mins));
 }
 
+const MATRIX_CACHE = new Map();
+const MATRIX_TTL_MS = 90 * 1000;
+const OPP_CACHE = { ts: 0, data: null };
+const OPP_TTL_MS = 10 * 60 * 1000;
+const TERRITORY_BBOX = { minLng: -118.41, minLat: 33.95, maxLng: -118.32, maxLat: 34.03 };
+
+function matrixCacheKey(points) {
+  return points.map((p) => `${Number(p.lat).toFixed(4)},${Number(p.lng).toFixed(4)}`).join("|");
+}
+
+function toOsrmCoord(p) {
+  return `${Number(p.lng).toFixed(6)},${Number(p.lat).toFixed(6)}`;
+}
+
+async function fetchOsrmDurationMatrix(points) {
+  const coords = points.map(toOsrmCoord).join(";");
+  const url = `https://router.project-osrm.org/table/v1/driving/${coords}?annotations=duration`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`osrm_http_${r.status}`);
+  const j = await r.json();
+  if (!j || !Array.isArray(j.durations)) throw new Error("osrm_bad_payload");
+  const matrix = j.durations.map((row) =>
+    row.map((sec) => (Number.isFinite(sec) ? Math.max(1, Math.round(sec / 60)) : null))
+  );
+  return { matrix, mode: "osrm_road" };
+}
+
+async function fetchGoogleTrafficMatrix(points) {
+  const key = process.env.GOOGLE_MAPS_API_KEY || "";
+  if (!key) return null;
+  const origins = points.map((p) => `${p.lat},${p.lng}`).join("|");
+  const destinations = origins;
+  const url = new URL("https://maps.googleapis.com/maps/api/distancematrix/json");
+  url.searchParams.set("origins", origins);
+  url.searchParams.set("destinations", destinations);
+  url.searchParams.set("departure_time", "now");
+  url.searchParams.set("traffic_model", "best_guess");
+  url.searchParams.set("key", key);
+  const r = await fetch(url.toString());
+  if (!r.ok) throw new Error(`gdm_http_${r.status}`);
+  const j = await r.json();
+  if (!j || j.status !== "OK" || !Array.isArray(j.rows)) throw new Error(`gdm_status_${j?.status || "bad"}`);
+  const matrix = j.rows.map((row) =>
+    (row.elements || []).map((el) => {
+      if (!el || el.status !== "OK") return null;
+      const sec = Number((el.duration_in_traffic && el.duration_in_traffic.value) || (el.duration && el.duration.value) || 0);
+      return sec > 0 ? Math.max(1, Math.round(sec / 60)) : null;
+    })
+  );
+  return { matrix, mode: "google_traffic" };
+}
+
+async function getDurationMatrix(points) {
+  const key = matrixCacheKey(points);
+  const cached = MATRIX_CACHE.get(key);
+  if (cached && (Date.now() - cached.ts) < MATRIX_TTL_MS) return cached.value;
+  let value = null;
+  try {
+    value = await fetchGoogleTrafficMatrix(points);
+  } catch {}
+  if (!value) value = await fetchOsrmDurationMatrix(points);
+  MATRIX_CACHE.set(key, { ts: Date.now(), value });
+  return value;
+}
+
+function routeTravelCost(routeIdxs, matrix) {
+  if (!routeIdxs.length) return 0;
+  let cost = Number(matrix?.[0]?.[routeIdxs[0] + 1] || 9999);
+  for (let i = 0; i < routeIdxs.length - 1; i += 1) {
+    cost += Number(matrix?.[routeIdxs[i] + 1]?.[routeIdxs[i + 1] + 1] || 9999);
+  }
+  return cost;
+}
+
+function twoOptRoute(routeIdxs, matrix) {
+  if (routeIdxs.length < 4) return routeIdxs;
+  let best = [...routeIdxs];
+  let improved = true;
+  while (improved) {
+    improved = false;
+    for (let i = 1; i < best.length - 2; i += 1) {
+      for (let k = i + 1; k < best.length - 1; k += 1) {
+        const next = [...best];
+        const rev = next.slice(i, k + 1).reverse();
+        next.splice(i, rev.length, ...rev);
+        if (routeTravelCost(next, matrix) < routeTravelCost(best, matrix)) {
+          best = next;
+          improved = true;
+        }
+      }
+    }
+  }
+  return best;
+}
+
 function computeRisk(stage, convState, inactivityMin) {
   const u = String(convState || "").toUpperCase();
   if (u === "ESCALATED") return "high";
@@ -108,39 +219,50 @@ function computePriority(stage, risk, inactivityMin, etaMin) {
   return Math.round(s + r + inactivity - Math.min(18, etaMin * 0.35));
 }
 
-function buildRouteSuggestion(pins, maxStops = 8) {
-  const candidates = pins
-    .filter((p) => p.stage !== "green")
-    .sort((a, b) => (b.priority_score || 0) - (a.priority_score || 0))
-    .slice(0, 20)
-    .map((p) => ({ ...p }));
-  const route = [];
-  let cur = { lat: BASE_COORD.lat, lng: BASE_COORD.lon };
-  while (candidates.length && route.length < maxStops) {
-    let bestIdx = 0;
-    let bestDist = Number.POSITIVE_INFINITY;
-    for (let i = 0; i < candidates.length; i += 1) {
-      const p = candidates[i];
-      const d = haversineMiles(cur.lat, cur.lng, p.lat, p.lng);
-      if (d < bestDist) {
-        bestDist = d;
-        bestIdx = i;
+function buildRouteSuggestionV2(candidates, matrix, maxStops = 8, mode = "osrm_road") {
+  if (!candidates.length) return [];
+  const pool = candidates.map((p) => ({ ...p }));
+  let currentIdx = pool.reduce((best, p, i, arr) =>
+    (arr[best].priority_score >= p.priority_score ? best : i), 0);
+  const order = [currentIdx];
+  const used = new Set(order);
+  while (order.length < Math.min(maxStops, pool.length)) {
+    let nextIdx = -1;
+    let nextCost = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < pool.length; i += 1) {
+      if (used.has(i)) continue;
+      const travel = Number(matrix?.[order[order.length - 1] + 1]?.[i + 1] || 9999);
+      const riskBoost = pool[i].risk === "high" ? -6 : pool[i].risk === "medium" ? -2 : 0;
+      const score = travel - (pool[i].priority_score || 0) * 0.18 + riskBoost;
+      if (score < nextCost) {
+        nextCost = score;
+        nextIdx = i;
       }
     }
-    const next = candidates.splice(bestIdx, 1)[0];
-    route.push({
-      stop: route.length + 1,
-      phone: next.phone,
-      stage: next.stage,
-      stage_label: next.stage_label,
-      risk: next.risk,
-      eta_minutes_est: next.eta_minutes_est,
-      leg_miles: Number(bestDist.toFixed(2)),
-      address: next.address,
-      conv_state: next.conv_state
-    });
-    cur = { lat: next.lat, lng: next.lng };
+    if (nextIdx < 0) break;
+    order.push(nextIdx);
+    used.add(nextIdx);
   }
+  const optimized = twoOptRoute(order, matrix);
+  const route = [];
+  let cur = { lat: BASE_COORD.lat, lng: BASE_COORD.lon };
+  optimized.forEach((idx, n) => {
+    const p = pool[idx];
+    const legMiles = haversineMiles(cur.lat, cur.lng, p.lat, p.lng);
+    route.push({
+      stop: n + 1,
+      phone: p.phone,
+      stage: p.stage,
+      stage_label: p.stage_label,
+      risk: p.risk,
+      eta_minutes_est: p.eta_minutes_est,
+      leg_miles: Number(legMiles.toFixed(2)),
+      address: p.address,
+      conv_state: p.conv_state,
+      traffic_model: mode
+    });
+    cur = { lat: p.lat, lng: p.lng };
+  });
   return route;
 }
 
@@ -182,6 +304,212 @@ async function resolveLeadCoordinates(row) {
     [Number(geo.lat), Number(geo.lon), source, row.from_phone]
   ).catch(() => {});
   return { lat: Number(geo.lat), lng: Number(geo.lon), source };
+}
+
+function territoryEnvelopeParams() {
+  return {
+    geometry: `${TERRITORY_BBOX.minLng},${TERRITORY_BBOX.minLat},${TERRITORY_BBOX.maxLng},${TERRITORY_BBOX.maxLat}`,
+    geometryType: "esriGeometryEnvelope",
+    inSR: "4326",
+    outSR: "4326",
+    spatialRel: "esriSpatialRelIntersects"
+  };
+}
+
+async function arcgisQuery(layerId, opts = {}) {
+  const params = new URLSearchParams({
+    where: "1=1",
+    outFields: opts.outFields || "*",
+    returnGeometry: "true",
+    f: "pjson",
+    resultRecordCount: String(opts.resultRecordCount || 80),
+    ...territoryEnvelopeParams()
+  });
+  const base = "https://maps.lacity.org/arcgis/rest/services/Permits/BOE_Permits_Geocoder/MapServer";
+  const url = `${base}/${layerId}/query?${params.toString()}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`arcgis_${layerId}_${r.status}`);
+  const j = await r.json();
+  if (j?.error) throw new Error(`arcgis_${layerId}_error`);
+  return Array.isArray(j.features) ? j.features : [];
+}
+
+function parseArcPoint(f) {
+  const x = Number(f?.geometry?.x);
+  const y = Number(f?.geometry?.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { lat: y, lng: x };
+}
+
+function parseArcPaths(f) {
+  const p = f?.geometry?.paths;
+  if (!Array.isArray(p) || !p.length || !Array.isArray(p[0])) return null;
+  return p[0]
+    .map((xy) => ({ lng: Number(xy[0]), lat: Number(xy[1]) }))
+    .filter((pt) => Number.isFinite(pt.lat) && Number.isFinite(pt.lng));
+}
+
+async function fetchBudgetSignals() {
+  try {
+    const y = new Date().getFullYear();
+    const fyA = String(y - 1);
+    const fyB = String(y);
+    const where = `fiscal_year in ('${fyA}','${fyB}') AND council_district in ('8','9','10','11')`;
+    const base = "https://controllerdata.lacity.org/resource/ebs9-fdwv.json";
+    const q1 = new URL(base);
+    q1.searchParams.set("$select", "council_district,sum(amount) as amount_total,count(*) as txn_count");
+    q1.searchParams.set("$where", where);
+    q1.searchParams.set("$group", "council_district");
+    q1.searchParams.set("$order", "amount_total DESC");
+    q1.searchParams.set("$limit", "20");
+    const byCd = await socrataFetchJson(q1.toString());
+
+    const q2 = new URL(base);
+    q2.searchParams.set("$select", "sum(amount) as amount_total,count(*) as txn_count");
+    q2.searchParams.set("$where", `${where} AND (upper(transaction_details) like '%STREET%' OR upper(transaction_details) like '%TRANSIT%' OR upper(transaction_details) like '%HOUSING%' OR upper(transaction_details) like '%DEVELOP%' OR upper(transaction_details) like '%HOMELESS%' OR upper(transaction_details) like '%INFRA%')`);
+    q2.searchParams.set("$limit", "1");
+    const thematic = await socrataFetchJson(q2.toString());
+
+    const rows = Array.isArray(byCd) ? byCd : [];
+    const topical = (Array.isArray(thematic) && thematic[0]) ? thematic[0] : { amount_total: 0, txn_count: 0 };
+    return {
+      by_cd: rows.map((r) => ({
+        council_district: String(r.council_district || ""),
+        amount_total: Number(r.amount_total || 0),
+        txn_count: Number(r.txn_count || 0)
+      })),
+      topical: {
+        amount_total: Number(topical.amount_total || 0),
+        txn_count: Number(topical.txn_count || 0)
+      }
+    };
+  } catch {
+    return { by_cd: [], topical: { amount_total: 0, txn_count: 0 } };
+  }
+}
+
+async function fetchCityBudgetOpportunitySignals() {
+  try {
+    const q = new URL("https://data.lacity.org/resource/5242-pnmt.json");
+    q.searchParams.set("$select", "fiscal_year,sum(appropriation) as total_budget");
+    q.searchParams.set("$where", "upper(department_name) like '%TRANSPORT%' OR upper(department_name) like '%PUBLIC WORKS%' OR upper(department_name) like '%HOUSING%'");
+    q.searchParams.set("$group", "fiscal_year");
+    q.searchParams.set("$order", "fiscal_year DESC");
+    q.searchParams.set("$limit", "3");
+    const rows = await socrataFetchJson(q.toString());
+    return (Array.isArray(rows) ? rows : []).map((r) => ({
+      fiscal_year: String(r.fiscal_year || ""),
+      total_budget: Number(r.total_budget || 0)
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function buildOpportunityData() {
+  const cacheFresh = OPP_CACHE.data && (Date.now() - OPP_CACHE.ts) < OPP_TTL_MS;
+  if (cacheFresh) return OPP_CACHE.data;
+  const [permitFeatures, housingFeatures, corridorFeatures, transitFeatures, budgetSignals, cityBudgetSignals] = await Promise.all([
+    arcgisQuery(11, { resultRecordCount: 120, outFields: "PermitNo,PermitType,PermitSubType,Location,StartDate,EndDate,TOOLTIP,NLA_URL" }).catch(() => []),
+    arcgisQuery(153, { resultRecordCount: 100, outFields: "PROJECT_NA,AV_ADD,TOOLTIP,NLA_URL" }).catch(() => []),
+    arcgisQuery(200, { resultRecordCount: 40, outFields: "Street,Street_From,Street_To,CD,Region,TOOLTIP,NLA_URL" }).catch(() => []),
+    arcgisQuery(208, { resultRecordCount: 40, outFields: "ProjectTitle,CurrentPhaseDescription,CouncilDistrict,ConstructionCost,TOOLTIP,NLA_URL" }).catch(() => []),
+    fetchBudgetSignals(),
+    fetchCityBudgetOpportunitySignals()
+  ]);
+
+  const permits = permitFeatures
+    .map((f) => {
+      const pt = parseArcPoint(f);
+      if (!pt) return null;
+      const a = f.attributes || {};
+      return {
+        type: "permit",
+        title: String(a.PermitNo || "B Permit Construction").trim(),
+        subtitle: String(a.Location || ""),
+        tooltip: String(a.TOOLTIP || ""),
+        url: a.NLA_URL || null,
+        lat: pt.lat,
+        lng: pt.lng,
+        start_date: a.StartDate || null,
+        end_date: a.EndDate || null,
+        opportunity_score: 1
+      };
+    })
+    .filter(Boolean);
+
+  const housing = housingFeatures
+    .map((f) => {
+      const pt = parseArcPoint(f);
+      if (!pt) return null;
+      const a = f.attributes || {};
+      return {
+        type: "housing",
+        title: String(a.PROJECT_NA || "Affordable Housing Project"),
+        subtitle: String(a.AV_ADD || ""),
+        tooltip: String(a.TOOLTIP || ""),
+        url: a.NLA_URL || null,
+        lat: pt.lat,
+        lng: pt.lng,
+        opportunity_score: 3
+      };
+    })
+    .filter(Boolean);
+
+  const corridors = corridorFeatures
+    .map((f) => {
+      const path = parseArcPaths(f);
+      if (!path || !path.length) return null;
+      const a = f.attributes || {};
+      return {
+        type: "corridor",
+        title: String(a.Street || "Great Streets Corridor"),
+        subtitle: `${a.Street_From || ""} → ${a.Street_To || ""}`.trim(),
+        tooltip: String(a.TOOLTIP || ""),
+        url: a.NLA_URL || null,
+        path,
+        opportunity_score: 4
+      };
+    })
+    .filter(Boolean);
+
+  const transit = transitFeatures
+    .map((f) => {
+      const path = parseArcPaths(f);
+      if (!path || !path.length) return null;
+      const a = f.attributes || {};
+      return {
+        type: "transit",
+        title: String(a.ProjectTitle || "Transit Project"),
+        subtitle: String(a.CurrentPhaseDescription || ""),
+        tooltip: String(a.TOOLTIP || ""),
+        url: a.NLA_URL || null,
+        path,
+        construction_cost: Number(a.ConstructionCost || 0),
+        opportunity_score: 5
+      };
+    })
+    .filter(Boolean);
+
+  const data = {
+    permits,
+    housing,
+    corridors,
+    transit,
+    budget_signals: budgetSignals,
+    city_budget_signals: cityBudgetSignals,
+    meta: {
+      permit_count: permits.length,
+      housing_count: housing.length,
+      corridor_count: corridors.length,
+      transit_count: transit.length,
+      city_budget_count: cityBudgetSignals.length,
+      generated_at: new Date().toISOString()
+    }
+  };
+  OPP_CACHE.ts = Date.now();
+  OPP_CACHE.data = data;
+  return data;
 }
 
 const app = express();
@@ -398,11 +726,35 @@ app.get("/api/dashboard/leads", async (req, res) => {
         priority_score: priorityScore
       });
     }
+    let etaMode = "heuristic_peak_profile";
+    const routeCandidates = pins
+      .filter((p) => p.stage !== "green")
+      .sort((a, b) => (b.priority_score || 0) - (a.priority_score || 0))
+      .slice(0, 12)
+      .map((p) => ({ ...p }));
+    let routeSuggestion = [];
+    if (routeCandidates.length) {
+      const matrixPoints = [{ lat: BASE_COORD.lat, lng: BASE_COORD.lon }, ...routeCandidates.map((p) => ({ lat: p.lat, lng: p.lng }))];
+      try {
+        const dm = await getDurationMatrix(matrixPoints);
+        etaMode = dm.mode;
+        routeCandidates.forEach((c, idx) => {
+          const eta = Number(dm.matrix?.[0]?.[idx + 1]);
+          if (Number.isFinite(eta) && eta > 0) c.eta_minutes_est = eta;
+        });
+        const etaByPhone = new Map(routeCandidates.map((c) => [c.phone, c.eta_minutes_est]));
+        pins.forEach((p) => {
+          if (etaByPhone.has(p.phone)) p.eta_minutes_est = etaByPhone.get(p.phone);
+        });
+        routeSuggestion = buildRouteSuggestionV2(routeCandidates, dm.matrix, 8, dm.mode);
+      } catch {
+        routeSuggestion = buildRouteSuggestionV2(routeCandidates, null, 8, etaMode);
+      }
+    }
     const stageCounts = pins.reduce((a, p) => { a[p.stage] = (a[p.stage] || 0) + 1; return a; }, { red: 0, yellow: 0, green: 0 });
     const riskCounts = pins.reduce((a, p) => { a[p.risk] = (a[p.risk] || 0) + 1; return a; }, { high: 0, medium: 0, low: 0 });
     const active = pins.filter((p) => p.stage !== "green");
     const avgEta = active.length ? Math.round(active.reduce((s, p) => s + (p.eta_minutes_est || 0), 0) / active.length) : 0;
-    const routeSuggestion = buildRouteSuggestion(pins, 8);
     res.json({
       ok: true,
       leads,
@@ -414,9 +766,19 @@ app.get("/api/dashboard/leads", async (req, res) => {
         stage_counts: stageCounts,
         risk_counts: riskCounts,
         avg_eta_min: avgEta,
+        eta_mode: etaMode,
         generated_at: new Date().toISOString()
       }
     });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/dashboard/opportunities", async (_req, res) => {
+  try {
+    const data = await buildOpportunityData();
+    res.json({ ok: true, ...data });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
