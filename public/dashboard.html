@@ -352,10 +352,12 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
       <button class="mc mc-lead-filter" onclick="setLeadFilter('red',this)">Red</button>
       <button class="mc mc-lead-filter" onclick="setLeadFilter('yellow',this)">Yellow</button>
       <button class="mc mc-lead-filter" onclick="setLeadFilter('green',this)">Green</button>
+      <span class="mc-lbl" id="map-filter-count">Showing: 0 / 0 leads</span>
       <button class="mc mc-mode on" onclick="setMapMode('street',this)">Street Map</button>
       <button class="mc mc-mode" onclick="setMapMode('choropleth',this)">Choropleth</button>
       <button class="mc" onclick="openStreetView()">Street View ↗</button>
       <span class="mc-lbl" style="margin-left:10px">Map:</span>
+      <button class="mc" onclick="fitToTerritory()">Fit to Territory</button>
       <button class="mc" onclick="mapZoomIn()">＋</button>
       <button class="mc" onclick="mapZoomOut()">－</button>
       <button class="mc" onclick="mapResetView()">Reset</button>
@@ -518,6 +520,13 @@ function getVisiblePins(){
   if(leadFilter==='all')return pins;
   return pins.filter(p=>p.stage===leadFilter);
 }
+function updateLeadFilterCount(){
+  const el=document.getElementById('map-filter-count');
+  if(!el)return;
+  const total=(Array.isArray(MAP_LEAD_PINS)?MAP_LEAD_PINS.length:0);
+  const shown=getVisiblePins().length;
+  el.textContent=`Showing: ${shown} / ${total} leads`;
+}
 
 // ── LEADS ─────────────────────────────────────────────────────────────────────
 function stateCls(s){
@@ -566,6 +575,7 @@ async function fetchLeads(){
     const raw=await r.json();
     const leads=Array.isArray(raw)?raw:(raw.leads||raw.data||[]);
     MAP_LEAD_PINS=Array.isArray(raw.pins)?raw.pins:[];
+    updateLeadFilterCount();
     const today=new Date().toDateString();
     const todayCt=leads.filter(l=>new Date(l.created_at||l.createdAt||0).toDateString()===today).length;
     const quoted=leads.filter(l=>(l.state||'').toUpperCase().includes('QUOTE')).length;
@@ -584,6 +594,7 @@ async function fetchLeads(){
     if(streetMap)renderStreetLeads();
   }catch(e){
     MAP_LEAD_PINS=[];
+    updateLeadFilterCount();
     ['kpi-tot','kpi-q','kpi-bk','kpi-rev'].forEach(id=>document.getElementById(id).textContent='—');
     const fb=`<div style="padding:14px;background:var(--bg3);border-radius:5px;text-align:center;font-size:10px;color:var(--tx3)">Live leads unavailable right now.</div>`;
     ['leads-mini','leads-full'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML=fb;});
@@ -867,6 +878,7 @@ const PIN_COLORS={red:'#ef4444',yellow:'#f59e0b',green:'#10b981'};
 function clamp(v,min,max){return Math.min(max,Math.max(min,v));}
 function pinColor(stage){return PIN_COLORS[stage]||PIN_COLORS.red;}
 const MAP_VB_DEFAULT={x:0,y:0,w:800,h:520};
+const STREET_DEFAULT_VIEW={lat:33.9925,lng:-118.3535,zoom:12};
 let mapView={...MAP_VB_DEFAULT};
 let mapDrag=null;
 let mapInteractionsBound=false;
@@ -912,9 +924,30 @@ function mapZoomOut(){
   zoomAt(mapView.x+mapView.w/2,mapView.y+mapView.h/2,1.22);
 }
 function mapResetView(){
-  if(mapMode==='street'&&streetMap){fitStreetToTerritory();return;}
+  if(mapMode==='street'&&streetMap){
+    streetMap.setView([STREET_DEFAULT_VIEW.lat,STREET_DEFAULT_VIEW.lng],STREET_DEFAULT_VIEW.zoom,{animate:false});
+    return;
+  }
   mapView={...MAP_VB_DEFAULT};
   applyMapView();
+}
+function fitChoroplethToTerritory(){
+  const pts=TERRITORY_EDGE.map(([lng,lat])=>project(lng,lat));
+  const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  const pad=42;
+  const needW=(maxX-minX)+pad*2;
+  const needH=(maxY-minY)+pad*2;
+  const w=clamp(Math.max(needW,needH*(MAP_VB_DEFAULT.w/MAP_VB_DEFAULT.h)),180,MAP_VB_DEFAULT.w);
+  const h=w*(MAP_VB_DEFAULT.h/MAP_VB_DEFAULT.w);
+  const cx=(minX+maxX)/2,cy=(minY+maxY)/2;
+  mapView.w=w;mapView.h=h;mapView.x=cx-w/2;mapView.y=cy-h/2;
+  clampMapView();
+  applyMapView();
+}
+function fitToTerritory(){
+  if(mapMode==='street'&&streetMap){fitStreetToTerritory();return;}
+  fitChoroplethToTerritory();
 }
 function bindMapInteractions(){
   if(mapInteractionsBound)return;
@@ -1367,6 +1400,7 @@ function setLeadFilter(filter,btn){
   leadFilter=filter;
   document.querySelectorAll('.mc-lead-filter').forEach(b=>b.classList.remove('on'));
   btn.classList.add('on');
+  updateLeadFilterCount();
   if(mapBuilt)renderMap(curLayer);
   if(streetMap)renderStreetLeads();
 }
