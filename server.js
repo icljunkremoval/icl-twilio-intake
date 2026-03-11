@@ -7,6 +7,8 @@ const { recomputeDerived } = require("./recompute");
 const { handleWindowReply } = require("./window_reply");
 const { evaluateQuoteReadyRow } = require("./quote_gate");
 const { handleConversation } = require("./conversation");
+const { sendSms } = require("./twilio_sms");
+const { recordJobCosts } = require("./finance_pipeline");
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
@@ -112,13 +114,19 @@ const MATRIX_TTL_MS = 90 * 1000;
 const OPP_CACHE = { ts: 0, data: null };
 const OPP_TTL_MS = 10 * 60 * 1000;
 const TERRITORY_BBOX = { minLng: -118.41, minLat: 33.95, maxLng: -118.32, maxLat: 34.03 };
-const CAPILLARY_STREETS = [
-  [[-118.364, 34.001], [-118.329, 33.993]], // Stocker axis
-  [[-118.360, 33.986], [-118.335, 33.970]], // Windsor / View Park connector
-  [[-118.353, 34.012], [-118.333, 33.999]], // Baldwin Village diagonal
-  [[-118.346, 34.006], [-118.338, 33.978]], // Crenshaw inner spine
-  [[-118.371, 33.989], [-118.329, 33.989]], // Slauson
+const DEFAULT_CAPILLARY_STREETS = [
+  { name: "Stocker St", coords: [[-118.364, 34.001], [-118.354, 33.999], [-118.345, 33.997], [-118.336, 33.995], [-118.329, 33.993]] },
+  { name: "Windsor Arterial", coords: [[-118.360, 33.986], [-118.353, 33.982], [-118.346, 33.978], [-118.340, 33.974], [-118.335, 33.970]] },
+  { name: "Park-Windsor East/West", coords: [[-118.356, 33.972], [-118.349, 33.972], [-118.342, 33.972], [-118.336, 33.972], [-118.329, 33.972]] },
+  { name: "Baldwin Village Connector", coords: [[-118.353, 34.012], [-118.346, 34.008], [-118.339, 34.003], [-118.333, 33.999]] },
+  { name: "Crenshaw Inner Spine", coords: [[-118.346, 34.006], [-118.344, 33.999], [-118.342, 33.992], [-118.340, 33.985], [-118.338, 33.978]] },
+  { name: "Slauson Ave", coords: [[-118.371, 33.989], [-118.350, 33.989], [-118.329, 33.989]] }
 ];
+const CAPILLARY_CONFIG_DIR = path.join(__dirname, "config");
+const CAPILLARY_GEOJSON_FILE = process.env.CAPILLARY_GEOJSON_PATH || path.join(CAPILLARY_CONFIG_DIR, "capillary.geojson");
+const CAPILLARY_KML_FILE = process.env.CAPILLARY_KML_PATH || path.join(CAPILLARY_CONFIG_DIR, "capillary.kml");
+const CAPILLARY_CACHE = { ts: 0, streets: DEFAULT_CAPILLARY_STREETS, source: "v1_screenshot_inference", loaded_at: null };
+const CAPILLARY_CACHE_TTL_MS = 45 * 1000;
 
 function matrixCacheKey(points) {
   return points.map((p) => `${Number(p.lat).toFixed(4)},${Number(p.lng).toFixed(4)}`).join("|");
@@ -126,6 +134,145 @@ function matrixCacheKey(points) {
 
 function toOsrmCoord(p) {
   return `${Number(p.lng).toFixed(6)},${Number(p.lat).toFixed(6)}`;
+}
+
+function normalizeLineCoords(coords) {
+  if (!Array.isArray(coords)) return [];
+  return coords
+    .map((pt) => {
+      const lng = Number(Array.isArray(pt) ? pt[0] : pt?.lng);
+      const lat = Number(Array.isArray(pt) ? pt[1] : pt?.lat);
+      return Number.isFinite(lng) && Number.isFinite(lat) ? [lng, lat] : null;
+    })
+    .filter(Boolean);
+}
+
+function parseGeoJsonCapillary(raw) {
+  const j = typeof raw === "string" ? JSON.parse(raw) : raw;
+  const features = Array.isArray(j?.features)
+    ? j.features
+    : j?.type === "Feature"
+      ? [j]
+      : j?.type
+        ? [{ type: "Feature", properties: {}, geometry: j }]
+        : [];
+  const streets = [];
+  for (const f of features) {
+    const geom = f?.geometry || {};
+    const name = String(f?.properties?.name || f?.properties?.Name || f?.properties?.title || "Imported corridor");
+    if (geom.type === "LineString") {
+      const coords = normalizeLineCoords(geom.coordinates);
+      if (coords.length >= 2) streets.push({ name, coords });
+    } else if (geom.type === "MultiLineString" && Array.isArray(geom.coordinates)) {
+      geom.coordinates.forEach((line, idx) => {
+        const coords = normalizeLineCoords(line);
+        if (coords.length >= 2) streets.push({ name: `${name} ${idx + 1}`, coords });
+      });
+    }
+  }
+  return streets;
+}
+
+function parseKmlCapillary(rawText) {
+  const text = String(rawText || "");
+  const streets = [];
+  const coordRegex = /<coordinates>([\s\S]*?)<\/coordinates>/gi;
+  let m;
+  let idx = 1;
+  while ((m = coordRegex.exec(text)) !== null) {
+    const line = m[1]
+      .split(/\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((triplet) => {
+        const parts = triplet.split(",");
+        return [Number(parts[0]), Number(parts[1])];
+      })
+      .filter((pt) => Number.isFinite(pt[0]) && Number.isFinite(pt[1]));
+    if (line.length >= 2) {
+      streets.push({ name: `Imported corridor ${idx}`, coords: line });
+      idx += 1;
+    }
+  }
+  return streets;
+}
+
+function capillarySegments(streets) {
+  const out = [];
+  for (const s of Array.isArray(streets) ? streets : []) {
+    const coords = normalizeLineCoords(s?.coords);
+    for (let i = 0; i < coords.length - 1; i += 1) {
+      out.push([coords[i], coords[i + 1]]);
+    }
+  }
+  return out;
+}
+
+function loadCapillaryNetwork(force = false) {
+  if (!force && CAPILLARY_CACHE.loaded_at && (Date.now() - CAPILLARY_CACHE.ts) < CAPILLARY_CACHE_TTL_MS) {
+    return CAPILLARY_CACHE;
+  }
+  let streets = DEFAULT_CAPILLARY_STREETS;
+  let source = "v1_screenshot_inference";
+  try {
+    if (fs.existsSync(CAPILLARY_GEOJSON_FILE)) {
+      const raw = fs.readFileSync(CAPILLARY_GEOJSON_FILE, "utf8");
+      const parsed = parseGeoJsonCapillary(raw);
+      if (parsed.length) {
+        streets = parsed;
+        source = `geojson:${path.basename(CAPILLARY_GEOJSON_FILE)}`;
+      }
+    } else if (fs.existsSync(CAPILLARY_KML_FILE)) {
+      const raw = fs.readFileSync(CAPILLARY_KML_FILE, "utf8");
+      const parsed = parseKmlCapillary(raw);
+      if (parsed.length) {
+        streets = parsed;
+        source = `kml:${path.basename(CAPILLARY_KML_FILE)}`;
+      }
+    }
+  } catch (e) {
+    console.error("[capillary] load error:", e?.message || e);
+  }
+  CAPILLARY_CACHE.ts = Date.now();
+  CAPILLARY_CACHE.loaded_at = new Date().toISOString();
+  CAPILLARY_CACHE.streets = streets;
+  CAPILLARY_CACHE.source = source;
+  return CAPILLARY_CACHE;
+}
+
+function capillaryGeoJson(streets) {
+  return {
+    type: "FeatureCollection",
+    features: (Array.isArray(streets) ? streets : []).map((s) => ({
+      type: "Feature",
+      properties: { name: s?.name || "Capillary corridor" },
+      geometry: { type: "LineString", coordinates: normalizeLineCoords(s?.coords) }
+    }))
+  };
+}
+
+function xmlEsc(v) {
+  return String(v || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function capillaryKml(streets) {
+  const placemarks = (Array.isArray(streets) ? streets : [])
+    .map((s) => {
+      const coords = normalizeLineCoords(s?.coords).map((pt) => `${pt[0]},${pt[1]},0`).join(" ");
+      if (!coords) return "";
+      return `<Placemark><name>${xmlEsc(s?.name || "Capillary corridor")}</name><LineString><tessellate>1</tessellate><coordinates>${coords}</coordinates></LineString></Placemark>`;
+    })
+    .join("");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>ICL Capillary Corridors</name>
+    ${placemarks}
+  </Document>
+</kml>`;
 }
 
 async function fetchOsrmDurationMatrix(points) {
@@ -204,9 +351,9 @@ function pointToSegmentMiles(lat, lng, a, b) {
   return Math.hypot(px, py);
 }
 
-function minCapillaryDistanceMiles(lat, lng) {
+function minCapillaryDistanceMiles(lat, lng, segments) {
   let best = Number.POSITIVE_INFINITY;
-  for (const seg of CAPILLARY_STREETS) {
+  for (const seg of (Array.isArray(segments) ? segments : [])) {
     const d = pointToSegmentMiles(lat, lng, seg[0], seg[1]);
     if (d < best) best = d;
   }
@@ -256,6 +403,102 @@ function computePriority(stage, risk, inactivityMin, etaMin, plannerBonus = 0) {
   const r = risk === "high" ? 35 : risk === "medium" ? 15 : 0;
   const inactivity = Math.min(40, Math.floor(inactivityMin / 5));
   return Math.round(s + r + inactivity - Math.min(18, etaMin * 0.35) + Number(plannerBonus || 0));
+}
+
+const OPS_ALERT_PHONE = process.env.OPS_ALERT_PHONE || "+12138806318";
+
+function inAutomationWindow(d = new Date()) {
+  const hour = getPacificHour(d);
+  return hour >= 8 && hour <= 19;
+}
+
+function nextActionLabel(row, stage, inactivityMin) {
+  const conv = String(row.conv_state || row.quote_status || "").toUpperCase();
+  if (stage === "green") return "review_referral";
+  if (conv.includes("AWAITING_MEDIA")) return "send_media";
+  if (conv.includes("AWAITING_ADDRESS")) return "send_address_zip";
+  if (conv.includes("QUOTE") || conv.includes("DEPOSIT")) return "close_deposit";
+  if (inactivityMin >= 120) return "call_now";
+  return "step_nudge";
+}
+
+function nextActionSms(kind) {
+  if (kind === "send_media") return "Quick nudge: send a few photos so we can finalize your quote + timing.";
+  if (kind === "send_address_zip") return "Quick nudge: send your service address + ZIP to lock quote accuracy.";
+  if (kind === "close_deposit") return "Quick nudge: your quote is ready to lock. Reply YES and we will secure your arrival window.";
+  if (kind === "call_now") return "Quick check-in: we can close this in one call. Reply CALL and we will ring you now.";
+  return "Quick check-in: reply here and we will move your job to the next step immediately.";
+}
+
+async function fireNextBestActionAutomation() {
+  if (!inAutomationWindow()) return;
+  const rows = (
+    await pool.query(
+      `SELECT
+         l.from_phone,
+         l.last_seen_at,
+         l.first_seen_at,
+         l.conv_state,
+         l.quote_status,
+         l.deposit_paid,
+         l.address_text,
+         l.next_action_sent_at,
+         l.next_action_sent_count,
+         EXISTS(
+           SELECT 1 FROM events e
+           WHERE e.from_phone = l.from_phone
+             AND e.event_type = 'job_completed'
+         ) AS has_completed_event
+       FROM leads l
+       WHERE COALESCE(l.troll_flag, 0) = 0
+       ORDER BY l.last_seen_at DESC
+       LIMIT 280`
+    )
+  ).rows;
+  const now = Date.now();
+  for (const row of rows) {
+    const life = leadLifecycle(row);
+    if (life.stage === "green") continue;
+    const lastSeen = new Date(row.last_seen_at || row.first_seen_at || now).getTime();
+    const inactivityMin = Math.max(0, Math.floor((now - lastSeen) / 60000));
+    if (inactivityMin < 60) continue;
+    const sentCount = Number(row.next_action_sent_count || 0);
+    if (sentCount >= 4) continue;
+    const lastSentMs = row.next_action_sent_at ? new Date(row.next_action_sent_at).getTime() : 0;
+    const cooldownMin = life.stage === "red" ? 90 : 180;
+    if (lastSentMs && ((now - lastSentMs) / 60000) < cooldownMin) continue;
+    const kind = nextActionLabel(row, life.stage, inactivityMin);
+    const body = nextActionSms(kind);
+    try {
+      await sendSms(row.from_phone, body);
+      await pool.query(
+        `UPDATE leads
+         SET next_action_sent_at = NOW(),
+             next_action_sent_count = COALESCE(next_action_sent_count, 0) + 1,
+             next_action_last_kind = $1,
+             next_action_last_error = NULL
+         WHERE from_phone = $2`,
+        [kind, row.from_phone]
+      );
+      insertEvent.run({
+        from_phone: row.from_phone,
+        event_type: "next_best_action_auto",
+        payload_json: JSON.stringify({ kind, inactivity_minutes: inactivityMin, stage: life.stage }),
+        created_at: new Date().toISOString()
+      });
+      try {
+        await sendSms(
+          OPS_ALERT_PHONE,
+          `SLA RED auto-fired · ${row.from_phone}\n${kind}\n${row.address_text || "No address"}\nIdle ${inactivityMin}m`
+        );
+      } catch {}
+    } catch (e) {
+      await pool.query(
+        "UPDATE leads SET next_action_last_error = $1 WHERE from_phone = $2",
+        [String(e?.message || e), row.from_phone]
+      ).catch(() => {});
+    }
+  }
 }
 
 function buildRouteSuggestionV2(candidates, matrix, maxStops = 8, mode = "osrm_road") {
@@ -606,6 +849,84 @@ function upsertLeadFile(from, patch) {
   return fp;
 }
 
+app.get("/api/dashboard/capillary", (_req, res) => {
+  const cap = loadCapillaryNetwork();
+  res.json({
+    ok: true,
+    source: cap.source,
+    loaded_at: cap.loaded_at,
+    streets: cap.streets
+  });
+});
+
+app.get("/api/dashboard/capillary.geojson", (_req, res) => {
+  const cap = loadCapillaryNetwork();
+  res.setHeader("Content-Type", "application/geo+json; charset=utf-8");
+  res.setHeader("Content-Disposition", "attachment; filename=icl-capillary-corridors.geojson");
+  res.end(JSON.stringify(capillaryGeoJson(cap.streets), null, 2));
+});
+
+app.get("/api/dashboard/capillary.kml", (_req, res) => {
+  const cap = loadCapillaryNetwork();
+  res.setHeader("Content-Type", "application/vnd.google-earth.kml+xml; charset=utf-8");
+  res.setHeader("Content-Disposition", "attachment; filename=icl-capillary-corridors.kml");
+  res.end(capillaryKml(cap.streets));
+});
+
+app.post("/admin/capillary/import", (req, res) => {
+  try {
+    const format = String(req.body?.format || "geojson").toLowerCase();
+    const payload = req.body?.data ?? req.body?.geojson ?? req.body?.kml ?? null;
+    if (payload == null) return res.status(400).json({ ok: false, error: "missing data" });
+    fs.mkdirSync(CAPILLARY_CONFIG_DIR, { recursive: true });
+    if (format === "kml") {
+      const text = String(payload);
+      const parsed = parseKmlCapillary(text);
+      if (!parsed.length) return res.status(400).json({ ok: false, error: "no valid KML linework found" });
+      fs.writeFileSync(CAPILLARY_KML_FILE, text, "utf8");
+    } else {
+      const obj = typeof payload === "string" ? JSON.parse(payload) : payload;
+      const parsed = parseGeoJsonCapillary(obj);
+      if (!parsed.length) return res.status(400).json({ ok: false, error: "no valid GeoJSON linework found" });
+      fs.writeFileSync(CAPILLARY_GEOJSON_FILE, JSON.stringify(obj, null, 2), "utf8");
+    }
+    const cap = loadCapillaryNetwork(true);
+    return res.json({
+      ok: true,
+      source: cap.source,
+      loaded_at: cap.loaded_at,
+      street_count: cap.streets.length,
+      segment_count: capillarySegments(cap.streets).length
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/admin/job-costs", async (req, res) => {
+  try {
+    const fromPhone = String(req.body?.from_phone || req.body?.phone || "").trim();
+    if (!fromPhone) return res.status(400).json({ ok: false, error: "missing from_phone" });
+    const margin = await recordJobCosts(
+      fromPhone,
+      {
+        labor: req.body?.labor,
+        disposal: req.body?.disposal,
+        fuel: req.body?.fuel,
+        other: req.body?.other,
+        labor_cents: req.body?.labor_cents,
+        disposal_cents: req.body?.disposal_cents,
+        fuel_cents: req.body?.fuel_cents,
+        other_cents: req.body?.other_cents
+      },
+      "admin_api"
+    );
+    res.json({ ok: true, from_phone: fromPhone, margin });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 app.post("/square/webhook", handleSquareWebhook);
 // Ops reply handler — intercepts texts from business number
 app.post("/twilio/ops-reply", async (req, res) => {
@@ -687,6 +1008,11 @@ app.get("/api/dashboard/leads", async (req, res) => {
         l.deposit_paid,
         l.deposit_paid_at,
         l.junk_fee_actual,
+        l.settled_revenue_cents,
+        l.total_cost_cents,
+        l.margin_cents,
+        l.margin_pct,
+        l.next_action_sent_count,
         l.load_bucket,
         l.geo_lat,
         l.geo_lng,
@@ -714,8 +1040,15 @@ app.get("/api/dashboard/leads", async (req, res) => {
       load_bucket: r.load_bucket || null,
       quote_status: r.quote_status || null,
       deposit_paid: Number(r.deposit_paid) === 1,
+      settled_revenue_cents: Number(r.settled_revenue_cents || 0) || null,
+      total_cost_cents: Number(r.total_cost_cents || 0) || null,
+      margin_cents: Number(r.margin_cents || 0) || null,
+      margin_pct: Number(r.margin_pct || 0) || null,
+      next_action_sent_count: Number(r.next_action_sent_count || 0)
     }));
 
+    const capillary = loadCapillaryNetwork();
+    const activeCapillarySegments = capillarySegments(capillary.streets);
     let geocodeAttempts = 0;
     const now = new Date();
     const pins = [];
@@ -747,7 +1080,7 @@ app.get("/api/dashboard/leads", async (req, res) => {
       const etaMin = estimateEtaMinutes(miles, now);
       const inactivityMin = Math.max(0, Math.floor((Date.now() - new Date(row.last_seen_at || row.first_seen_at || Date.now()).getTime()) / 60000));
       const risk = computeRisk(life.stage, row.conv_state, inactivityMin);
-      const capillaryDistanceMi = minCapillaryDistanceMiles(lat, lng);
+      const capillaryDistanceMi = minCapillaryDistanceMiles(lat, lng, activeCapillarySegments);
       const plannerBonus = capillaryBonus(capillaryDistanceMi);
       const priorityScore = computePriority(life.stage, risk, inactivityMin, etaMin, plannerBonus);
       pins.push({
@@ -804,22 +1137,37 @@ app.get("/api/dashboard/leads", async (req, res) => {
       return new Date(rs?.last_seen_at || 0).toDateString() === todayKey;
     }).length;
     const depositRate = pins.length ? Math.round(((stageCounts.yellow + stageCounts.green) / pins.length) * 100) : 0;
-    const settledRows = rows.filter((r) => Number(r.deposit_paid) === 1 || leadLifecycle(r).stage === "green");
+    const settledRows = rows.filter((r) => Number(r.settled_revenue_cents || 0) > 0);
     const revenueSamples = settledRows
-      .map((r) => Number(r.junk_fee_actual))
+      .map((r) => Number(r.settled_revenue_cents))
       .filter((v) => Number.isFinite(v) && v > 0);
+    const marginSamples = settledRows
+      .map((r) => Number(r.margin_cents))
+      .filter((v) => Number.isFinite(v));
     const avgRevenueJob = revenueSamples.length
       ? Math.round(revenueSamples.reduce((s, v) => s + v, 0) / revenueSamples.length)
       : null;
-    const avgMarginJob = Number.isFinite(avgRevenueJob) && avgRevenueJob > 0 ? Math.round(avgRevenueJob * 0.42) : null;
+    const avgMarginJob = marginSamples.length
+      ? Math.round(marginSamples.reduce((s, v) => s + v, 0) / marginSamples.length)
+      : null;
     const squareConnected = Boolean(process.env.SQUARE_ACCESS_TOKEN || process.env.SQUARE_API_TOKEN || process.env.SQUARE_TOKEN);
     const active = pins.filter((p) => p.stage !== "green");
+    const slaRedCount = active.filter((p) => Number(p.inactivity_minutes || 0) >= 60).length;
+    const corridorFitCount = active.filter((p) => Number(p.planner_corridor_distance_mi || 99) <= 0.4).length;
+    const corridorFitPct = active.length ? Math.round((corridorFitCount / active.length) * 100) : 0;
+    const automationCount = rows.reduce((sum, r) => sum + Number(r.next_action_sent_count || 0), 0);
     const avgEta = active.length ? Math.round(active.reduce((s, p) => s + (p.eta_minutes_est || 0), 0) / active.length) : 0;
     res.json({
       ok: true,
       leads,
       pins,
       route_suggestion: routeSuggestion,
+      capillary: {
+        source: capillary.source,
+        loaded_at: capillary.loaded_at,
+        street_count: capillary.streets.length,
+        segment_count: activeCapillarySegments.length
+      },
       meta: {
         total: leads.length,
         pins: pins.length,
@@ -830,7 +1178,12 @@ app.get("/api/dashboard/leads", async (req, res) => {
         deposit_rate: depositRate,
         avg_revenue_job: avgRevenueJob,
         avg_margin_job: avgMarginJob,
+        margin_truth_jobs: settledRows.length,
         square_connected: squareConnected,
+        sla_red_count: slaRedCount,
+        corridor_fit_pct: corridorFitPct,
+        next_actions_sent_total: automationCount,
+        capillary_source: capillary.source,
         eta_mode: etaMode,
         generated_at: new Date().toISOString()
       }
@@ -938,6 +1291,8 @@ app.get("/admin/lead/:from", async (req, res) => {
 
 setInterval(() => checkDropoffs().catch(e => console.error('[dropoff]', e.message)), 30*60*1000);
 setTimeout(() => checkDropoffs().catch(()=>{}), 60*1000);
+setInterval(() => fireNextBestActionAutomation().catch(e => console.error("[next_action_auto]", e?.message || e)), 10 * 60 * 1000);
+setTimeout(() => fireNextBestActionAutomation().catch(() => {}), 90 * 1000);
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log("icl-twilio-intake listening on :" + PORT);

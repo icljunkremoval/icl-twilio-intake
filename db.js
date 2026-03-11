@@ -50,7 +50,21 @@ async function initDb() {
       vision_access_level TEXT,
       actual_load_bucket TEXT,
       last_error TEXT,
-      status TEXT
+      status TEXT,
+      settled_revenue_cents INTEGER,
+      square_settled_at TEXT,
+      labor_cost_cents INTEGER,
+      disposal_cost_cents INTEGER,
+      fuel_cost_cents INTEGER,
+      other_cost_cents INTEGER,
+      total_cost_cents INTEGER,
+      margin_cents INTEGER,
+      margin_pct REAL,
+      margin_refreshed_at TEXT,
+      next_action_sent_at TEXT,
+      next_action_sent_count INTEGER DEFAULT 0,
+      next_action_last_kind TEXT,
+      next_action_last_error TEXT
     );
 
     CREATE TABLE IF NOT EXISTS events (
@@ -105,7 +119,21 @@ async function initDb() {
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS quote_status TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS quote_ready INTEGER DEFAULT 0",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS load_bucket TEXT",
-    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS access_level TEXT"
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS access_level TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS settled_revenue_cents INTEGER",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS square_settled_at TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS labor_cost_cents INTEGER",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS disposal_cost_cents INTEGER",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS fuel_cost_cents INTEGER",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS other_cost_cents INTEGER",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS total_cost_cents INTEGER",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS margin_cents INTEGER",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS margin_pct REAL",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS margin_refreshed_at TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_action_sent_at TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_action_sent_count INTEGER DEFAULT 0",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_action_last_kind TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_action_last_error TEXT"
   ];
 
   for (const sql of migrations) {

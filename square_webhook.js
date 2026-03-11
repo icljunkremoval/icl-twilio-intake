@@ -4,6 +4,7 @@ const { pool, insertEvent } = require("./db");
 const { sendCrewBrief } = require("./crew_brief");
 const { processSalvage } = require("./salvage_pipeline");
 const { sendSms } = require("./twilio_sms");
+const { recordSettledRevenue } = require("./finance_pipeline");
 
 const SQUARE_WEBHOOK_SIGNATURE_KEY = process.env.SQUARE_WEBHOOK_SIGNATURE_KEY || "";
 
@@ -17,6 +18,34 @@ function verifySquareSignature(body, signature, url) {
 
 function buildWindowPickerSms() {
   return "Deposit received ✅ Your spot is locked in!\n\nReply with your arrival window:\n1) 8–10am\n2) 10am–12pm\n3) 12–2pm\n4) 2–4pm\n5) 4–6pm";
+}
+
+function phoneDigits(v) {
+  return String(v || "").replace(/\D/g, "");
+}
+
+async function findLeadByOrderOrPhone(orderId, payment) {
+  if (orderId) {
+    const byOrder = await pool.query("SELECT * FROM leads WHERE square_order_id = $1", [orderId]);
+    if (byOrder.rows[0]) return { lead: byOrder.rows[0], match: "order" };
+  }
+  const pDigits = phoneDigits(
+    payment?.buyer_details?.phone_number ||
+    payment?.billing_address?.phone_number ||
+    payment?.phone_number
+  );
+  if (pDigits.length >= 10) {
+    const byPhone = await pool.query(
+      `SELECT *
+       FROM leads
+       WHERE regexp_replace(from_phone, '\\D', '', 'g') LIKE '%' || $1
+       ORDER BY last_seen_at DESC
+       LIMIT 1`,
+      [pDigits.slice(-10)]
+    );
+    if (byPhone.rows[0]) return { lead: byPhone.rows[0], match: "phone" };
+  }
+  return { lead: null, match: "none" };
 }
 
 async function handleSquareWebhook(req, res) {
@@ -39,9 +68,10 @@ async function handleSquareWebhook(req, res) {
       return res.status(200).send("ok");
     }
 
-    // Extract order_id from event
+    // Extract order/payment identifiers from event
     let orderId = null;
     const obj = event?.data?.object || {};
+    const payment = obj?.payment || obj || {};
     if (obj?.payment?.order_id) {
       orderId = obj.payment.order_id;
     } else if (obj?.order?.id) {
@@ -54,28 +84,60 @@ async function handleSquareWebhook(req, res) {
     console.log("[square_webhook] orderId:", orderId, "keys:", Object.keys(obj));
 
     if (!orderId) {
-      console.log("[square_webhook] no order_id found");
-      return res.status(200).send("ok");
+      console.log("[square_webhook] no order_id found; attempting phone fallback");
     }
 
-    // Find lead by square_order_id
-    const result = await pool.query(
-      "SELECT * FROM leads WHERE square_order_id = $1",
-      [orderId]
+    const paymentId = String(
+      payment?.id ||
+      obj?.payment_id ||
+      event?.data?.id ||
+      ""
     );
-    const lead = result.rows[0];
+    const amountCents = Number(
+      payment?.amount_money?.amount ||
+      payment?.total_money?.amount ||
+      0
+    );
+    const settledAt = payment?.updated_at || payment?.created_at || new Date().toISOString();
 
+    const { lead, match } = await findLeadByOrderOrPhone(orderId, payment);
     if (!lead) {
-      console.log("[square_webhook] no lead found for order_id:", orderId);
+      console.log("[square_webhook] no lead found for payment/order:", paymentId, orderId);
       return res.status(200).send("ok");
     }
 
-    if (lead.deposit_paid) {
-      console.log("[square_webhook] deposit already recorded for:", lead.from_phone);
+    // Idempotency guard: ignore replayed payment.completed for same payment_id.
+    if (paymentId) {
+      const replay = await pool.query(
+        `SELECT 1
+         FROM events
+         WHERE from_phone = $1
+           AND event_type = 'settled_revenue_ingested'
+           AND payload_json LIKE '%' || $2 || '%'
+         LIMIT 1`,
+        [lead.from_phone, `"payment_id":"${paymentId}"`]
+      );
+      if (replay.rows[0]) {
+        console.log("[square_webhook] duplicate payment event ignored:", paymentId);
+        return res.status(200).send("ok");
+      }
+    }
+
+    if (Number.isFinite(amountCents) && amountCents > 0) {
+      await recordSettledRevenue(lead.from_phone, {
+        paymentId,
+        orderId,
+        amountCents,
+        settledAt
+      });
+    }
+
+    // Deposit workflow should only fire from direct order match.
+    if (lead.deposit_paid || match !== "order") {
+      console.log("[square_webhook] revenue logged; deposit flow skipped", { phone: lead.from_phone, match, deposit_paid: lead.deposit_paid });
       return res.status(200).send("ok");
     }
 
-    // Mark deposit paid
     await pool.query(
       "UPDATE leads SET deposit_paid=1, deposit_paid_at=NOW(), quote_status='DEPOSIT_PAID', last_seen_at=NOW() WHERE from_phone=$1",
       [lead.from_phone]
@@ -85,7 +147,7 @@ async function handleSquareWebhook(req, res) {
       insertEvent.run({
         from_phone: lead.from_phone,
         event_type: "deposit_paid",
-        payload_json: JSON.stringify({ order_id: orderId, event_type: eventType }),
+        payload_json: JSON.stringify({ order_id: orderId, event_type: eventType, payment_id: paymentId, amount_cents: amountCents }),
         created_at: new Date().toISOString(),
       });
     } catch {}
