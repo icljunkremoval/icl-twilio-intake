@@ -1661,26 +1661,26 @@ function buildRefs(){
 
 const DEFAULT={
   critical:[
-    {id:'k1',tag:'sys',title:'Register A2P 10DLC',note:'Twilio Console → Regulatory. 323-307-7855 filtered.'},
-    {id:'k2',tag:'sys',title:'Fix ops webhook — get Twilio ops number',note:'213-880-6318 = personal cell. DONE/DIVERT/SOLD broken.'},
-    {id:'k3',tag:'dat',title:'Deploy /api/permits proxy to Railway',note:'Add railway-api-routes.js to server.js → commit → push.'},
+    {id:'k1',tag:'biz',title:'Yard sign launch protocol (tomorrow 6am)',note:'Do NOT deploy all 100. Run batch plan: 40 signs Day 1, 30 signs Day 4, 30 signs Day 8.'},
+    {id:'k2',tag:'sys',title:'Create tracked sign channels',note:'Print 3 tracking sets: SIGN-A / SIGN-B / SIGN-C (QR + short URL + dedicated Twilio keyword).'},
+    {id:'k3',tag:'sys',title:'Staff SLA for launch week',note:'Set response SLA <5 minutes 8am-8pm. Route red-stage leads to immediate callback queue.'},
   ],
   inprogress:[
-    {id:'k4',tag:'sys',title:'Test Google Calendar integration',note:'Committed, untested. Verify booking flow end-to-end.'},
-    {id:'k5',tag:'sys',title:'Add Vision LOW confidence guard',note:'Currently quotes even when load_confidence=LOW.'},
+    {id:'k4',tag:'dat',title:'Yard sign geo-index + segment score',note:'Tag each sign to street segment + side of street + visibility score.'},
+    {id:'k5',tag:'grow',title:'Install capillary corridor signs first',note:'Prioritize Stocker, Windsor, Crenshaw inner spine, Slauson connectors.'},
   ],
   upcoming:[
-    {id:'k6',tag:'biz',title:'Outreach: 2 probate attorneys 90043/90056',note:'lasuperiorcourt.org → active filings → call.'},
-    {id:'k7',tag:'biz',title:'Identify 2 estate realtors in T-001',note:'Zillow/Redfin: "trust sale" 90043, 90056.'},
-    {id:'k8',tag:'dat',title:'Add zip_code + referral_source to DB',note:'Parse from address on AWAITING_ADDRESS state.'},
-    {id:'k9',tag:'sys',title:'Add quiet-hours guard to drop-off SMS',note:'Currently can fire at 1am. Add 8am–8pm check.'},
-    {id:'k10',tag:'sys',title:'Add day options timestamp on presentation',note:'Prevents midnight rollover corrupting day mapping.'},
+    {id:'k6',tag:'dat',title:'48-hour sign cohort report',note:'For each batch: scans, inbound leads, quote rate, deposit rate, booked jobs, CAC-by-sign.'},
+    {id:'k7',tag:'grow',title:'Creative rotation by cohort',note:'Test 2 headlines + 2 QR call-to-actions. Keep winner, replace low performers.'},
+    {id:'k8',tag:'sys',title:'Sign ops lifecycle',note:'Deploy, inspect, replace, recover. Track damaged/missing signs and top theft zones.'},
+    {id:'k9',tag:'biz',title:'Neighbor density expansion',note:'If Batch A performs, densify 1-block radius before opening new zones.'},
+    {id:'k10',tag:'sys',title:'After-hours lead handling',note:'Auto-reply + next-morning callback queue so sign leads are never dropped overnight.'},
   ],
   done:[
-    {id:'k11',tag:'sys',title:'SMS state machine (11 states)',note:'conversation.js — fully operational.'},
-    {id:'k12',tag:'sys',title:'Square payment link integration',note:'quote_worker.js — fires on QUOTE_READY.'},
-    {id:'k13',tag:'sys',title:'Vision AI photo analysis',note:'claude-opus via vision_analyzer.js.'},
-    {id:'k14',tag:'sys',title:'Crew brief automation',note:'crew_brief.js — SMS on payment.completed.'},
+    {id:'k11',tag:'sys',title:'Lead lifecycle map (RED/YELLOW/GREEN)',note:'Red=pre-deposit, Yellow=deposit/scheduled, Green=completed/review.'},
+    {id:'k12',tag:'sys',title:'Ops Command Center route engine',note:'ETA + risk + route suggestions live via /api/dashboard/leads.'},
+    {id:'k13',tag:'dat',title:'Capillary street layer live on map',note:'Planner corridor toggle added for deployment and routing focus.'},
+    {id:'k14',tag:'sys',title:'Media preview in admin leads',note:'Inline thumbnail previews + lead-level gallery extraction live.'},
   ],
 };
 
