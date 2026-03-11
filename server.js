@@ -39,7 +39,12 @@ async function geocodeOSM(q) {
 
 const app = express();
 app.use("/public", require("express").static(require("path").join(__dirname, "public")));
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "2mb" }))
+// Territory dashboard
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
+});
+;
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
