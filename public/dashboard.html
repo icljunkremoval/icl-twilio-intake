@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ICL · Territory 001</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
 <style>
 :root{
   --bg:#070912;--bg2:#0f1623;--bg3:#162032;--bg4:#1c2a42;
@@ -113,6 +114,9 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 /* ── SVG MAP ── */
 #map-svg-wrap{position:relative;background:var(--bg3);border-radius:0 0 6px 6px;overflow:hidden}
 #map-svg{width:100%;display:block;cursor:crosshair}
+#street-map-wrap{position:relative;background:var(--bg3);border-radius:0 0 6px 6px;overflow:hidden}
+#street-map{width:100%;height:520px}
+.leaflet-container{background:#0d1422}
 .map-tooltip{
   position:absolute;pointer-events:none;
   background:var(--bg2);border:1px solid var(--bd2);border-radius:6px;
@@ -338,12 +342,18 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
       <button class="mc mc-layer" onclick="setLayer('seniors',this)">65+ Population</button>
       <button class="mc mc-layer" onclick="setLayer('revenue',this)">Est. ICL Revenue</button>
       <button class="mc on" id="territory-toggle" onclick="toggleTerritoryEdge(this)">Territory Edge</button>
+      <button class="mc mc-mode on" onclick="setMapMode('street',this)">Street Map</button>
+      <button class="mc mc-mode" onclick="setMapMode('choropleth',this)">Choropleth</button>
+      <button class="mc" onclick="openStreetView()">Street View ↗</button>
       <span class="mc-lbl" style="margin-left:10px">Map:</span>
       <button class="mc" onclick="mapZoomIn()">＋</button>
       <button class="mc" onclick="mapZoomOut()">－</button>
       <button class="mc" onclick="mapResetView()">Reset</button>
     </div>
-    <div class="cb0" id="map-svg-wrap" style="position:relative;background:#0d1422;min-height:520px">
+    <div class="cb0" id="street-map-wrap" style="position:relative;background:#0d1422;min-height:520px">
+      <div id="street-map"></div>
+    </div>
+    <div class="cb0" id="map-svg-wrap" style="position:relative;background:#0d1422;min-height:520px;display:none">
       <div class="map-tooltip" id="map-tt"></div>
       <svg id="map-svg" viewBox="0 0 800 520" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:520px;display:block"></svg>
     </div>
@@ -417,6 +427,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
   </div>
 </div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
 'use strict';
 
@@ -466,13 +477,17 @@ function go(id,btn){
   if(id==='map'){
     setTimeout(()=>{
       try{
-        if(!mapBuilt){
-          buildMap();
-          mapBuilt=true;
+        if(mapMode==='street'){
+          ensureStreetMap();
         }else{
-          updateMap(curLayer);
+          if(!mapBuilt){
+            buildMap();
+            mapBuilt=true;
+          }else{
+            updateMap(curLayer);
+          }
+          ensureMapRendered();
         }
-        ensureMapRendered();
       }catch(e){
         console.error('[dashboard] map render failed',e);
       }
@@ -549,12 +564,14 @@ async function fetchLeads(){
     document.getElementById('leads-mini').innerHTML=leads.slice(0,5).map(leadHtml).join('');
     document.getElementById('leads-full').innerHTML=leads.map(leadHtml).join('')||'<div style="padding:8px;font-size:10px;color:var(--tx3)">No leads yet.</div>';
     if(mapBuilt)renderMap(curLayer);
+    if(streetMap)renderStreetLeads();
   }catch(e){
     MAP_LEAD_PINS=[];
     ['kpi-tot','kpi-q','kpi-bk','kpi-rev'].forEach(id=>document.getElementById(id).textContent='—');
     const fb=`<div style="padding:14px;background:var(--bg3);border-radius:5px;text-align:center;font-size:10px;color:var(--tx3)">Live leads unavailable right now.</div>`;
     ['leads-mini','leads-full'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML=fb;});
     if(mapBuilt)renderMap(curLayer);
+    if(streetMap)renderStreetLeads();
   }
 }
 
@@ -592,6 +609,7 @@ async function fetchCensus(){
     });
     renderCensusCharts();
     if(mapBuilt)updateMap(curLayer);
+    if(streetMap)renderStreetZips();
   }catch(e){
     // Verified fallback
     CD={
@@ -603,6 +621,7 @@ async function fetchCensus(){
     document.getElementById('cens-tag').textContent='ACS 2023 · static fallback';
     renderCensusCharts();
     if(mapBuilt)updateMap(curLayer);
+    if(streetMap)renderStreetZips();
   }
 }
 
@@ -835,9 +854,16 @@ function zoomAt(sx,sy,factor){
   clampMapView();
   applyMapView();
 }
-function mapZoomIn(){zoomAt(mapView.x+mapView.w/2,mapView.y+mapView.h/2,0.82);}
-function mapZoomOut(){zoomAt(mapView.x+mapView.w/2,mapView.y+mapView.h/2,1.22);}
+function mapZoomIn(){
+  if(mapMode==='street'&&streetMap){streetMap.zoomIn();return;}
+  zoomAt(mapView.x+mapView.w/2,mapView.y+mapView.h/2,0.82);
+}
+function mapZoomOut(){
+  if(mapMode==='street'&&streetMap){streetMap.zoomOut();return;}
+  zoomAt(mapView.x+mapView.w/2,mapView.y+mapView.h/2,1.22);
+}
 function mapResetView(){
+  if(mapMode==='street'&&streetMap){fitStreetToTerritory();return;}
   mapView={...MAP_VB_DEFAULT};
   applyMapView();
 }
@@ -922,6 +948,118 @@ function appendLeadPinsDom(svg){
 
 let curLayer='income';
 let hoveredZip=null;
+let mapMode='street';
+let streetMap=null;
+let streetLayers={territory:null,zips:null,leads:null};
+let selectedStreetLatLng=null;
+
+function toLatLng(coords){return coords.map(([lng,lat])=>[lat,lng]);}
+function fitStreetToTerritory(){
+  if(!streetMap||typeof L==='undefined')return;
+  const b=L.latLngBounds(toLatLng(TERRITORY_EDGE));
+  streetMap.fitBounds(b.pad(0.12),{animate:false});
+}
+function ensureStreetMap(){
+  if(mapMode!=='street')return;
+  if(typeof L==='undefined')return;
+  const el=document.getElementById('street-map');
+  if(!el)return;
+  if(!streetMap){
+    streetMap=L.map(el,{zoomControl:false,attributionControl:true});
+    L.control.zoom({position:'topright'}).addTo(streetMap);
+    const detailed=L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{
+      maxZoom:20,
+      attribution:'&copy; OpenStreetMap, &copy; CARTO'
+    }).addTo(streetMap);
+    const osm=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+      maxZoom:20,
+      attribution:'&copy; OpenStreetMap'
+    });
+    L.control.layers({'Detailed Streets':detailed,'OpenStreetMap':osm},null,{position:'bottomright',collapsed:true}).addTo(streetMap);
+    fitStreetToTerritory();
+  }
+  renderStreetTerritory();
+  renderStreetZips();
+  renderStreetLeads();
+  setTimeout(()=>{try{streetMap.invalidateSize();}catch(e){}},60);
+}
+function renderStreetTerritory(){
+  if(!streetMap||typeof L==='undefined')return;
+  if(streetLayers.territory){streetMap.removeLayer(streetLayers.territory);}
+  if(!showTerritoryEdge){streetLayers.territory=null;return;}
+  const grp=L.layerGroup();
+  const path=toLatLng(TERRITORY_EDGE);
+  L.polygon(path,{color:'#93c5fd',weight:4,fillColor:'#38bdf8',fillOpacity:.08,opacity:.95}).addTo(grp);
+  L.polyline(path,{color:'#fff',weight:2,dashArray:'8 6',opacity:.95}).addTo(grp);
+  path.slice(0,-1).forEach((pt,idx)=>{
+    L.circleMarker(pt,{radius:4,color:'#1d4ed8',weight:1.2,fillColor:'#dbeafe',fillOpacity:.95}).addTo(grp);
+    if(idx%2===0)L.marker(pt,{interactive:false,icon:L.divIcon({className:'',html:`<div style="font:700 10px DM Mono,monospace;color:#dbeafe;text-shadow:0 1px 2px #000">${idx+1}</div>`})}).addTo(grp);
+  });
+  grp.addTo(streetMap);
+  streetLayers.territory=grp;
+}
+function renderStreetZips(){
+  if(!streetMap||typeof L==='undefined')return;
+  if(streetLayers.zips){streetMap.removeLayer(streetLayers.zips);}
+  const grp=L.layerGroup();
+  Object.entries(ZONES).forEach(([zip,zone])=>{
+    const val=getZipVal(zip,curLayer);
+    const col=getColor(val,curLayer);
+    const poly=L.polygon(toLatLng(zone.coords),{
+      color:'#2563eb',
+      weight:1.5,
+      fillColor:col,
+      fillOpacity:.22
+    });
+    poly.bindTooltip(`${zip} · ${zone.name}<br>${SCALES[curLayer].label}: ${SCALES[curLayer].fmt(val)}`,{sticky:true,direction:'top'});
+    poly.addTo(grp);
+  });
+  grp.addTo(streetMap);
+  streetLayers.zips=grp;
+}
+function renderStreetLeads(){
+  if(!streetMap||typeof L==='undefined')return;
+  if(streetLayers.leads){streetMap.removeLayer(streetLayers.leads);}
+  const grp=L.layerGroup();
+  (MAP_LEAD_PINS||[]).forEach(lead=>{
+    const lat=Number(lead.lat),lng=Number(lead.lng);
+    if(!Number.isFinite(lat)||!Number.isFinite(lng))return;
+    const c=pinColor(lead.stage);
+    const marker=L.circleMarker([lat,lng],{
+      radius:7,color:'#0b1220',weight:1.5,fillColor:c,fillOpacity:.92
+    });
+    marker.bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px;line-height:1.45">
+      <div style="font-weight:700;color:${c};margin-bottom:4px">${lead.stage_label||'Lead'}</div>
+      <div>${fPhone(lead.phone)}</div>
+      <div style="opacity:.8">${lead.address||'No address'}</div>
+      <div style="opacity:.75">${stateLabel(lead.conv_state||lead.quote_status||'NEW')}</div>
+    </div>`);
+    marker.on('click',()=>{selectedStreetLatLng={lat,lng};});
+    marker.addTo(grp);
+  });
+  grp.addTo(streetMap);
+  streetLayers.leads=grp;
+}
+function setMapMode(mode,btn){
+  mapMode=mode;
+  document.querySelectorAll('.mc-mode').forEach(b=>b.classList.remove('on'));
+  if(btn)btn.classList.add('on');
+  const streetWrap=document.getElementById('street-map-wrap');
+  const svgWrap=document.getElementById('map-svg-wrap');
+  if(streetWrap)streetWrap.style.display=mode==='street'?'block':'none';
+  if(svgWrap)svgWrap.style.display=mode==='choropleth'?'block':'none';
+  if(mode==='street')ensureStreetMap();
+  else ensureMapRendered();
+}
+function openStreetView(){
+  let lat=null,lng=null;
+  if(selectedStreetLatLng){lat=selectedStreetLatLng.lat;lng=selectedStreetLatLng.lng;}
+  else if(MAP_LEAD_PINS&&MAP_LEAD_PINS[0]){lat=Number(MAP_LEAD_PINS[0].lat);lng=Number(MAP_LEAD_PINS[0].lng);}
+  else if(streetMap){const c=streetMap.getCenter();lat=c.lat;lng=c.lng;}
+  if(!Number.isFinite(lat)||!Number.isFinite(lng))return;
+  const u=`https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lng}`;
+  window.open(u,'_blank','noopener');
+}
 
 function buildMap(){
   mapBuilt=true;
@@ -1155,11 +1293,13 @@ function setLayer(metric,btn){
   btn.classList.add('on');
   curLayer=metric;
   if(mapBuilt)renderMap(metric);
+  if(streetMap)renderStreetZips();
 }
 function toggleTerritoryEdge(btn){
   showTerritoryEdge=!showTerritoryEdge;
   btn.classList.toggle('on',showTerritoryEdge);
   if(mapBuilt)renderMap(curLayer);
+  if(streetMap)renderStreetTerritory();
 }
 
 function ensureMapRendered(){
@@ -1412,10 +1552,11 @@ window.addEventListener('DOMContentLoaded',()=>{
   try{fetchCensus();}catch(e){}
   try{buildRefs();}catch(e){}
   try{loadK();renderK();}catch(e){KS=JSON.parse(JSON.stringify(DEFAULT));try{renderK();}catch(e2){}}
-  // Pre-render once so map tab doesn't depend solely on click timing.
-  setTimeout(()=>{try{ensureMapRendered();}catch(e){}},150);
-  // Retry a few times for slow browsers/layout passes.
-  [500,1000,2000].forEach(ms=>setTimeout(()=>{try{ensureMapRendered();}catch(e){}},ms));
+  // Initialize map mode controls at load; map initializes on first map tab open.
+  try{setMapMode('street',document.querySelector('.mc-mode.on'));}catch(e){}
+  // Pre-render fallback for choropleth mode.
+  setTimeout(()=>{try{if(mapMode==='choropleth')ensureMapRendered();}catch(e){}},150);
+  [500,1000,2000].forEach(ms=>setTimeout(()=>{try{if(mapMode==='choropleth')ensureMapRendered();}catch(e){}},ms));
   setInterval(()=>{try{fetchLeads();}catch(e){}},60000);
 });
 </script>
