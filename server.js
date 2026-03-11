@@ -112,6 +112,13 @@ const MATRIX_TTL_MS = 90 * 1000;
 const OPP_CACHE = { ts: 0, data: null };
 const OPP_TTL_MS = 10 * 60 * 1000;
 const TERRITORY_BBOX = { minLng: -118.41, minLat: 33.95, maxLng: -118.32, maxLat: 34.03 };
+const CAPILLARY_STREETS = [
+  [[-118.364, 34.001], [-118.329, 33.993]], // Stocker axis
+  [[-118.360, 33.986], [-118.335, 33.970]], // Windsor / View Park connector
+  [[-118.353, 34.012], [-118.333, 33.999]], // Baldwin Village diagonal
+  [[-118.346, 34.006], [-118.338, 33.978]], // Crenshaw inner spine
+  [[-118.371, 33.989], [-118.329, 33.989]], // Slauson
+];
 
 function matrixCacheKey(points) {
   return points.map((p) => `${Number(p.lat).toFixed(4)},${Number(p.lng).toFixed(4)}`).join("|");
@@ -181,6 +188,38 @@ function routeTravelCost(routeIdxs, matrix) {
   return cost;
 }
 
+function pointToSegmentMiles(lat, lng, a, b) {
+  const latRad = (lat * Math.PI) / 180;
+  const sx = (a[0] - lng) * 69 * Math.cos(latRad);
+  const sy = (a[1] - lat) * 69;
+  const ex = (b[0] - lng) * 69 * Math.cos(latRad);
+  const ey = (b[1] - lat) * 69;
+  const dx = ex - sx;
+  const dy = ey - sy;
+  const len2 = dx * dx + dy * dy;
+  if (len2 <= 1e-12) return Math.hypot(sx, sy);
+  const t = Math.max(0, Math.min(1, -((sx * dx) + (sy * dy)) / len2));
+  const px = sx + t * dx;
+  const py = sy + t * dy;
+  return Math.hypot(px, py);
+}
+
+function minCapillaryDistanceMiles(lat, lng) {
+  let best = Number.POSITIVE_INFINITY;
+  for (const seg of CAPILLARY_STREETS) {
+    const d = pointToSegmentMiles(lat, lng, seg[0], seg[1]);
+    if (d < best) best = d;
+  }
+  return Number.isFinite(best) ? best : 99;
+}
+
+function capillaryBonus(distanceMi) {
+  if (distanceMi <= 0.2) return 12;
+  if (distanceMi <= 0.4) return 7;
+  if (distanceMi <= 0.7) return 3;
+  return 0;
+}
+
 function twoOptRoute(routeIdxs, matrix) {
   if (routeIdxs.length < 4) return routeIdxs;
   let best = [...routeIdxs];
@@ -212,11 +251,11 @@ function computeRisk(stage, convState, inactivityMin) {
   return "low";
 }
 
-function computePriority(stage, risk, inactivityMin, etaMin) {
+function computePriority(stage, risk, inactivityMin, etaMin, plannerBonus = 0) {
   const s = stage === "red" ? 55 : stage === "yellow" ? 35 : 5;
   const r = risk === "high" ? 35 : risk === "medium" ? 15 : 0;
   const inactivity = Math.min(40, Math.floor(inactivityMin / 5));
-  return Math.round(s + r + inactivity - Math.min(18, etaMin * 0.35));
+  return Math.round(s + r + inactivity - Math.min(18, etaMin * 0.35) + Number(plannerBonus || 0));
 }
 
 function buildRouteSuggestionV2(candidates, matrix, maxStops = 8, mode = "osrm_road") {
@@ -647,6 +686,7 @@ app.get("/api/dashboard/leads", async (req, res) => {
         l.quote_status,
         l.deposit_paid,
         l.deposit_paid_at,
+        l.junk_fee_actual,
         l.load_bucket,
         l.geo_lat,
         l.geo_lng,
@@ -707,7 +747,9 @@ app.get("/api/dashboard/leads", async (req, res) => {
       const etaMin = estimateEtaMinutes(miles, now);
       const inactivityMin = Math.max(0, Math.floor((Date.now() - new Date(row.last_seen_at || row.first_seen_at || Date.now()).getTime()) / 60000));
       const risk = computeRisk(life.stage, row.conv_state, inactivityMin);
-      const priorityScore = computePriority(life.stage, risk, inactivityMin, etaMin);
+      const capillaryDistanceMi = minCapillaryDistanceMiles(lat, lng);
+      const plannerBonus = capillaryBonus(capillaryDistanceMi);
+      const priorityScore = computePriority(life.stage, risk, inactivityMin, etaMin, plannerBonus);
       pins.push({
         phone: row.from_phone,
         address: row.address_text,
@@ -721,6 +763,8 @@ app.get("/api/dashboard/leads", async (req, res) => {
         source,
         eta_minutes_est: etaMin,
         distance_miles_to_base: Number(miles.toFixed(2)),
+        planner_corridor_distance_mi: Number(capillaryDistanceMi.toFixed(2)),
+        planner_bonus: plannerBonus,
         inactivity_minutes: inactivityMin,
         risk,
         priority_score: priorityScore
@@ -753,6 +797,22 @@ app.get("/api/dashboard/leads", async (req, res) => {
     }
     const stageCounts = pins.reduce((a, p) => { a[p.stage] = (a[p.stage] || 0) + 1; return a; }, { red: 0, yellow: 0, green: 0 });
     const riskCounts = pins.reduce((a, p) => { a[p.risk] = (a[p.risk] || 0) + 1; return a; }, { high: 0, medium: 0, low: 0 });
+    const rowByPhone = new Map(rows.map((r) => [String(r.from_phone), r]));
+    const todayKey = new Date().toDateString();
+    const bookedToday = pins.filter((p) => p.stage === "green").filter((p) => {
+      const rs = rowByPhone.get(String(p.phone));
+      return new Date(rs?.last_seen_at || 0).toDateString() === todayKey;
+    }).length;
+    const depositRate = pins.length ? Math.round(((stageCounts.yellow + stageCounts.green) / pins.length) * 100) : 0;
+    const settledRows = rows.filter((r) => Number(r.deposit_paid) === 1 || leadLifecycle(r).stage === "green");
+    const revenueSamples = settledRows
+      .map((r) => Number(r.junk_fee_actual))
+      .filter((v) => Number.isFinite(v) && v > 0);
+    const avgRevenueJob = revenueSamples.length
+      ? Math.round(revenueSamples.reduce((s, v) => s + v, 0) / revenueSamples.length)
+      : null;
+    const avgMarginJob = Number.isFinite(avgRevenueJob) && avgRevenueJob > 0 ? Math.round(avgRevenueJob * 0.42) : null;
+    const squareConnected = Boolean(process.env.SQUARE_ACCESS_TOKEN || process.env.SQUARE_API_TOKEN || process.env.SQUARE_TOKEN);
     const active = pins.filter((p) => p.stage !== "green");
     const avgEta = active.length ? Math.round(active.reduce((s, p) => s + (p.eta_minutes_est || 0), 0) / active.length) : 0;
     res.json({
@@ -766,6 +826,11 @@ app.get("/api/dashboard/leads", async (req, res) => {
         stage_counts: stageCounts,
         risk_counts: riskCounts,
         avg_eta_min: avgEta,
+        booked_today: bookedToday,
+        deposit_rate: depositRate,
+        avg_revenue_job: avgRevenueJob,
+        avg_margin_job: avgMarginJob,
+        square_connected: squareConnected,
         eta_mode: etaMode,
         generated_at: new Date().toISOString()
       }
