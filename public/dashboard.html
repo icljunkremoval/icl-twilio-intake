@@ -131,6 +131,8 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .map-legend{display:flex;flex-direction:column;gap:4px}
 .leg-item{display:flex;align-items:center;gap:7px;font-size:9px;color:var(--tx2)}
 .leg-sw{width:13px;height:13px;border-radius:2px;flex-shrink:0}
+.lead-pin-dot{stroke:rgba(8,13,23,.95);stroke-width:1.6}
+.lead-pin-ring{fill:none;stroke-width:1.2;opacity:.65}
 
 /* ── BAR CHART ── */
 .bc{display:flex;flex-direction:column;gap:8px}
@@ -478,6 +480,7 @@ const f$=v=>v&&Number(v)>0?'$'+Number(v).toLocaleString():'—';
 const fPct=v=>v?v+'%':'—';
 function fPhone(p){if(!p)return'—';const d=p.replace(/\D/g,'').slice(-10);return d.length===10?`(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`:p;}
 function fAgo(ts){if(!ts)return'';const m=Math.floor((Date.now()-new Date(ts))/60000);if(m<60)return m+'m';if(m<1440)return Math.floor(m/60)+'h';return Math.floor(m/1440)+'d';}
+let MAP_LEAD_PINS=[];
 
 // ── LEADS ─────────────────────────────────────────────────────────────────────
 function stateCls(s){
@@ -521,10 +524,11 @@ function setPipe(leads){
 
 async function fetchLeads(){
   try{
-    const r=await fetch('/admin/leads',{headers:{'Accept':'application/json'},credentials:'include'});
+    const r=await fetch('/api/dashboard/leads',{headers:{'Accept':'application/json'}});
     if(!r.ok)throw new Error(r.status);
     const raw=await r.json();
     const leads=Array.isArray(raw)?raw:(raw.leads||raw.data||[]);
+    MAP_LEAD_PINS=Array.isArray(raw.pins)?raw.pins:[];
     const today=new Date().toDateString();
     const todayCt=leads.filter(l=>new Date(l.created_at||l.createdAt||0).toDateString()===today).length;
     const quoted=leads.filter(l=>(l.state||'').toUpperCase().includes('QUOTE')).length;
@@ -539,10 +543,13 @@ async function fetchLeads(){
     setPipe(leads);
     document.getElementById('leads-mini').innerHTML=leads.slice(0,5).map(leadHtml).join('');
     document.getElementById('leads-full').innerHTML=leads.map(leadHtml).join('')||'<div style="padding:8px;font-size:10px;color:var(--tx3)">No leads yet.</div>';
+    if(mapBuilt)renderMap(curLayer);
   }catch(e){
+    MAP_LEAD_PINS=[];
     ['kpi-tot','kpi-q','kpi-bk','kpi-rev'].forEach(id=>document.getElementById(id).textContent='—');
-    const fb=`<div style="padding:14px;background:var(--bg3);border-radius:5px;text-align:center;font-size:10px;color:var(--tx3)">Auth required · <a href="https://icl-twilio-intake-production.up.railway.app/admin/leads" target="_blank">Open Admin →</a></div>`;
+    const fb=`<div style="padding:14px;background:var(--bg3);border-radius:5px;text-align:center;font-size:10px;color:var(--tx3)">Live leads unavailable right now.</div>`;
     ['leads-mini','leads-full'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML=fb;});
+    if(mapBuilt)renderMap(curLayer);
   }
 }
 
@@ -751,6 +758,48 @@ function getColor(val,metric){
   return c;
 }
 
+const PIN_COLORS={red:'#ef4444',yellow:'#f59e0b',green:'#10b981'};
+function clamp(v,min,max){return Math.min(max,Math.max(min,v));}
+function pinColor(stage){return PIN_COLORS[stage]||PIN_COLORS.red;}
+function jitterFromPhone(phone){
+  const s=String(phone||'');
+  let h=0;
+  for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))%9973;
+  return {dx:(h%9)-4,dy:(Math.floor(h/9)%9)-4};
+}
+function renderLeadPinsHtml(){
+  if(!Array.isArray(MAP_LEAD_PINS)||MAP_LEAD_PINS.length===0)return'';
+  let out='';
+  MAP_LEAD_PINS.forEach((p,idx)=>{
+    const lng=Number(p.lng),lat=Number(p.lat);
+    if(!Number.isFinite(lng)||!Number.isFinite(lat))return;
+    const [x0,y0]=project(clamp(lng,VB.minLng,VB.maxLng),clamp(lat,VB.minLat,VB.maxLat));
+    const j=jitterFromPhone(p.phone);
+    const x=Math.round(x0+j.dx),y=Math.round(y0+j.dy);
+    const c=pinColor(p.stage);
+    out+=`<g class="lead-pin" data-pin-idx="${idx}" style="cursor:pointer">
+      <circle class="lead-pin-ring" cx="${x}" cy="${y}" r="7.5" stroke="${c}"/>
+      <circle class="lead-pin-dot" cx="${x}" cy="${y}" r="4.7" fill="${c}"/>
+    </g>`;
+  });
+  return out;
+}
+function appendLeadPinsDom(svg){
+  if(!Array.isArray(MAP_LEAD_PINS)||MAP_LEAD_PINS.length===0)return;
+  MAP_LEAD_PINS.forEach((p,idx)=>{
+    const lng=Number(p.lng),lat=Number(p.lat);
+    if(!Number.isFinite(lng)||!Number.isFinite(lat))return;
+    const [x0,y0]=project(clamp(lng,VB.minLng,VB.maxLng),clamp(lat,VB.minLat,VB.maxLat));
+    const j=jitterFromPhone(p.phone);
+    const x=Math.round(x0+j.dx),y=Math.round(y0+j.dy);
+    const c=pinColor(p.stage);
+    const g=svgEl('g',{'class':'lead-pin','data-pin-idx':idx,style:'cursor:pointer'});
+    g.appendChild(svgEl('circle',{cx:x,cy:y,r:'7.5','class':'lead-pin-ring',stroke:c}));
+    g.appendChild(svgEl('circle',{cx:x,cy:y,r:'4.7','class':'lead-pin-dot',fill:c}));
+    svg.appendChild(g);
+  });
+}
+
 let curLayer='income';
 let hoveredZip=null;
 
@@ -818,6 +867,11 @@ function renderMapDomFallback(metric){
       'font-weight':'700'
     })).textContent=zip;
   });
+  appendLeadPinsDom(svg);
+  VENUES.forEach(([lng,lat])=>{
+    const [vx,vy]=project(lng,lat);
+    svg.appendChild(svgEl('circle',{cx:vx,cy:vy,r:'6.6',fill:'#f59e0b','fill-opacity':'.9',stroke:'#fcd34d','stroke-width':'1.4'}));
+  });
 }
 
 function renderMap(metric){
@@ -865,6 +919,7 @@ function renderMap(metric){
       html+=`<text x="${px}" y="${py+22}" text-anchor="middle" fill="rgba(255,255,255,0.85)" font-size="9" font-family="DM Mono,monospace" font-weight="500">${SCALES[metric].fmt(val)}</text>`;
     }
   });
+  html+=renderLeadPinsHtml();
 
   // Venue markers
   VENUES.forEach(([lng,lat,emoji,note])=>{
@@ -898,6 +953,19 @@ function renderMap(metric){
       poly.setAttribute('stroke-width','1.5');
     });
   });
+  svg.querySelectorAll('g.lead-pin').forEach(pin=>{
+    pin.addEventListener('mouseenter',e=>{
+      const idx=Number(pin.dataset.pinIdx);
+      const lead=MAP_LEAD_PINS[idx];
+      if(lead)showLeadTooltip(e,lead);
+      pin.querySelector('.lead-pin-ring')?.setAttribute('opacity','1');
+    });
+    pin.addEventListener('mousemove',e=>moveTooltip(e));
+    pin.addEventListener('mouseleave',()=>{
+      hideTooltip();
+      pin.querySelector('.lead-pin-ring')?.setAttribute('opacity','.65');
+    });
+  });
 
   renderLegend(metric);
 }
@@ -914,6 +982,16 @@ function showTooltip(e,zip){
     <div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--bd)">
       <span class="th">Est. ICL Rev / yr</span> <span class="tg">${f$(d.estRevenue)}</span>
     </div>`;
+  tt.style.display='block';
+  moveTooltip(e);
+}
+function showLeadTooltip(e,lead){
+  const tt=document.getElementById('map-tt');
+  const color=pinColor(lead.stage);
+  tt.innerHTML=`<h4>${fPhone(lead.phone)} · <span style="color:${color}">${lead.stage_label||'Lead'}</span></h4>
+    <div><span class="th">Address</span> <span class="tv">${lead.address||'—'}</span></div>
+    <div><span class="th">State</span> <span class="tv">${stateLabel(lead.conv_state||lead.quote_status||'NEW')}</span></div>
+    <div><span class="th">Status</span> <span class="tv">${lead.quote_status||'—'}</span></div>`;
   tt.style.display='block';
   moveTooltip(e);
 }
@@ -954,12 +1032,18 @@ function ensureMapRendered(){
 
 function renderLegend(metric){
   const sc=SCALES[metric];
+  const pinCounts=(MAP_LEAD_PINS||[]).reduce((a,p)=>{const k=p.stage||'red';a[k]=(a[k]||0)+1;return a;},{red:0,yellow:0,green:0});
   document.getElementById('map-legend').innerHTML=
     `<div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:7px">${sc.label}</div>`+
     [...sc.colors].reverse().map((c,i)=>{
       const idx=sc.colors.length-1-i;
       return`<div class="leg-item"><div class="leg-sw" style="background:${c}"></div>${sc.fmt(sc.breaks[idx])}+</div>`;
-    }).join('');
+    }).join('')+
+    `<div style="height:1px;background:var(--bd);margin:8px 0"></div>
+    <div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px">Lead Lifecycle Pins</div>
+    <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.red};border-radius:99px"></div>Lead (${pinCounts.red||0})</div>
+    <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.yellow};border-radius:99px"></div>Deposit paid (${pinCounts.yellow||0})</div>
+    <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.green};border-radius:99px"></div>Completed / review (${pinCounts.green||0})</div>`;
 }
 
 // ── REFERRALS ─────────────────────────────────────────────────────────────────

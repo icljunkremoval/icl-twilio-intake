@@ -14,6 +14,12 @@ const { db, pool, upsertLead, insertEvent, getLead } = require("./db");
 const fetch = (...args) => import("node-fetch").then(({default: f}) => f(...args));
 
 const BASE_LOCATION = "506 E Brett St, Inglewood, CA 90301";
+const ZIP_CENTROIDS = {
+  "90008": { lat: 34.0075, lng: -118.3498 },
+  "90016": { lat: 34.0151, lng: -118.3554 },
+  "90043": { lat: 33.9854, lng: -118.3396 },
+  "90056": { lat: 33.9738, lng: -118.3718 },
+};
 
 function haversineMiles(lat1, lon1, lat2, lon2) {
   const toRad = (d) => (d * Math.PI) / 180;
@@ -26,15 +32,74 @@ function haversineMiles(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-async function geocodeOSM(q) {
+async function geocodeOSM(q, timeoutMs = 2800) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const url = new URL("https://nominatim.openstreetmap.org/search");
   url.searchParams.set("format", "json");
   url.searchParams.set("limit", "1");
   url.searchParams.set("q", q);
-  const r = await fetch(url.toString(), { headers: { "User-Agent": "ICL-Twilio-Intake/1.0" }});
-  const j = await r.json();
-  if (!Array.isArray(j) || j.length === 0) return null;
-  return { lat: Number(j[0].lat), lon: Number(j[0].lon), display: j[0].display_name };
+  try {
+    const r = await fetch(url.toString(), {
+      headers: { "User-Agent": "ICL-Twilio-Intake/1.0" },
+      signal: controller.signal
+    });
+    const j = await r.json();
+    if (!Array.isArray(j) || j.length === 0) return null;
+    return { lat: Number(j[0].lat), lon: Number(j[0].lon), display: j[0].display_name };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function leadLifecycle(row) {
+  const quote = String(row.quote_status || "").toUpperCase();
+  const conv = String(row.conv_state || "").toUpperCase();
+  const completed = quote.includes("COMPLETED") || quote.includes("REVIEW") || !!row.has_completed_event;
+  if (completed) return { stage: "green", label: "Completed / review" };
+  const depositLike =
+    Number(row.deposit_paid) === 1 ||
+    quote === "DEPOSIT_PAID" ||
+    quote === "BOOKING_SENT" ||
+    quote === "WINDOW_SELECTED" ||
+    conv === "BOOKING_SENT" ||
+    conv === "AWAITING_DAY" ||
+    conv === "WINDOW_SELECTED";
+  if (depositLike) return { stage: "yellow", label: "Deposit paid / scheduled" };
+  return { stage: "red", label: "Lead (pre-deposit)" };
+}
+
+async function resolveLeadCoordinates(row) {
+  const lat = Number(row.geo_lat);
+  const lng = Number(row.geo_lng);
+  if (Number.isFinite(lat) && Number.isFinite(lng)) {
+    return { lat, lng, source: row.geo_source || "cached" };
+  }
+
+  const zip = String(row.zip || row.zip_text || "").match(/\b\d{5}\b/)?.[0] || "";
+  const address = String(row.address_text || "").trim();
+  let geo = null;
+  let source = "osm";
+
+  if (address) {
+    const parts = [address];
+    if (zip && !address.includes(zip)) parts.push(zip);
+    parts.push("Los Angeles, CA");
+    geo = await geocodeOSM(parts.join(", "));
+  }
+  if (!geo && zip && ZIP_CENTROIDS[zip]) {
+    geo = { lat: ZIP_CENTROIDS[zip].lat, lon: ZIP_CENTROIDS[zip].lng };
+    source = "zip_fallback";
+  }
+  if (!geo) return null;
+
+  await pool.query(
+    "UPDATE leads SET geo_lat=$1, geo_lng=$2, geocoded_at=NOW(), geo_source=$3 WHERE from_phone=$4",
+    [Number(geo.lat), Number(geo.lon), source, row.from_phone]
+  ).catch(() => {});
+  return { lat: Number(geo.lat), lng: Number(geo.lon), source };
 }
 
 const app = express();
@@ -154,6 +219,97 @@ app.get("/contact.vcf", (_req, res) => {
   res.set("Content-Type", "text/vcard");
   res.set("Content-Disposition", "attachment; filename=ICL-Junk-Removal.vcf");
   res.send(vcard);
+});
+
+app.get("/api/dashboard/leads", async (req, res) => {
+  try {
+    const rawLimit = Number(req.query.limit || 120);
+    const limit = Number.isFinite(rawLimit) ? Math.max(20, Math.min(250, Math.floor(rawLimit))) : 120;
+    const rows = (await pool.query(
+      `SELECT
+        l.from_phone,
+        l.first_seen_at,
+        l.last_seen_at,
+        l.address_text,
+        l.zip,
+        l.zip_text,
+        l.conv_state,
+        l.quote_status,
+        l.deposit_paid,
+        l.deposit_paid_at,
+        l.load_bucket,
+        l.geo_lat,
+        l.geo_lng,
+        l.geocoded_at,
+        l.geo_source,
+        EXISTS(
+          SELECT 1 FROM events e
+          WHERE e.from_phone = l.from_phone
+            AND e.event_type = 'job_completed'
+        ) AS has_completed_event
+      FROM leads l
+      ORDER BY l.last_seen_at DESC
+      LIMIT $1`,
+      [limit]
+    )).rows;
+
+    const leads = rows.map((r) => ({
+      phone: r.from_phone,
+      from_phone: r.from_phone,
+      state: r.conv_state || r.quote_status || "NEW",
+      created_at: r.first_seen_at || r.last_seen_at,
+      last_seen_at: r.last_seen_at,
+      address: r.address_text || "",
+      zip: r.zip || r.zip_text || "",
+      load_bucket: r.load_bucket || null,
+      quote_status: r.quote_status || null,
+      deposit_paid: Number(r.deposit_paid) === 1,
+    }));
+
+    let geocodeAttempts = 0;
+    const pins = [];
+    for (const row of rows) {
+      if (!row.address_text) continue;
+      let lat = Number(row.geo_lat);
+      let lng = Number(row.geo_lng);
+      let source = row.geo_source || "cached";
+      if ((!Number.isFinite(lat) || !Number.isFinite(lng)) && geocodeAttempts < 12) {
+        geocodeAttempts += 1;
+        const geo = await resolveLeadCoordinates(row);
+        if (geo) {
+          lat = geo.lat;
+          lng = geo.lng;
+          source = geo.source;
+        }
+      }
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        const zip = String(row.zip || row.zip_text || "").match(/\b\d{5}\b/)?.[0] || "";
+        if (ZIP_CENTROIDS[zip]) {
+          lat = ZIP_CENTROIDS[zip].lat;
+          lng = ZIP_CENTROIDS[zip].lng;
+          source = "zip_fallback";
+        }
+      }
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      const life = leadLifecycle(row);
+      pins.push({
+        phone: row.from_phone,
+        address: row.address_text,
+        zip: row.zip || row.zip_text || "",
+        lat,
+        lng,
+        stage: life.stage,
+        stage_label: life.label,
+        conv_state: row.conv_state || null,
+        quote_status: row.quote_status || null,
+        source
+      });
+    }
+
+    res.json({ ok: true, leads, pins, meta: { total: leads.length, pins: pins.length } });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
 });
 
 app.get("/admin/twilio-latest", async (req, res) => {
