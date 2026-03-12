@@ -1,0 +1,24 @@
+{
+  "name": "Operator OS",
+  "short_name": "Operator OS",
+  "description": "A personal command center for discipline, faith, and momentum.",
+  "start_url": "/brief",
+  "display": "standalone",
+  "background_color": "#060610",
+  "theme_color": "#060610",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icons/operator.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/operator-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}
