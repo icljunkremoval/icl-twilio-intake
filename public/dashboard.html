@@ -1137,19 +1137,26 @@ const BASEMAP_LABELS=[
   {name:'View Park',lng:-118.366,lat:33.979},
   {name:'West Adams',lng:-118.346,lat:34.019},
 ];
-// Territory edge from user's shared Google Maps route waypoints
+// Operator-defined territory boundary (clockwise), tuned to match the shared map sketch.
 const TERRITORY_WAYPOINTS=[
-  [-118.3523303,33.9776848],
-  [-118.3306842,33.9890145],
-  [-118.3357807,34.0112725],
-  [-118.3540878,34.0266921],
-  [-118.3584891,33.9885698],
-  [-118.3709630,33.9880464],
-  [-118.3575469,33.9762973],
-  [-118.3533233,33.9655623],
-  [-118.3533638,33.9617947],
-  [-118.3701489,33.9616531],
-  [-118.3615260,33.9618030],
+  [-118.3542,34.0268], // north tip
+  [-118.3560,34.0220],
+  [-118.3562,34.0155],
+  [-118.3572,34.0060],
+  [-118.3578,33.9972],
+  [-118.3579,33.9739], // top-left connector
+  [-118.3729,33.9739], // west elbow
+  [-118.3730,33.9665],
+  [-118.3700,33.9619], // southwest corner
+  [-118.3578,33.9612],
+  [-118.3488,33.9614], // southeast corner
+  [-118.3489,33.9672], // lower notch rise
+  [-118.3385,33.9718],
+  [-118.3277,33.9780], // east lower bend
+  [-118.3295,33.9945],
+  [-118.3333,34.0085],
+  [-118.3422,34.0138],
+  [-118.3494,34.0180],
 ];
 let showTerritoryEdge=true;
 let showNeighborhoods=true;
@@ -1188,7 +1195,7 @@ function buildSimpleTerritoryPolygon(points){
   }
   return [...poly,poly[0]];
 }
-const TERRITORY_EDGE=buildSimpleTerritoryPolygon(TERRITORY_WAYPOINTS);
+const TERRITORY_EDGE=[...TERRITORY_WAYPOINTS,TERRITORY_WAYPOINTS[0]];
 
 function basemapHtml(){
   let out='<g id="basemap-layer">';
