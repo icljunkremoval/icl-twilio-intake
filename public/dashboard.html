@@ -475,6 +475,13 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
           <button class="mc mc-venue-filter" onclick="setVenueFilter('whales',this)">Whales</button>
           <button class="mc mc-venue-filter" onclick="setVenueFilter('partners',this)">ICL Partners</button>
         </div>
+        <div class="map-ctrl-g" style="grid-column:1/-1">
+          <span class="mc-lbl">Dumpsites</span>
+          <button class="mc on" id="dumpsites-toggle" onclick="toggleDumpSites(this)">On</button>
+          <button class="mc mc-dump-filter on" onclick="setDumpSiteFilter('msw',this)">MSW Priority</button>
+          <button class="mc mc-dump-filter" onclick="setDumpSiteFilter('open',this)">Open Now</button>
+          <button class="mc mc-dump-filter" onclick="setDumpSiteFilter('all',this)">All</button>
+        </div>
       </div>
     </div>
     <div class="cb0" id="street-map-wrap" style="position:relative;background:#0d1422;min-height:520px">
@@ -490,11 +497,18 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
           </div>
         </div>
         <div style="flex:1;min-width:180px">
+          <div style="font-size:9px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Dump Sites (MSW)</div>
+          <div id="map-dumpsite-list">
+            <div class="dr"><span class="dl">Loading dumpsites…</span><span class="dv">—</span></div>
+          </div>
+        </div>
+        <div style="flex:1;min-width:180px">
           <div style="font-size:9px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Stack</div>
           <div style="font-size:9px;color:var(--tx3);line-height:1.8">
             Demographics: ACS 2023<br>
             Routing: Google/OSRM<br>
-            City projects: permits/housing/transit
+            City projects: permits/housing/transit<br>
+            Disposal reference: ICL Disposal Sites Master (Mar 2026)
           </div>
         </div>
       </div>
@@ -721,12 +735,149 @@ function updateLeadFilterCount(){
   const shown=getVisiblePins().length;
   el.textContent=`Showing: ${shown} / ${total} leads`;
 }
+function haversineMilesClient(lat1,lng1,lat2,lng2){
+  const toRad=d=>d*Math.PI/180;
+  const R=3958.7613;
+  const dLat=toRad(lat2-lat1);
+  const dLng=toRad(lng2-lng1);
+  const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
+function getPtNowParts(now=new Date()){
+  const parts=new Intl.DateTimeFormat('en-US',{
+    timeZone:'America/Los_Angeles',
+    weekday:'short',hour:'2-digit',minute:'2-digit',hour12:false
+  }).formatToParts(now);
+  const map={};parts.forEach(p=>{if(p.type!=='literal')map[p.type]=p.value;});
+  const dayMap={Sun:0,Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6};
+  const day=dayMap[String(map.weekday||'Sun')]??0;
+  const mins=(Number(map.hour||0)*60)+Number(map.minute||0);
+  return {day,mins};
+}
+function fmtClock(mins){
+  const m=((mins%1440)+1440)%1440;
+  const h24=Math.floor(m/60);
+  const mm=String(m%60).padStart(2,'0');
+  const h12=((h24+11)%12)+1;
+  const ap=h24>=12?'PM':'AM';
+  return `${h12}:${mm} ${ap}`;
+}
+function nextOpenWindow(site,pt){
+  const sched=site&&site.schedule?site.schedule:{};
+  for(let i=0;i<7;i++){
+    const d=(pt.day+i)%7;
+    const wins=Array.isArray(sched[d])?sched[d]:[];
+    if(!wins.length)continue;
+    if(i===0){
+      const future=wins.find(w=>pt.mins<Number(w[0]));
+      if(future)return {day:d,start:Number(future[0])};
+      continue;
+    }
+    return {day:d,start:Number(wins[0][0])};
+  }
+  return null;
+}
+function dumpSiteAvailability(site,now=new Date()){
+  const st=String(site?.status||'').toLowerCase();
+  if(st==='closed')return {state:'closed',label:'Closed'};
+  if(st==='restricted')return {state:'restricted',label:'Restricted'};
+  if(st==='call')return {state:'call',label:'Call ahead'};
+  const sched=site&&site.schedule?site.schedule:{};
+  const pt=getPtNowParts(now);
+  const windows=Array.isArray(sched[pt.day])?sched[pt.day]:[];
+  for(const w of windows){
+    const s=Number(w[0]),e=Number(w[1]);
+    if(pt.mins>=s&&pt.mins<e)return {state:'open',label:`Open now · until ${fmtClock(e)}`};
+  }
+  const next=nextOpenWindow(site,pt);
+  if(next){
+    const dayLbl=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][next.day];
+    return {state:'closed_now',label:`Closed · opens ${dayLbl} ${fmtClock(next.start)}`};
+  }
+  return {state:'unknown',label:'Hours unavailable'};
+}
+function dumpSiteColor(site,availability){
+  const st=String(availability?.state||site?.status||'');
+  if(st==='closed'||st==='restricted')return '#ef4444';
+  const tier=String(site?.tier||'regional');
+  if(tier==='primary')return '#10b981';
+  if(tier==='nearby')return '#3b82f6';
+  if(tier==='regional')return '#f59e0b';
+  return '#8b5cf6';
+}
+function dumpSiteClass(availability){
+  const st=String(availability?.state||'');
+  if(st==='open')return 'g';
+  if(st==='closed'||st==='restricted')return 'r';
+  if(st==='closed_now')return 'a';
+  return 'b';
+}
+function getVisibleDumpSites(now=new Date()){
+  if(!showDumpSites)return [];
+  let sites=[...(Array.isArray(DUMP_SITES)?DUMP_SITES:[])];
+  if(dumpSiteFilter==='msw')sites=sites.filter(s=>!!s.msw&&String(s.status)!=='closed'&&String(s.status)!=='restricted');
+  if(dumpSiteFilter==='open')sites=sites.filter(s=>dumpSiteAvailability(s,now).state==='open');
+  sites.sort((a,b)=>{
+    const ta=DUMP_TIER_RANK[a.tier]??9,tb=DUMP_TIER_RANK[b.tier]??9;
+    if(ta!==tb)return ta-tb;
+    const da=haversineMilesClient(BASE_COORD.lat,BASE_COORD.lng,Number(a.lat),Number(a.lng));
+    const db=haversineMilesClient(BASE_COORD.lat,BASE_COORD.lng,Number(b.lat),Number(b.lng));
+    return da-db;
+  });
+  return sites;
+}
+function rankDumpSitesForPoint(lat,lng,opts={}){
+  const requireMsw=opts.requireMsw!==false;
+  const includeClosed=!!opts.includeClosed;
+  const allowRestricted=!!opts.allowRestricted;
+  const now=opts.now||new Date();
+  const sites=(Array.isArray(DUMP_SITES)?DUMP_SITES:[]).filter(s=>{
+    if(requireMsw&&!s.msw)return false;
+    if(!includeClosed&&String(s.status)==='closed')return false;
+    if(!allowRestricted&&String(s.status)==='restricted')return false;
+    return true;
+  });
+  return sites.map(s=>{
+    const av=dumpSiteAvailability(s,now);
+    const dist=haversineMilesClient(lat,lng,Number(s.lat),Number(s.lng));
+    const tierPenalty={primary:0,nearby:1.2,regional:3.5,far:6,restricted:12,closed:40}[String(s.tier||'regional')]??4;
+    const statePenalty={open:0,closed_now:1.5,call:2,unknown:2.5,restricted:6,closed:50}[av.state]??3;
+    const score=dist+tierPenalty+statePenalty;
+    return {site:s,availability:av,distance_mi:dist,score};
+  }).sort((a,b)=>a.score-b.score);
+}
+function recommendDumpSites(route){
+  let ref={lat:BASE_COORD.lat,lng:BASE_COORD.lng,label:'base'};
+  const first=Array.isArray(route)&&route[0]?route[0]:null;
+  if(first&&first.phone){
+    const p=(MAP_LEAD_PINS||[]).find(x=>String(x.phone||'')===String(first.phone||''));
+    if(p&&Number.isFinite(Number(p.lat))&&Number.isFinite(Number(p.lng))){
+      ref={lat:Number(p.lat),lng:Number(p.lng),label:String(first.phone||'lead')};
+    }
+  }
+  return rankDumpSitesForPoint(ref.lat,ref.lng,{requireMsw:true}).slice(0,2);
+}
 function getVisibleVenues(){
   const venues=Array.isArray(KEY_VENUES)?KEY_VENUES:[];
   if(!showVenues)return[];
   if(venueFilter==='whales')return venues.filter(v=>v.group==='whales');
   if(venueFilter==='partners')return venues.filter(v=>v.group==='partners');
   return venues;
+}
+function renderDumpSiteList(){
+  const el=document.getElementById('map-dumpsite-list');
+  if(!el)return;
+  const rows=getVisibleDumpSites().slice(0,8);
+  if(!rows.length){
+    el.innerHTML='<div class="dr"><span class="dl">No dumpsites selected</span><span class="dv">—</span></div>';
+    return;
+  }
+  el.innerHTML=rows.map(site=>{
+    const av=dumpSiteAvailability(site);
+    const dist=haversineMilesClient(BASE_COORD.lat,BASE_COORD.lng,Number(site.lat),Number(site.lng));
+    const icon=site.kind==='landfill'?'⛰️':'🗑️';
+    return `<div class="dr"><span class="dl">${icon} ${site.name}</span><span class="dv ${dumpSiteClass(av)}">${av.label} · ${dist.toFixed(1)} mi</span></div>`;
+  }).join('');
 }
 function renderVenueList(){
   const el=document.getElementById('map-venue-list');
@@ -745,10 +896,13 @@ function renderMapSourceTable(meta){
   const permitCt=Number(signalData?.permits?.length||0);
   const housingCt=Number(signalData?.housing?.length||0);
   const transitCt=Number(signalData?.transit?.length||0)+Number(signalData?.corridors?.length||0);
+  const dumpTotal=(Array.isArray(DUMP_SITES)?DUMP_SITES.length:0);
+  const dumpOpen=(Array.isArray(DUMP_SITES)?DUMP_SITES.filter(s=>dumpSiteAvailability(s).state==='open').length:0);
   body.innerHTML=`
     <tr><td>Live Leads</td><td class="sig-live">Live</td><td>${leadCt}</td><td>Pipeline + SLA risk</td></tr>
     <tr><td>ACS Demographics</td><td class="sig-live">Live</td><td>${Object.keys(CD||{}).length}</td><td>Neighborhood context</td></tr>
     <tr><td>City Opportunities API</td><td class="${(permitCt+housingCt+transitCt)>0?'sig-live':'sig-plan'}">${(permitCt+housingCt+transitCt)>0?'Live':'Pending'}</td><td>${permitCt+housingCt+transitCt}</td><td>Permits/housing/transit</td></tr>
+    <tr><td>Dumpsite Layer (MSW)</td><td class="sig-live">Live</td><td>${dumpOpen}/${dumpTotal} open now</td><td>Ops drop timing + route optimization</td></tr>
     <tr><td>Probate / Death / Obituaries</td><td class="sig-plan">Planned</td><td>—</td><td>Household transition triggers</td></tr>
     <tr><td>Partner Directory Imports</td><td class="sig-private">Planned</td><td>${KEY_VENUES.filter(v=>v.group==='partners').length}</td><td>Attorneys, mortuaries, move managers, realtors</td></tr>`;
 }
@@ -835,16 +989,21 @@ function renderOpsIntel(raw){
   const routeEl=document.getElementById('ops-route');
   if(!routeEl)return;
   if(!route.length){
-    routeEl.innerHTML='<div style="font-size:9px;color:var(--tx3)">No active route suggestions.</div>';
+    const recs=recommendDumpSites([]);
+    const recTxt=recs.length?`<div style="font-size:8px;color:var(--tx3);margin-top:4px">MSW dump cue: ${recs[0].site.name} · ${recs[0].availability.label}</div>`:'';
+    routeEl.innerHTML='<div style="font-size:9px;color:var(--tx3)">No active route suggestions.</div>'+recTxt;
     return;
   }
+  const recs=recommendDumpSites(route);
   routeEl.innerHTML=route.slice(0,6).map(r=>{
     const c=pinColor(r.stage);
     return `<div class="ops-r">
       <div class="ops-rl"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${c};margin-right:6px"></span>#${r.stop} ${fPhone(r.phone)}<div style="color:var(--tx3)">${r.address||'—'}</div></div>
       <div class="ops-rr">${r.eta_minutes_est||'—'} min<br><span style="color:var(--tx3)">${r.leg_miles||'—'} mi</span></div>
     </div>`;
-  }).join('')+`<div style="font-size:8px;color:var(--tx3);margin-top:4px">ETA mode: ${etaMode||'HEURISTIC'}</div>`;
+  }).join('')+`<div style="font-size:8px;color:var(--tx3);margin-top:4px">ETA mode: ${etaMode||'HEURISTIC'}</div>`+
+  (recs.length?`<div style="font-size:8px;color:var(--tx3);margin-top:3px">MSW dump cue: ${recs[0].site.name} (${recs[0].distance_mi.toFixed(1)} mi) · ${recs[0].availability.label}</div>`:'')+
+  (recs[1]?`<div style="font-size:8px;color:var(--tx3);margin-top:2px">Backup: ${recs[1].site.name} (${recs[1].distance_mi.toFixed(1)} mi)</div>`:'');
 }
 
 async function fetchLeads(){
@@ -911,9 +1070,11 @@ async function fetchLeads(){
     if(streetMap){
       renderStreetLeads();
       renderStreetVenues();
+      renderStreetDumpSites();
       renderStreetSignals();
     }
     renderVenueList();
+    renderDumpSiteList();
   }catch(e){
     MAP_LEAD_PINS=[];
     PIN_BY_PHONE=new Map();
@@ -930,9 +1091,11 @@ async function fetchLeads(){
     if(streetMap){
       renderStreetLeads();
       renderStreetVenues();
+      renderStreetDumpSites();
       renderStreetSignals();
     }
     renderVenueList();
+    renderDumpSiteList();
   }
 }
 
@@ -1118,6 +1281,111 @@ const KEY_VENUES=[
   {name:"Professional Organizer / Therapist Cluster",group:"partners",kind:"service",lat:33.9992,lng:-118.3342,note:"Hoarding/life-transition support"}
 ];
 
+const BASE_COORD={lat:33.9776848,lng:-118.3523303};
+const DUMP_TIER_RANK={primary:0,nearby:1,regional:2,far:3,restricted:4,closed:5};
+const DUMP_SITES=[
+  {
+    id:'south_gate_lacsd',name:'South Gate Transfer Station (LACSD)',kind:'transfer',tier:'primary',status:'open',
+    address:'9530 S Garfield Ave, South Gate, CA 90280',phone:'(562) 927-0146',
+    lat:33.9441529,lng:-118.1663537,msw:true,accepts:'MSW, inert waste',
+    hours_text:'Mon-Sat 6:00 AM-4:30 PM · Sun closed',
+    schedule:{1:[[360,990]],2:[[360,990]],3:[[360,990]],4:[[360,990]],5:[[360,990]],6:[[360,990]]},
+    notes:'ICL default site. Hard unload cutoff around 4:50 PM. Tarp loads to avoid surcharges.'
+  },
+  {
+    id:'compton_republic',name:'Republic Compton Transfer',kind:'transfer',tier:'primary',status:'open',
+    address:'2509 W Rosecrans Ave, Compton, CA 90059',phone:'(310) 327-8461',
+    lat:33.9033397,lng:-118.2443543,msw:true,accepts:'MSW, recyclables',
+    hours_text:'Mon-Fri 6:00 AM-5:30 PM · Sat/Sun closed',
+    schedule:{1:[[360,1050]],2:[[360,1050]],3:[[360,1050]],4:[[360,1050]],5:[[360,1050]]},
+    notes:'Weekday-only primary backup near ICL territory.'
+  },
+  {
+    id:'waste_resources_gardena',name:'Waste Resources Recovery',kind:'transfer',tier:'primary',status:'call',
+    address:'357 W Compton Blvd, Gardena, CA 90247',phone:'(310) 366-7600',
+    lat:33.8961185,lng:-118.1966994,msw:true,accepts:'MSW, recyclables',
+    hours_text:'Call to confirm current commercial hours',schedule:{},
+    notes:'Very close. Call ahead for commercial access/rates.'
+  },
+  {
+    id:'american_waste_gardena',name:'American Waste Transfer (Republic)',kind:'transfer',tier:'nearby',status:'open',
+    address:'1449 W Rosecrans Ave, Gardena, CA 90249',phone:'(310) 527-6980',
+    lat:33.9020035,lng:-118.3017220,msw:true,accepts:'MSW, recyclables',
+    hours_text:'Mon 5:00 AM-5:30 PM · Sat 5:00 AM-4:00 PM · Tue-Fri/Sun closed',
+    schedule:{1:[[300,1050]],6:[[300,960]]},
+    notes:'Limited schedule. No tires, paint, or HHW.'
+  },
+  {
+    id:'culver_city_transfer',name:'Culver City Transfer & Recycling',kind:'transfer',tier:'nearby',status:'call',
+    address:'9255 W Jefferson Blvd, Culver City, CA 90232',phone:'(310) 253-5635',
+    lat:33.9836,lng:-118.3907,msw:true,accepts:'MSW, recyclables, e-waste (Sat)',
+    hours_text:'Call to confirm commercial access and current hours',schedule:{},
+    notes:'City-operated. Jurisdiction/access rules may apply.'
+  },
+  {
+    id:'dart_downey',name:'DART / Athens Downey Transfer',kind:'transfer',tier:'nearby',status:'open',
+    address:'9770 Washburn Rd, Downey, CA 90241',phone:'(562) 622-3503',
+    lat:33.9242550,lng:-118.1132480,msw:true,accepts:'MSW, recyclables',
+    hours_text:'Mon-Fri 6:00 AM-5:30 PM · Sat 6:00 AM-1:30 PM · Sun closed',
+    schedule:{1:[[360,1050]],2:[[360,1050]],3:[[360,1050]],4:[[360,1050]],5:[[360,1050]],6:[[360,810]]},
+    notes:'Nearby secondary option. Confirm Athens commercial policy.'
+  },
+  {
+    id:'carson_wm',name:'WM Carson Transfer & MRF',kind:'transfer',tier:'nearby',status:'call',
+    address:'321 W Francisco St, Carson, CA 90745',phone:'(310) 217-6300',
+    lat:33.8503778,lng:-118.2824760,msw:true,accepts:'MSW, recyclables',
+    hours_text:'Call to confirm',schedule:{},
+    notes:'WM facility; verify rates and access before first run.'
+  },
+  {
+    id:'puente_hills_mrf',name:'Puente Hills MRF (LACSD)',kind:'transfer',tier:'regional',status:'open',
+    address:'13130 Crossroads Pkwy S, City of Industry, CA 91746',phone:'(562) 908-4288 ext. 6074',
+    lat:34.0310902,lng:-118.0114286,msw:true,accepts:'MSW, food/green waste, recyclables',
+    hours_text:'Mon-Sat 4:00 AM-5:00 PM · Sun closed',
+    schedule:{1:[[240,1020]],2:[[240,1020]],3:[[240,1020]],4:[[240,1020]],5:[[240,1020]],6:[[240,1020]]},
+    notes:'Best pre-dawn run option. Safety vest required.'
+  },
+  {
+    id:'wm_south_gate',name:'WM South Gate Transfer',kind:'transfer',tier:'regional',status:'open',
+    address:'4489 Ardine St, South Gate, CA 90280',phone:'(323) 560-8488',
+    lat:33.9577384,lng:-118.1904151,msw:true,accepts:'MSW, recyclables',
+    hours_text:'Mon-Sat 8:00 AM-5:00 PM',
+    schedule:{1:[[480,1020]],2:[[480,1020]],3:[[480,1020]],4:[[480,1020]],5:[[480,1020]],6:[[480,1020]]},
+    notes:'Secondary South Gate option with later start time.'
+  },
+  {
+    id:'sunshine_canyon',name:'Sunshine Canyon Landfill',kind:'landfill',tier:'regional',status:'open',
+    address:'14747 San Fernando Rd, Sylmar, CA 91342',phone:'(818) 362-2124',
+    lat:34.3032234,lng:-118.4644237,msw:true,accepts:'MSW, C&D, green waste, tires, dirt',
+    hours_text:'Mon-Fri 6:00 AM-6:00 PM · Sat 7:00 AM-12:00 PM · Sun closed',
+    schedule:{1:[[360,1080]],2:[[360,1080]],3:[[360,1080]],4:[[360,1080]],5:[[360,1080]],6:[[420,720]]},
+    notes:'Large open-access landfill. Hand-unload cutoffs apply.'
+  },
+  {
+    id:'calabasas_landfill',name:'Calabasas Landfill',kind:'landfill',tier:'regional',status:'open',
+    address:'5300 Lost Hills Rd, Agoura Hills, CA 91301',phone:'(818) 889-0363',
+    lat:34.1455,lng:-118.7052,msw:true,accepts:'MSW, inert, green waste, manifested tires',
+    hours_text:'Mon-Fri 8:00 AM-5:00 PM · Sat 8:00 AM-2:30 PM · Sun closed',
+    schedule:{1:[[480,1020]],2:[[480,1020]],3:[[480,1020]],4:[[480,1020]],5:[[480,1020]],6:[[480,870]]},
+    notes:'Use for west-of-405 jobs where wasteshed qualifies.'
+  },
+  {
+    id:'scholl_canyon',name:'Scholl Canyon Landfill',kind:'landfill',tier:'restricted',status:'restricted',
+    address:'3001 Scholl Canyon Rd, Glendale, CA 91206',phone:'(818) 243-9779',
+    lat:34.1491881,lng:-118.1901798,msw:true,accepts:'MSW',
+    hours_text:'Mon-Fri 8:00 AM-5:00 PM · Sat 8:00 AM-3:30 PM · Sun closed',
+    schedule:{1:[[480,1020]],2:[[480,1020]],3:[[480,1020]],4:[[480,1020]],5:[[480,1020]],6:[[480,930]]},
+    notes:'Wasteshed-restricted to Glendale/Pasadena area. Do NOT use for standard ICL jobs.'
+  },
+  {
+    id:'chiquita_canyon',name:'Chiquita Canyon Landfill',kind:'landfill',tier:'closed',status:'closed',
+    address:'29201 Henry Mayo Dr, Castaic, CA 91384',phone:'—',
+    lat:34.4320,lng:-118.6460,msw:true,accepts:'N/A',
+    hours_text:'Permanently closed (Jan 1, 2025)',schedule:{},
+    notes:'Remove from routing tools and dispatch playbooks.'
+  }
+];
+
 // Stylized basemap context so the choropleth isn't floating on a blank background.
 const BASEMAP_AREAS=[
   {name:'Inglewood',coords:[[-118.414,33.966],[-118.386,33.966],[-118.386,33.946],[-118.414,33.946]],fill:'rgba(20,44,79,.40)'},
@@ -1163,7 +1431,9 @@ let showNeighborhoods=true;
 let showMapLegend=true;
 let showVenues=true;
 let showSignals=true;
+let showDumpSites=true;
 let venueFilter='all';
+let dumpSiteFilter='msw';
 let leadFilter='all';
 let signalData={permits:[],housing:[],corridors:[],transit:[],meta:{}};
 
@@ -1416,7 +1686,7 @@ let curLayer='income';
 let hoveredZip=null;
 let mapMode='street';
 let streetMap=null;
-let streetLayers={territory:null,zips:null,leads:null,venues:null,signals:null};
+let streetLayers={territory:null,zips:null,leads:null,venues:null,dumpsites:null,signals:null};
 let selectedStreetLatLng=null;
 
 function toLatLng(coords){return coords.map(([lng,lat])=>[lat,lng]);}
@@ -1457,8 +1727,10 @@ function ensureStreetMap(){
   renderStreetZips();
   renderStreetLeads();
   renderStreetVenues();
+  renderStreetDumpSites();
   renderStreetSignals();
   renderVenueList();
+  renderDumpSiteList();
   renderLegend(curLayer);
   setTimeout(()=>{try{streetMap.invalidateSize();fitStreetToTerritory();}catch(e){}},70);
 }
@@ -1548,6 +1820,39 @@ function renderStreetVenues(){
   });
   grp.addTo(streetMap);
   streetLayers.venues=grp;
+}
+function renderStreetDumpSites(){
+  if(!streetMap||typeof L==='undefined')return;
+  if(streetLayers.dumpsites){streetMap.removeLayer(streetLayers.dumpsites);}
+  const vis=getVisibleDumpSites();
+  if(!vis.length){streetLayers.dumpsites=null;return;}
+  const grp=L.layerGroup();
+  vis.forEach(site=>{
+    const lat=Number(site.lat),lng=Number(site.lng);
+    if(!Number.isFinite(lat)||!Number.isFinite(lng))return;
+    const av=dumpSiteAvailability(site);
+    const color=dumpSiteColor(site,av);
+    const marker=L.circleMarker([lat,lng],{
+      radius:site.kind==='landfill'?6.3:5.2,
+      color,
+      weight:1.3,
+      fillColor:color,
+      fillOpacity:av.state==='open'?0.9:0.55
+    });
+    marker.bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px;line-height:1.5">
+      <strong>${site.name}</strong><br>
+      <span style="color:${color}">${av.label}</span><br>
+      ${site.kind==='landfill'?'Landfill':'Transfer'} · ${site.tier}<br>
+      ${site.accepts||''}<br>
+      ${site.hours_text||''}<br>
+      ${site.address||''}<br>
+      ${site.phone||''}<br>
+      <span style="opacity:.75">${site.notes||''}</span>
+    </div>`);
+    marker.addTo(grp);
+  });
+  grp.addTo(streetMap);
+  streetLayers.dumpsites=grp;
 }
 function renderStreetSignals(){
   if(!streetMap||typeof L==='undefined')return;
@@ -1912,6 +2217,21 @@ function setVenueFilter(filter,btn){
   if(streetMap)renderStreetVenues();
   renderVenueList();
 }
+function toggleDumpSites(btn){
+  showDumpSites=!showDumpSites;
+  btn.classList.toggle('on',showDumpSites);
+  if(streetMap)renderStreetDumpSites();
+  renderDumpSiteList();
+  renderMapSourceTable({pins:getVisiblePins().length});
+}
+function setDumpSiteFilter(filter,btn){
+  dumpSiteFilter=filter;
+  document.querySelectorAll('.mc-dump-filter').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  if(streetMap)renderStreetDumpSites();
+  renderDumpSiteList();
+  renderMapSourceTable({pins:getVisiblePins().length});
+}
 function toggleSignals(btn){
   showSignals=!showSignals;
   btn.classList.toggle('on',showSignals);
@@ -1953,6 +2273,9 @@ function renderLegend(metric){
     <div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px">Opportunity Anchors</div>
     <div class="leg-item"><div class="leg-sw" style="background:#f59e0b;border-radius:99px"></div>Whales / iconic venues</div>
     <div class="leg-item"><div class="leg-sw" style="background:#3b82f6;border-radius:99px"></div>ICL partner classes</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#10b981;border-radius:99px"></div>Primary MSW dumpsites</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#f59e0b;border-radius:99px"></div>Regional dump options</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#ef4444;border-radius:99px"></div>Closed/restricted sites</div>
     <div class="leg-item"><div class="leg-sw" style="background:#8b5cf6;border-radius:99px"></div>Permit signals</div>
     <div class="leg-item"><div class="leg-sw" style="background:#10b981;border-radius:99px"></div>Housing signals</div>
     <div class="leg-item"><div class="leg-sw" style="background:#ef4444;border-radius:99px"></div>Transit/project lines</div>`;
