@@ -223,6 +223,20 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .kadd-save{flex:1;padding:5px;font-size:9px;font-family:'DM Mono',monospace;background:var(--blue);color:#fff;border:none;border-radius:3px;cursor:pointer}
 .kadd-save:hover{background:var(--blue2)}
 .kadd-cancel{flex:1;padding:5px;font-size:9px;font-family:'DM Mono',monospace;background:var(--bg4);color:var(--tx2);border:none;border-radius:3px;cursor:pointer}
+.idea-grid{display:grid;grid-template-columns:2fr 1fr;gap:8px}
+.idea-actions{display:flex;gap:6px;align-items:center}
+.idea-note{font-size:8px;color:var(--tx3)}
+.roadmap-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.rcol{background:var(--bg3);border:1px solid var(--bd);border-radius:8px;display:flex;flex-direction:column;min-height:130px}
+.rcol-h{display:flex;align-items:center;gap:6px;padding:10px 10px 8px;border-bottom:1px solid var(--bd)}
+.rtitle{font-size:10px;font-family:'Syne',sans-serif;font-weight:700;color:var(--tx);flex:1}
+.rzone{padding:8px;display:flex;flex-direction:column;gap:6px}
+.ritem{background:var(--bg2);border:1px solid var(--bd2);border-radius:5px;padding:7px}
+.rit{font-size:9px;color:var(--tx);line-height:1.35}
+.rin{font-size:8px;color:var(--tx3);line-height:1.35;margin-top:3px}
+.ract{margin-top:6px}
+.rbtn{padding:3px 8px;font-size:8px;font-family:'DM Mono',monospace;border:1px solid var(--bd2);background:var(--bg4);color:var(--tx2);border-radius:3px;cursor:pointer}
+.rbtn:hover{border-color:var(--blue);color:var(--blue)}
 
 /* ── SKELETONS ── */
 .skel{background:linear-gradient(90deg,var(--bg3) 25%,var(--bg4) 50%,var(--bg3) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:4px;height:12px;margin:4px 0}
@@ -544,8 +558,46 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
     </div>
   </div>
   <div class="card">
+    <div class="ch"><div class="ct">Push Idea → Kanban + Roadmap</div><span class="tag tag-live">SYNCED</span></div>
+    <div class="cb">
+      <div class="idea-grid">
+        <div>
+          <textarea class="kadd-inp" id="idea-title" rows="2" placeholder="Example: Add partner scorecard by source quality + close rate"></textarea>
+          <textarea class="kadd-inp" id="idea-note" rows="2" placeholder="Why this matters / desired KPI / owner"></textarea>
+        </div>
+        <div>
+          <select class="kadd-sel" id="idea-target">
+            <option value="critical">Critical</option>
+            <option value="inprogress">In Progress</option>
+            <option value="upcoming" selected>Up Next</option>
+            <option value="done">Done</option>
+          </select>
+          <select class="kadd-sel" id="idea-tag">
+            <option value="sys">System</option>
+            <option value="biz">Business</option>
+            <option value="dat" selected>Data</option>
+            <option value="grow">Growth</option>
+          </select>
+          <input class="kadd-inp" id="idea-source" placeholder="Source (chat, ops, sales)" value="chat" />
+          <div class="idea-actions">
+            <button class="kadd-save" id="idea-push-btn" onclick="pushIdeaFromDashboard()">Push idea</button>
+            <span class="idea-note" id="idea-status">—</span>
+          </div>
+        </div>
+      </div>
+      <div class="note">Use this to capture ideas from chat or ops calls. A single push writes one shared planning state used by Kanban + roadmap.</div>
+    </div>
+  </div>
+  <div class="card">
     <div class="ch"><div class="ct">Next Steps</div><span style="font-size:9px;color:var(--tx3)">Drag cards anywhere · Click × to delete · + to add</span></div>
     <div class="cb"><div class="kanban" id="kanban"></div></div>
+  </div>
+  <div class="card">
+    <div class="ch">
+      <div class="ct">Feature Roadmap (synced with Kanban)</div>
+      <span style="font-size:9px;color:var(--tx3)" id="roadmap-sync-status">Sync: local</span>
+    </div>
+    <div class="cb"><div class="roadmap-grid" id="roadmap-grid"></div></div>
   </div>
 </div>
 
@@ -1946,18 +1998,220 @@ const COLS=[
 const TAG={sys:'sys',biz:'biz',dat:'dat',grow:'grow'};
 const TAG_LABEL={sys:'System',biz:'Business',dat:'Data',grow:'Growth'};
 const TAG_CLS={sys:'tag-sys',biz:'tag-biz',dat:'tag-dat',grow:'tag-grow'};
+const ROADMAP_COLS=[
+  {id:'now',label:'Now',stripe:'ksr'},
+  {id:'next',label:'Next',stripe:'ksa'},
+  {id:'later',label:'Later',stripe:'ksb'},
+  {id:'released',label:'Released',stripe:'ksg'},
+];
 
 let KS={};
 let dragging=null; // {id, fromCol}
 let dropTarget=null; // {toCol, insertBeforeId|null}
 
-// In-memory store (localStorage blocked in claude.ai artifact sandbox)
 let _memStore = null;
+let _saveTimer = null;
+let _planningUpdatedAt = null;
+
+function h(v){
+  return String(v??'')
+    .replaceAll('&','&amp;')
+    .replaceAll('<','&lt;')
+    .replaceAll('>','&gt;')
+    .replaceAll('"','&quot;')
+    .replaceAll("'","&#39;");
+}
+function cloneState(v){return JSON.parse(JSON.stringify(v));}
+function normalizeState(raw){
+  const out={critical:[],inprogress:[],upcoming:[],done:[]};
+  ['critical','inprogress','upcoming','done'].forEach(col=>{
+    const cards=Array.isArray(raw?.[col])?raw[col]:[];
+    out[col]=cards
+      .filter(c=>c&&String(c.title||'').trim())
+      .map(c=>({
+        id:String(c.id||('k'+Date.now()+Math.floor(Math.random()*1000))),
+        tag:TAG[String(c.tag||'').trim()]?String(c.tag).trim():'sys',
+        title:String(c.title||'').trim().slice(0,180),
+        note:String(c.note||'').trim().slice(0,360)
+      }));
+  });
+  return out;
+}
+function fmtSync(ts){
+  if(!ts)return 'Sync: local';
+  const d=new Date(ts);
+  if(Number.isNaN(d.getTime()))return 'Sync: local';
+  const t=d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true});
+  return `Sync: ${t}`;
+}
+function setRoadmapSyncLabel(ts){const el=document.getElementById('roadmap-sync-status');if(el)el.textContent=fmtSync(ts);}
+function setIdeaStatus(msg,isErr=false){
+  const el=document.getElementById('idea-status');
+  if(!el)return;
+  el.textContent=msg||'—';
+  el.style.color=isErr?'var(--red)':'var(--tx3)';
+}
+function findCardColumn(cardId){
+  for(const c of COLS){
+    if((KS[c.id]||[]).some(x=>x.id===cardId))return c.id;
+  }
+  return null;
+}
+function buildRoadmapFromKanban(state=KS){
+  const now=[
+    ...((state.critical||[]).map(c=>({...c,source_column:'critical'}))),
+    ...((state.inprogress||[]).map(c=>({...c,source_column:'inprogress'})))
+  ];
+  const upcoming=(state.upcoming||[]);
+  const next=upcoming.slice(0,4).map(c=>({...c,source_column:'upcoming'}));
+  const later=upcoming.slice(4).map(c=>({...c,source_column:'upcoming'}));
+  const released=(state.done||[]).map(c=>({...c,source_column:'done'}));
+  return {now,next,later,released};
+}
+function roadmapAction(sourceCol){
+  if(sourceCol==='inprogress')return {label:'Ship',to:'done'};
+  if(sourceCol==='done')return {label:'Reopen',to:'upcoming'};
+  return {label:'Start',to:'inprogress'};
+}
 function loadK(){
-  KS = _memStore ? JSON.parse(JSON.stringify(_memStore)) : JSON.parse(JSON.stringify(DEFAULT));
+  KS = _memStore ? cloneState(_memStore) : cloneState(DEFAULT);
 }
 function saveK(){
-  _memStore = JSON.parse(JSON.stringify(KS));
+  _memStore = cloneState(KS);
+  renderRoadmap();
+  if(_saveTimer)clearTimeout(_saveTimer);
+  _saveTimer=setTimeout(()=>{persistPlanningState().catch(()=>{});},280);
+}
+async function persistPlanningState(){
+  const snapshot=cloneState(KS);
+  try{
+    const r=await fetch('/api/dashboard/planning',{
+      method:'PUT',
+      headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body:JSON.stringify({kanban:snapshot})
+    });
+    if(!r.ok)throw new Error('save_failed');
+    const j=await r.json();
+    if(j&&j.kanban){
+      KS=normalizeState(j.kanban);
+      _memStore=cloneState(KS);
+      _planningUpdatedAt=j.updated_at||new Date().toISOString();
+      setRoadmapSyncLabel(_planningUpdatedAt);
+      renderRoadmap(j.roadmap||buildRoadmapFromKanban(KS));
+    }
+  }catch(e){
+    setRoadmapSyncLabel(_planningUpdatedAt);
+  }
+}
+async function refreshPlanningState(){
+  try{
+    const r=await fetch('/api/dashboard/planning',{headers:{'Accept':'application/json'}});
+    if(!r.ok)throw new Error('load_failed');
+    const j=await r.json();
+    if(j&&j.kanban){
+      KS=normalizeState(j.kanban);
+      _memStore=cloneState(KS);
+      _planningUpdatedAt=j.updated_at||null;
+      renderK();
+      renderRoadmap(j.roadmap||buildRoadmapFromKanban(KS));
+      setRoadmapSyncLabel(_planningUpdatedAt);
+      return;
+    }
+  }catch(e){}
+  setRoadmapSyncLabel(_planningUpdatedAt);
+}
+function renderRoadmap(roadmap){
+  const root=document.getElementById('roadmap-grid');
+  if(!root)return;
+  const data=roadmap&&typeof roadmap==='object'?roadmap:buildRoadmapFromKanban(KS);
+  root.innerHTML=ROADMAP_COLS.map(col=>{
+    const cards=Array.isArray(data[col.id])?data[col.id]:[];
+    const items=cards.map(card=>{
+      const src=String(card.source_column||findCardColumn(card.id)||'upcoming');
+      const act=roadmapAction(src);
+      return `<div class="ritem">
+        <div class="ktag ${TAG_CLS[card.tag]||'tag-sys'}">${TAG_LABEL[card.tag]||'System'}</div>
+        <div class="rit">${h(card.title)}</div>
+        ${card.note?`<div class="rin">${h(card.note)}</div>`:''}
+        <div class="ract"><button class="rbtn" onclick="moveCardToColumn('${h(card.id)}','${act.to}')">${act.label}</button></div>
+      </div>`;
+    }).join('');
+    return `<div class="rcol">
+      <div class="kcol-stripe ${col.stripe}"></div>
+      <div class="rcol-h"><div class="rtitle">${col.label}</div><span class="kcnt">${cards.length}</span></div>
+      <div class="rzone">${items||'<div class="idea-note">No items.</div>'}</div>
+    </div>`;
+  }).join('');
+}
+function moveCardToColumn(cardId,toCol){
+  if(!['critical','inprogress','upcoming','done'].includes(String(toCol||'')))return;
+  let card=null,fromCol=null;
+  for(const col of COLS){
+    const idx=(KS[col.id]||[]).findIndex(c=>c.id===cardId);
+    if(idx!==-1){
+      card=KS[col.id][idx];
+      KS[col.id].splice(idx,1);
+      fromCol=col.id;
+      break;
+    }
+  }
+  if(!card||!fromCol)return;
+  KS[toCol].unshift(card);
+  saveK();
+  renderK();
+}
+async function pushIdeaFromDashboard(){
+  const titleEl=document.getElementById('idea-title');
+  const noteEl=document.getElementById('idea-note');
+  const tagEl=document.getElementById('idea-tag');
+  const targetEl=document.getElementById('idea-target');
+  const sourceEl=document.getElementById('idea-source');
+  const btn=document.getElementById('idea-push-btn');
+  const title=String(titleEl?.value||'').trim();
+  if(!title){setIdeaStatus('Title required',true);return;}
+  const payload={
+    title,
+    note:String(noteEl?.value||'').trim(),
+    tag:String(tagEl?.value||'sys'),
+    target:String(targetEl?.value||'upcoming'),
+    source:String(sourceEl?.value||'chat').trim()||'chat'
+  };
+  if(btn)btn.disabled=true;
+  setIdeaStatus('Saving…');
+  try{
+    const r=await fetch('/api/dashboard/planning/idea',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body:JSON.stringify(payload)
+    });
+    if(!r.ok)throw new Error('idea_failed');
+    const j=await r.json();
+    if(j&&j.kanban){
+      KS=normalizeState(j.kanban);
+      _memStore=cloneState(KS);
+      _planningUpdatedAt=j.updated_at||new Date().toISOString();
+      setRoadmapSyncLabel(_planningUpdatedAt);
+      renderK();
+      renderRoadmap(j.roadmap||buildRoadmapFromKanban(KS));
+      if(titleEl)titleEl.value='';
+      if(noteEl)noteEl.value='';
+      setIdeaStatus('Pushed');
+      return;
+    }
+    throw new Error('idea_bad_payload');
+  }catch(e){
+    const target=String(payload.target);
+    if(KS[target]){
+      KS[target].push({id:'k'+Date.now()+Math.floor(Math.random()*1000),tag:payload.tag,title:payload.title,note:payload.note});
+      saveK();
+      renderK();
+      setIdeaStatus('Saved local (API unavailable)',true);
+    }else{
+      setIdeaStatus('Failed to save',true);
+    }
+  }finally{
+    if(btn)btn.disabled=false;
+  }
 }
 
 function renderK(){
@@ -2052,8 +2306,8 @@ function makeCard(card,colId,idx){
   el.innerHTML=`
     <button class="kdel" onclick="delCard('${card.id}','${colId}')">×</button>
     <div class="ktag ${TAG_CLS[card.tag]||'tag-sys'}">${TAG_LABEL[card.tag]||'System'}</div>
-    <div class="kcard-title">${card.title}</div>
-    ${card.note?`<div class="kcard-note">${card.note}</div>`:''}`;
+    <div class="kcard-title">${h(card.title)}</div>
+    ${card.note?`<div class="kcard-note">${h(card.note)}</div>`:''}`;
 
   el.addEventListener('dragstart',e=>{
     dragging={id:card.id,fromCol:colId};
@@ -2086,7 +2340,7 @@ function addCard(colId){
   if(!t)return;
   const n=document.getElementById(`inp-n-${colId}`).value.trim();
   const tag=document.getElementById(`inp-tag-${colId}`).value;
-  KS[colId].push({id:'k'+Date.now(),tag,title:t,note:n});
+  KS[colId].push({id:'k'+Date.now()+Math.floor(Math.random()*1000),tag,title:t,note:n});
   saveK();closeForm(colId);renderK();
 }
 function delCard(id,colId){
@@ -2103,7 +2357,16 @@ window.addEventListener('DOMContentLoaded',()=>{
   try{fetchCensus();}catch(e){}
   try{fetchMapSignals();}catch(e){}
   try{buildRefs();}catch(e){}
-  try{loadK();renderK();}catch(e){KS=JSON.parse(JSON.stringify(DEFAULT));try{renderK();}catch(e2){}}
+  try{
+    loadK();
+    renderK();
+    renderRoadmap();
+    setRoadmapSyncLabel(_planningUpdatedAt);
+    refreshPlanningState().catch(()=>{});
+  }catch(e){
+    KS=cloneState(DEFAULT);
+    try{renderK();renderRoadmap();}catch(e2){}
+  }
   setInterval(()=>{try{fetchLeads();}catch(e){}},60000);
   setInterval(()=>{try{fetchMapSignals();}catch(e){}},300000);
 });

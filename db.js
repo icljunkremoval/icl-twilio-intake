@@ -77,6 +77,12 @@ async function initDb() {
       created_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS dashboard_state (
+      state_key TEXT PRIMARY KEY,
+      state_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_events_from_phone ON events(from_phone);
     CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
   `);

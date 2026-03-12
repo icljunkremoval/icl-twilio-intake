@@ -795,6 +795,109 @@ async function buildOpportunityData() {
   return data;
 }
 
+const PLANNING_STATE_KEY = "planning_kanban_v1";
+const PLANNING_COLS = ["critical", "inprogress", "upcoming", "done"];
+const PLANNING_TAGS = new Set(["sys", "biz", "dat", "grow"]);
+const DEFAULT_PLANNING_STATE = {
+  critical: [
+    { id: "k1", tag: "dat", title: "Event timeline + replay spine", note: "Unify lead, outreach, payment, and ops events into one scrub-able sequence." },
+    { id: "k2", tag: "dat", title: "Signal provenance + confidence", note: "Every layer shows source, freshness, and confidence score before actioning." },
+    { id: "k3", tag: "sys", title: "Progressive map loading budget", note: "Load anchor layers first, then secondary layers to avoid UI stalls/crashes." },
+    { id: "k15", tag: "biz", title: "Operator camera presets", note: "One-click jump to key zones, partners, and active incidents for faster decisions." }
+  ],
+  inprogress: [
+    { id: "k4", tag: "dat", title: "Correlation cards (cause + effect)", note: "Surface top shifts: SLA red -> quote lag, venue proximity -> close lift, etc." },
+    { id: "k5", tag: "sys", title: "SLA auto-action tuning", note: "Tune cooldown windows + message variants by conversion lift." }
+  ],
+  upcoming: [
+    { id: "k6", tag: "sys", title: "Hypothesis mode (80/20)", note: "AI proposes top 3 high-impact tests weekly with expected uplift and risk." },
+    { id: "k7", tag: "dat", title: "Ground-truth annotation loop", note: "Screenshot/comment workflow to fix map placement and model classification quickly." },
+    { id: "k8", tag: "sys", title: "Automation prompt library", note: "Versioned prompts by role: sales rep, dispatcher, owner, partner manager." },
+    { id: "k9", tag: "grow", title: "Partner campaign overlays", note: "Show mortuaries/realtors/probate clusters with conversion and response overlays." },
+    { id: "k10", tag: "dat", title: "Multi-model research copilot", note: "Use search-grounded model ensemble for market scans, then summarize with citations." },
+    { id: "k16", tag: "biz", title: "After-action review generator", note: "Auto-generate incident timeline + what changed + next decision recommendations." }
+  ],
+  done: [
+    { id: "k11", tag: "sys", title: "Auto Next Best Action engine", note: "SLA-red leads now auto-trigger customer + ops SMS reminders." },
+    { id: "k12", tag: "dat", title: "Square settled revenue ingestion", note: "payment.completed now writes settled_revenue_cents into lead records." },
+    { id: "k13", tag: "dat", title: "True margin fields in pipeline", note: "Labor/disposal/fuel/other costs + computed margin_cents live." },
+    { id: "k14", tag: "sys", title: "Map controls simplification", note: "Removed unstable corridor layer to keep map reliable." }
+  ]
+};
+
+function cloneJson(v) {
+  return JSON.parse(JSON.stringify(v));
+}
+
+function makePlanningId() {
+  return `k${Date.now()}${Math.floor(Math.random() * 10000)}`;
+}
+
+function normalizePlanningCard(card = {}) {
+  const id = String(card.id || makePlanningId()).trim();
+  const title = String(card.title || "").trim().slice(0, 180);
+  if (!title) return null;
+  const note = String(card.note || "").trim().slice(0, 360);
+  const tag = PLANNING_TAGS.has(String(card.tag || "").trim()) ? String(card.tag).trim() : "sys";
+  return { id, tag, title, note };
+}
+
+function sanitizePlanningState(raw) {
+  const out = { critical: [], inprogress: [], upcoming: [], done: [] };
+  const seen = new Set();
+  for (const col of PLANNING_COLS) {
+    const cards = Array.isArray(raw?.[col]) ? raw[col] : [];
+    for (const c of cards) {
+      const normalized = normalizePlanningCard(c);
+      if (!normalized) continue;
+      if (seen.has(normalized.id)) normalized.id = makePlanningId();
+      seen.add(normalized.id);
+      out[col].push(normalized);
+    }
+  }
+  return out;
+}
+
+async function readPlanningState() {
+  const row = (await pool.query(
+    "SELECT state_json, updated_at FROM dashboard_state WHERE state_key = $1",
+    [PLANNING_STATE_KEY]
+  )).rows[0];
+  if (!row) return { state: cloneJson(DEFAULT_PLANNING_STATE), updated_at: null };
+  try {
+    const parsed = JSON.parse(String(row.state_json || "{}"));
+    return { state: sanitizePlanningState(parsed), updated_at: row.updated_at || null };
+  } catch {
+    return { state: cloneJson(DEFAULT_PLANNING_STATE), updated_at: row.updated_at || null };
+  }
+}
+
+async function writePlanningState(state) {
+  const safe = sanitizePlanningState(state);
+  const updatedAt = new Date().toISOString();
+  await pool.query(
+    `INSERT INTO dashboard_state (state_key, state_json, updated_at)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (state_key) DO UPDATE
+     SET state_json = EXCLUDED.state_json,
+         updated_at = EXCLUDED.updated_at`,
+    [PLANNING_STATE_KEY, JSON.stringify(safe), updatedAt]
+  );
+  return { state: safe, updated_at: updatedAt };
+}
+
+function buildRoadmapFromPlanning(state) {
+  const now = [
+    ...(state.critical || []).map((c) => ({ ...c, source_column: "critical" })),
+    ...(state.inprogress || []).map((c) => ({ ...c, source_column: "inprogress" }))
+  ];
+  const upcoming = state.upcoming || [];
+  const next = upcoming.slice(0, 4).map((c) => ({ ...c, source_column: "upcoming" }));
+  const later = upcoming.slice(4).map((c) => ({ ...c, source_column: "upcoming" }));
+  const released = (state.done || []).map((c) => ({ ...c, source_column: "done" }));
+  return { now, next, later, released };
+}
+
 const app = express();
 app.use("/public", require("express").static(require("path").join(__dirname, "public")));
 app.use(express.json({ limit: "2mb" }))
@@ -1183,6 +1286,65 @@ app.get("/api/dashboard/opportunities", async (_req, res) => {
   try {
     const data = await buildOpportunityData();
     res.json({ ok: true, ...data });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/dashboard/planning", async (_req, res) => {
+  try {
+    const { state, updated_at } = await readPlanningState();
+    res.json({
+      ok: true,
+      kanban: state,
+      roadmap: buildRoadmapFromPlanning(state),
+      updated_at
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.put("/api/dashboard/planning", async (req, res) => {
+  try {
+    const incoming = req.body?.kanban || req.body?.state || req.body || {};
+    const saved = await writePlanningState(incoming);
+    res.json({
+      ok: true,
+      kanban: saved.state,
+      roadmap: buildRoadmapFromPlanning(saved.state),
+      updated_at: saved.updated_at
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/dashboard/planning/idea", async (req, res) => {
+  try {
+    const title = String(req.body?.title || req.body?.idea || "").trim();
+    if (!title) return res.status(400).json({ ok: false, error: "missing title" });
+    const note = String(req.body?.note || "").trim();
+    const tag = PLANNING_TAGS.has(String(req.body?.tag || "").trim()) ? String(req.body.tag).trim() : "sys";
+    const target = PLANNING_COLS.includes(String(req.body?.target || "").trim()) ? String(req.body.target).trim() : "upcoming";
+    const source = String(req.body?.source || "dashboard").trim();
+    const { state } = await readPlanningState();
+    const card = normalizePlanningCard({
+      id: makePlanningId(),
+      title,
+      note: note ? `${note}${source ? ` · src:${source}` : ""}` : (source ? `src:${source}` : ""),
+      tag
+    });
+    if (!card) return res.status(400).json({ ok: false, error: "invalid title" });
+    state[target].push(card);
+    const saved = await writePlanningState(state);
+    res.json({
+      ok: true,
+      card,
+      kanban: saved.state,
+      roadmap: buildRoadmapFromPlanning(saved.state),
+      updated_at: saved.updated_at
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
