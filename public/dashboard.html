@@ -132,12 +132,20 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .map-tooltip .tv{color:var(--tx)}
 .map-tooltip .tg{color:var(--green)}
 .map-ctrl{display:flex;align-items:center;gap:6px;padding:10px 16px;border-bottom:1px solid var(--bd);background:var(--bg3);flex-wrap:wrap}
+.map-ctrl-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;width:100%}
+.map-ctrl-g{display:flex;align-items:center;gap:6px;flex-wrap:wrap;background:var(--bg2);border:1px solid var(--bd);border-radius:6px;padding:7px}
 .mc{padding:4px 10px;font-size:9px;font-family:'DM Mono',monospace;background:var(--bg4);border:1px solid var(--bd2);color:var(--tx2);border-radius:3px;cursor:pointer;transition:all .12s;letter-spacing:.3px}
 .mc:hover,.mc.on{background:rgba(59,130,246,.1);border-color:var(--blue);color:var(--blue)}
 .mc-lbl{font-size:9px;color:var(--tx3)}
 .map-legend{display:flex;flex-direction:column;gap:4px}
 .leg-item{display:flex;align-items:center;gap:7px;font-size:9px;color:var(--tx2)}
 .leg-sw{width:13px;height:13px;border-radius:2px;flex-shrink:0}
+.map-source{width:100%;border-collapse:collapse}
+.map-source th,.map-source td{padding:7px 8px;border-bottom:1px solid var(--bd);font-size:9px;text-align:left}
+.map-source th{font-size:8px;color:var(--tx3);text-transform:uppercase;letter-spacing:.6px}
+.sig-live{color:var(--green)}
+.sig-plan{color:var(--amber)}
+.sig-private{color:var(--tx2)}
 .lead-pin-dot{stroke:rgba(8,13,23,.95);stroke-width:1.6}
 .lead-pin-ring{fill:none;stroke-width:1.2;opacity:.65}
 .ops-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:10px}
@@ -388,58 +396,75 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 <div class="page" id="page-map">
   <div class="card">
     <div class="ch">
-      <div class="ct">Territory 001 · Choropleth</div>
-      <span class="tag tag-acs">ACS 2023</span>
+      <div class="ct">Territory Map · God View</div>
+      <span class="tag tag-live">LIVE OPS MAP</span>
     </div>
     <div class="map-ctrl">
-      <span class="mc-lbl">Color by:</span>
-      <button class="mc mc-layer on" onclick="setLayer('income',this)">Median Income</button>
-      <button class="mc mc-layer" onclick="setLayer('homevalue',this)">Home Value</button>
-      <button class="mc mc-layer" onclick="setLayer('owner',this)">Owner-Occupancy</button>
-      <button class="mc mc-layer" onclick="setLayer('seniors',this)">65+ Population</button>
-      <button class="mc mc-layer" onclick="setLayer('revenue',this)">Est. ICL Revenue</button>
-      <button class="mc on" id="neighborhoods-toggle" onclick="toggleNeighborhoods(this)">Neighborhoods</button>
-      <button class="mc on" id="territory-toggle" onclick="toggleTerritoryEdge(this)">Territory Edge</button>
-      <button class="mc on" id="legend-toggle" onclick="toggleMapLegend(this)">Legend</button>
-      <span class="mc-lbl" style="margin-left:10px">Leads:</span>
-      <button class="mc mc-lead-filter on" onclick="setLeadFilter('all',this)">All</button>
-      <button class="mc mc-lead-filter" onclick="setLeadFilter('red',this)">Red</button>
-      <button class="mc mc-lead-filter" onclick="setLeadFilter('yellow',this)">Yellow</button>
-      <button class="mc mc-lead-filter" onclick="setLeadFilter('green',this)">Green</button>
-      <span class="mc-lbl" id="map-filter-count">Showing: 0 / 0 leads</span>
-      <button class="mc mc-mode on" onclick="setMapMode('street',this)">Street Map</button>
-      <button class="mc mc-mode" onclick="setMapMode('choropleth',this)">Choropleth</button>
-      <button class="mc" onclick="openStreetView()">Street View ↗</button>
-      <span class="mc-lbl" style="margin-left:10px">Map:</span>
-      <button class="mc" onclick="fitToTerritory()">Fit to Territory</button>
-      <button class="mc" onclick="mapZoomIn()">＋</button>
-      <button class="mc" onclick="mapZoomOut()">－</button>
-      <button class="mc" onclick="mapResetView()">Reset</button>
+      <div class="map-ctrl-grid">
+        <div class="map-ctrl-g">
+          <span class="mc-lbl">Lead filter</span>
+          <button class="mc mc-lead-filter on" onclick="setLeadFilter('all',this)">All</button>
+          <button class="mc mc-lead-filter" onclick="setLeadFilter('red',this)">Red</button>
+          <button class="mc mc-lead-filter" onclick="setLeadFilter('yellow',this)">Yellow</button>
+          <button class="mc mc-lead-filter" onclick="setLeadFilter('green',this)">Green</button>
+          <span class="mc-lbl" id="map-filter-count">Showing: 0 / 0 leads</span>
+        </div>
+        <div class="map-ctrl-g">
+          <span class="mc-lbl">Demographic tint</span>
+          <button class="mc mc-layer on" onclick="setLayer('income',this)">Income</button>
+          <button class="mc mc-layer" onclick="setLayer('homevalue',this)">Home Value</button>
+          <button class="mc mc-layer" onclick="setLayer('owner',this)">Owner%</button>
+          <button class="mc mc-layer" onclick="setLayer('seniors',this)">65+%</button>
+          <button class="mc on" id="neighborhoods-toggle" onclick="toggleNeighborhoods(this)">Neighborhoods</button>
+        </div>
+        <div class="map-ctrl-g">
+          <span class="mc-lbl">Map tools</span>
+          <button class="mc on" id="territory-toggle" onclick="toggleTerritoryEdge(this)">Territory Edge</button>
+          <button class="mc on" id="signals-toggle" onclick="toggleSignals(this)">Signals</button>
+          <button class="mc on" id="legend-toggle" onclick="toggleMapLegend(this)">Legend</button>
+          <button class="mc" onclick="fitToTerritory()">Fit Territory</button>
+          <button class="mc" onclick="openStreetView()">Street View ↗</button>
+          <button class="mc" onclick="mapZoomIn()">＋</button>
+          <button class="mc" onclick="mapZoomOut()">－</button>
+          <button class="mc" onclick="mapResetView()">Reset</button>
+        </div>
+        <div class="map-ctrl-g" style="grid-column:1/-1">
+          <span class="mc-lbl">Key venues</span>
+          <button class="mc on" id="venues-toggle" onclick="toggleVenues(this)">On</button>
+          <button class="mc mc-venue-filter on" onclick="setVenueFilter('all',this)">All</button>
+          <button class="mc mc-venue-filter" onclick="setVenueFilter('whales',this)">Whales</button>
+          <button class="mc mc-venue-filter" onclick="setVenueFilter('partners',this)">ICL Partners</button>
+        </div>
+      </div>
     </div>
     <div class="cb0" id="street-map-wrap" style="position:relative;background:#0d1422;min-height:520px">
       <div id="street-map"></div>
-    </div>
-    <div class="cb0" id="map-svg-wrap" style="position:relative;background:#0d1422;min-height:520px;display:none">
-      <div class="map-tooltip" id="map-tt"></div>
-      <svg id="map-svg" viewBox="0 0 800 520" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:520px;display:block"></svg>
     </div>
     <div class="cb" style="border-top:1px solid var(--bd);padding:14px 16px">
       <div style="display:flex;gap:24px;align-items:start;flex-wrap:wrap">
         <div id="map-legend" class="map-legend"></div>
         <div style="flex:1;min-width:200px">
           <div style="font-size:9px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Key Venues</div>
-          <div class="dr"><span class="dl">🏟 SoFi Stadium</span><span class="dv b">2.1 mi · Opening Ceremony</span></div>
-          <div class="dr"><span class="dl">🏀 Intuit Dome</span><span class="dv b">2.4 mi · Olympic Basketball</span></div>
-          <div class="dr"><span class="dl">🚇 K-Line Leimert</span><span class="dv b">0.8 mi · Metro operational</span></div>
-          <div class="dr"><span class="dl">✈ LAX</span><span class="dv b">4.2 mi</span></div>
+          <div id="map-venue-list">
+            <div class="dr"><span class="dl">Loading venues…</span><span class="dv">—</span></div>
+          </div>
         </div>
         <div style="flex:1;min-width:180px">
           <div style="font-size:9px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Stack</div>
           <div style="font-size:9px;color:var(--tx3);line-height:1.8">
             Demographics: ACS 2023<br>
-            Routing: Google/OSRM
+            Routing: Google/OSRM<br>
+            City projects: permits/housing/transit
           </div>
         </div>
+      </div>
+      <div style="margin-top:10px">
+        <table class="map-source">
+          <thead><tr><th>Source</th><th>Status</th><th>Records</th><th>Purpose</th></tr></thead>
+          <tbody id="map-source-body">
+            <tr><td>Loading…</td><td>—</td><td>—</td><td>—</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -557,21 +582,12 @@ function go(id,btn){
   if(id==='map'){
     setTimeout(()=>{
       try{
-        if(mapMode==='street'){
-          ensureStreetMap();
-        }else{
-          if(!mapBuilt){
-            buildMap();
-            mapBuilt=true;
-          }else{
-            updateMap(curLayer);
-          }
-          ensureMapRendered();
-        }
+        ensureStreetMap();
+        fitToTerritory();
       }catch(e){
         console.error('[dashboard] map render failed',e);
       }
-    },50);
+    },70);
   }
 }
 
@@ -594,6 +610,37 @@ function updateLeadFilterCount(){
   const total=(Array.isArray(MAP_LEAD_PINS)?MAP_LEAD_PINS.length:0);
   const shown=getVisiblePins().length;
   el.textContent=`Showing: ${shown} / ${total} leads`;
+}
+function getVisibleVenues(){
+  const venues=Array.isArray(KEY_VENUES)?KEY_VENUES:[];
+  if(!showVenues)return[];
+  if(venueFilter==='whales')return venues.filter(v=>v.group==='whales');
+  if(venueFilter==='partners')return venues.filter(v=>v.group==='partners');
+  return venues;
+}
+function renderVenueList(){
+  const el=document.getElementById('map-venue-list');
+  if(!el)return;
+  const rows=getVisibleVenues().slice(0,8);
+  if(!rows.length){
+    el.innerHTML='<div class="dr"><span class="dl">No venues selected</span><span class="dv">—</span></div>';
+    return;
+  }
+  el.innerHTML=rows.map(v=>`<div class="dr"><span class="dl">${v.group==='whales'?'⭐':'🤝'} ${v.name}</span><span class="dv ${v.group==='whales'?'a':'b'}">${v.note||''}</span></div>`).join('');
+}
+function renderMapSourceTable(meta){
+  const body=document.getElementById('map-source-body');
+  if(!body)return;
+  const leadCt=Number(meta?.pins||0);
+  const permitCt=Number(signalData?.permits?.length||0);
+  const housingCt=Number(signalData?.housing?.length||0);
+  const transitCt=Number(signalData?.transit?.length||0)+Number(signalData?.corridors?.length||0);
+  body.innerHTML=`
+    <tr><td>Live Leads</td><td class="sig-live">Live</td><td>${leadCt}</td><td>Pipeline + SLA risk</td></tr>
+    <tr><td>ACS Demographics</td><td class="sig-live">Live</td><td>${Object.keys(CD||{}).length}</td><td>Neighborhood context</td></tr>
+    <tr><td>City Opportunities API</td><td class="${(permitCt+housingCt+transitCt)>0?'sig-live':'sig-plan'}">${(permitCt+housingCt+transitCt)>0?'Live':'Pending'}</td><td>${permitCt+housingCt+transitCt}</td><td>Permits/housing/transit</td></tr>
+    <tr><td>Probate / Death / Obituaries</td><td class="sig-plan">Planned</td><td>—</td><td>Household transition triggers</td></tr>
+    <tr><td>Partner Directory Imports</td><td class="sig-private">Planned</td><td>${KEY_VENUES.filter(v=>v.group==='partners').length}</td><td>Attorneys, mortuaries, move managers, realtors</td></tr>`;
 }
 
 // ── LEADS ─────────────────────────────────────────────────────────────────────
@@ -740,8 +787,13 @@ async function fetchLeads(){
     setPipe(leadsEnriched);
     document.getElementById('leads-mini').innerHTML=leadsEnriched.slice(0,5).map(leadHtml).join('');
     document.getElementById('leads-full').innerHTML=leadsEnriched.map(leadHtml).join('')||'<div style="padding:8px;font-size:10px;color:var(--tx3)">No leads yet.</div>';
-    if(mapBuilt)renderMap(curLayer);
-    if(streetMap)renderStreetLeads();
+    renderMapSourceTable(raw?.meta||{});
+    if(streetMap){
+      renderStreetLeads();
+      renderStreetVenues();
+      renderStreetSignals();
+    }
+    renderVenueList();
   }catch(e){
     MAP_LEAD_PINS=[];
     PIN_BY_PHONE=new Map();
@@ -753,8 +805,13 @@ async function fetchLeads(){
     const nsNote=document.getElementById('ns-note');if(nsNote)nsNote.textContent='North-star KPIs unavailable right now.';
     const fb=`<div style="padding:14px;background:var(--bg3);border-radius:5px;text-align:center;font-size:10px;color:var(--tx3)">Live leads unavailable right now.</div>`;
     ['leads-mini','leads-full'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML=fb;});
-    if(mapBuilt)renderMap(curLayer);
-    if(streetMap)renderStreetLeads();
+    renderMapSourceTable({});
+    if(streetMap){
+      renderStreetLeads();
+      renderStreetVenues();
+      renderStreetSignals();
+    }
+    renderVenueList();
   }
 }
 
@@ -762,8 +819,17 @@ async function fetchLeads(){
 let CD=null; // census data keyed by zip
 
 async function fetchCensus(){
-  const ZIPS=['90008','90043','90016','90056'];
-  const NAMES={'90008':'Baldwin Hills','90043':'View Park','90016':'West Adams','90056':'Ladera Heights'};
+  const ZIPS=['90008','90043','90016','90056','90301','90302','90047','90044'];
+  const NAMES={
+    '90008':'Baldwin Hills',
+    '90043':'View Park',
+    '90016':'West Adams',
+    '90056':'Ladera Heights',
+    '90301':'Inglewood',
+    '90302':'North Inglewood',
+    '90047':'Vermont Knolls',
+    '90044':'South LA'
+  };
   const VARS='B19013_001E,B25077_001E,B25003_002E,B25003_001E,B11001_001E,B01002_001E,B01001_020E,B01001_021E,B01001_022E,B01001_023E,B01001_024E,B01001_025E,B01001_044E,B01001_045E,B01001_046E,B01001_047E,B01001_048E,B01001_049E,B01003_001E';
   // ZCTA queries do not accept `in=state:*`; include ZIP list only.
   const url=`https://api.census.gov/data/2023/acs/acs5?get=NAME,${VARS}&for=zip+code+tabulation+area:${ZIPS.join(',')}`;
@@ -786,34 +852,35 @@ async function fetchCensus(){
         ownerPct:Math.round(ow/tH*100),
         households:hh,totalPop:tP,
         medianAge:Number(row[gi('B01002_001E')])||0,
-        pop65:p65,pct65:tP>0?Math.round(p65/tP*100):0,
-        estRevenue:Math.round(hh*.10*385),
+        pop65:p65,pct65:tP>0?Math.round(p65/tP*100):0
       };
     });
     renderCensusCharts();
-    if(mapBuilt)updateMap(curLayer);
     if(streetMap)renderStreetZips();
   }catch(e){
     // Verified fallback
     CD={
-      '90008':{zip:'90008',name:'Baldwin Hills',   income:61846, homeValue:802000, ownerPct:38,households:6200,pct65:14,estRevenue:238700,totalPop:18200,medianAge:37},
-      '90043':{zip:'90043',name:'View Park',         income:64792, homeValue:982000, ownerPct:58,households:9800,pct65:18,estRevenue:377300,totalPop:28400,medianAge:41},
-      '90016':{zip:'90016',name:'West Adams',         income:73516, homeValue:718000, ownerPct:34,households:11200,pct65:12,estRevenue:431200,totalPop:34100,medianAge:34},
-      '90056':{zip:'90056',name:'Ladera Heights',     income:133048,homeValue:1120000,ownerPct:71,households:3900,pct65:22,estRevenue:150150,totalPop:9800,medianAge:48},
+      '90008':{zip:'90008',name:'Baldwin Hills',income:61846,homeValue:802000,ownerPct:38,households:6200,pct65:14,totalPop:18200,medianAge:37},
+      '90043':{zip:'90043',name:'View Park',income:64792,homeValue:982000,ownerPct:58,households:9800,pct65:18,totalPop:28400,medianAge:41},
+      '90016':{zip:'90016',name:'West Adams',income:73516,homeValue:718000,ownerPct:34,households:11200,pct65:12,totalPop:34100,medianAge:34},
+      '90056':{zip:'90056',name:'Ladera Heights',income:133048,homeValue:1120000,ownerPct:71,households:3900,pct65:22,totalPop:9800,medianAge:48},
+      '90301':{zip:'90301',name:'Inglewood',income:71200,homeValue:742000,ownerPct:36,households:13200,pct65:11,totalPop:35600,medianAge:34},
+      '90302':{zip:'90302',name:'North Inglewood',income:76900,homeValue:786000,ownerPct:39,households:8700,pct65:10,totalPop:24800,medianAge:33},
+      '90047':{zip:'90047',name:'Vermont Knolls',income:64100,homeValue:690000,ownerPct:41,households:14900,pct65:13,totalPop:46800,medianAge:35},
+      '90044':{zip:'90044',name:'South LA',income:56200,homeValue:615000,ownerPct:28,households:21700,pct65:9,totalPop:59600,medianAge:31}
     };
     document.getElementById('cens-tag').textContent='ACS 2023 · static fallback';
     renderCensusCharts();
-    if(mapBuilt)updateMap(curLayer);
     if(streetMap)renderStreetZips();
   }
 }
 
 function renderCensusCharts(){
   if(!CD)return;
-  const zips=['90008','90043','90016','90056'];
+  const zips=Object.keys(CD);
+  if(!zips.length)return;
   const maxInc=Math.max(...zips.map(z=>CD[z].income));
   const maxHV =Math.max(...zips.map(z=>CD[z].homeValue));
-  const maxRev=Math.max(...zips.map(z=>CD[z].estRevenue));
   const max65 =Math.max(...zips.map(z=>CD[z].pct65));
 
   const bc=(label,val,max,cls,fmt)=>`
@@ -892,14 +959,42 @@ const ZONES={
     [-118.410,33.997],[-118.387,33.997],[-118.387,33.975],[-118.375,33.970],[-118.357,33.970],
     [-118.357,33.955],[-118.375,33.951],[-118.400,33.951],[-118.410,33.960],[-118.410,33.997]
   ]},
+  '90301':{name:'Inglewood Core',coords:[
+    [-118.376,33.973],[-118.356,33.973],[-118.341,33.970],[-118.341,33.952],[-118.356,33.950],
+    [-118.376,33.952],[-118.376,33.973]
+  ]},
+  '90302':{name:'North Inglewood',coords:[
+    [-118.376,33.992],[-118.356,33.992],[-118.341,33.989],[-118.341,33.970],[-118.356,33.973],
+    [-118.376,33.973],[-118.376,33.992]
+  ]},
+  '90047':{name:'Vermont Knolls',coords:[
+    [-118.340,33.984],[-118.317,33.984],[-118.305,33.979],[-118.305,33.955],[-118.317,33.951],
+    [-118.340,33.952],[-118.340,33.984]
+  ]},
+  '90044':{name:'South LA',coords:[
+    [-118.330,34.000],[-118.305,34.000],[-118.293,33.993],[-118.293,33.965],[-118.305,33.955],
+    [-118.330,33.958],[-118.330,34.000]
+  ]},
 };
 
-// Venue dots [lng, lat, label, note]
-const VENUES=[
-  [-118.3391,33.9535,'🏟','SoFi · 2.1mi'],
-  [-118.3367,33.9597,'🏀','Intuit · 2.4mi'],
-  [-118.3338,33.9872,'🚇','K-Line · 0.8mi'],
-  [-118.4081,33.9425,'✈','LAX · 4.2mi'],
+const KEY_VENUES=[
+  {name:"SoFi Stadium",group:"whales",kind:"iconic",lat:33.9535,lng:-118.3391,note:"Big whale"},
+  {name:"Intuit Dome",group:"whales",kind:"iconic",lat:33.9597,lng:-118.3367,note:"Big whale"},
+  {name:"Kia Forum",group:"whales",kind:"iconic",lat:33.9581,lng:-118.3417,note:"High-volume event venue"},
+  {name:"Randy's Donuts",group:"whales",kind:"iconic",lat:33.9590,lng:-118.3539,note:"Iconic traffic anchor"},
+  {name:"Staples Center District",group:"whales",kind:"iconic",lat:34.0430,lng:-118.2673,note:"Downtown anchor"},
+  {name:"Baldwin Hills Crenshaw Plaza",group:"whales",kind:"iconic",lat:34.0088,lng:-118.3352,note:"Regional retail node"},
+  {name:"Westfield Culver City",group:"whales",kind:"iconic",lat:33.9849,lng:-118.3931,note:"Retail whale"},
+  {name:"LAX Terminal District",group:"whales",kind:"iconic",lat:33.9416,lng:-118.4085,note:"Ops anchor"},
+  {name:"Probate / Estate Attorney Cluster",group:"partners",kind:"professional",lat:34.0232,lng:-118.3210,note:"Estate + probate referrals"},
+  {name:"Trust Officer / Estate Planner Cluster",group:"partners",kind:"professional",lat:34.0105,lng:-118.3475,note:"Trust transitions"},
+  {name:"Senior Move Manager Cluster",group:"partners",kind:"professional",lat:34.0001,lng:-118.3624,note:"Downsizing referrals"},
+  {name:"Assisted Living / Memory Care Cluster",group:"partners",kind:"facility",lat:33.9807,lng:-118.3565,note:"Move-out triggers"},
+  {name:"Funeral Home / Mortuary Cluster",group:"partners",kind:"facility",lat:33.9716,lng:-118.3358,note:"Family transition timing"},
+  {name:"Property Managers / HOA Cluster",group:"partners",kind:"property",lat:34.0175,lng:-118.3652,note:"Turnover cleanouts"},
+  {name:"Restoration + Insurance Adjuster Cluster",group:"partners",kind:"ops",lat:33.9887,lng:-118.3791,note:"Water/fire/mold referrals"},
+  {name:"Realtor / Stager Cluster",group:"partners",kind:"property",lat:34.0071,lng:-118.3548,note:"Pre-listing cleanouts"},
+  {name:"Professional Organizer / Therapist Cluster",group:"partners",kind:"service",lat:33.9992,lng:-118.3342,note:"Hoarding/life-transition support"}
 ];
 
 // Stylized basemap context so the choropleth isn't floating on a blank background.
@@ -915,7 +1010,6 @@ const BASEMAP_ROADS=[
   {name:'Slauson Ave',coords:[[-118.410,33.989],[-118.391,33.989],[-118.372,33.989],[-118.353,33.989],[-118.334,33.989],[-118.318,33.989]],major:false},
   {name:'MLK Jr Blvd',coords:[[-118.404,34.008],[-118.385,34.008],[-118.366,34.008],[-118.347,34.008],[-118.329,34.008]],major:false},
 ];
-const CAPILLARY_STREETS=[];
 const BASEMAP_LABELS=[
   {name:'Inglewood',lng:-118.401,lat:33.956},
   {name:'Leimert Park',lng:-118.334,lat:33.986},
@@ -939,8 +1033,11 @@ const TERRITORY_WAYPOINTS=[
 let showTerritoryEdge=true;
 let showNeighborhoods=true;
 let showMapLegend=true;
-let showCapillary=false;
+let showVenues=true;
+let showSignals=true;
+let venueFilter='all';
 let leadFilter='all';
+let signalData={permits:[],housing:[],corridors:[],transit:[],meta:{}};
 
 function segsCross(a,b,c,d){
   const ccw=(p1,p2,p3)=>((p3[1]-p1[1])*(p2[0]-p1[0])>(p2[1]-p1[1])*(p3[0]-p1[0]));
@@ -983,23 +1080,9 @@ function basemapHtml(){
     const [rx,ry]=project(lng,lat);
     out+=`<text x="${rx+4}" y="${ry-4}" fill="rgba(131,162,209,.7)" font-size="7.8" font-family="DM Mono,monospace">${r.name}</text>`;
   });
-  if(showCapillary){
-    CAPILLARY_STREETS.forEach(r=>{
-      out+=`<polyline points="${linePts(r.coords)}" fill="none" stroke="rgba(190,24,93,.92)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>`;
-    });
-  }
   BASEMAP_LABELS.forEach(l=>{
     const [x,y]=project(l.lng,l.lat);
     out+=`<text x="${x}" y="${y}" fill="rgba(131,162,209,.55)" font-size="8.2" font-family="DM Mono,monospace" text-anchor="middle">${l.name}</text>`;
-  });
-  out+='</g>';
-  return out;
-}
-function capillaryHtml(){
-  if(!showCapillary)return'';
-  let out='<g id="capillary-layer">';
-  CAPILLARY_STREETS.forEach((r)=>{
-    out+=`<polyline points="${linePts(r.coords)}" fill="none" stroke="rgba(190,24,93,.92)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>`;
   });
   out+='</g>';
   return out;
@@ -1030,13 +1113,11 @@ const SCALES={
              breaks:[0,30,45,60,70]},
   seniors:  {label:'65+ Population %',  fmt:fPct,  colors:['#451a03','#92400e','#d97706','#f59e0b','#fcd34d'],
              breaks:[0,10,14,18,22]},
-  revenue:  {label:'Est. ICL Rev / yr', fmt:f$,    colors:['#0c1a2e','#1e3a5f','#1d4ed8','#3b82f6','#93c5fd'],
-             breaks:[0,150000,280000,380000,430000]},
 };
 
 function getZipVal(zip,metric){
   if(!CD||!CD[zip])return 0;
-  return {income:CD[zip].income,homevalue:CD[zip].homeValue,owner:CD[zip].ownerPct,seniors:CD[zip].pct65,revenue:CD[zip].estRevenue}[metric]||0;
+  return {income:CD[zip].income,homevalue:CD[zip].homeValue,owner:CD[zip].ownerPct,seniors:CD[zip].pct65}[metric]||0;
 }
 function getColor(val,metric){
   const sc=SCALES[metric];
@@ -1087,15 +1168,15 @@ function zoomAt(sx,sy,factor){
   applyMapView();
 }
 function mapZoomIn(){
-  if(mapMode==='street'&&streetMap){streetMap.zoomIn();return;}
+  if(streetMap){streetMap.zoomIn();return;}
   zoomAt(mapView.x+mapView.w/2,mapView.y+mapView.h/2,0.82);
 }
 function mapZoomOut(){
-  if(mapMode==='street'&&streetMap){streetMap.zoomOut();return;}
+  if(streetMap){streetMap.zoomOut();return;}
   zoomAt(mapView.x+mapView.w/2,mapView.y+mapView.h/2,1.22);
 }
 function mapResetView(){
-  if(mapMode==='street'&&streetMap){
+  if(streetMap){
     streetMap.setView([STREET_DEFAULT_VIEW.lat,STREET_DEFAULT_VIEW.lng],STREET_DEFAULT_VIEW.zoom,{animate:false});
     return;
   }
@@ -1117,8 +1198,8 @@ function fitChoroplethToTerritory(){
   applyMapView();
 }
 function fitToTerritory(){
-  if(mapMode==='street'&&streetMap){fitStreetToTerritory();return;}
-  fitChoroplethToTerritory();
+  ensureStreetMap();
+  if(streetMap)fitStreetToTerritory();
 }
 function bindMapInteractions(){
   if(mapInteractionsBound)return;
@@ -1207,17 +1288,26 @@ let curLayer='income';
 let hoveredZip=null;
 let mapMode='street';
 let streetMap=null;
-let streetLayers={territory:null,zips:null,leads:null,capillary:null};
+let streetLayers={territory:null,zips:null,leads:null,venues:null,signals:null};
 let selectedStreetLatLng=null;
 
 function toLatLng(coords){return coords.map(([lng,lat])=>[lat,lng]);}
 function fitStreetToTerritory(){
   if(!streetMap||typeof L==='undefined')return;
-  const b=L.latLngBounds(toLatLng(TERRITORY_EDGE));
-  streetMap.fitBounds(b.pad(0.12),{animate:false});
+  const pts=toLatLng(TERRITORY_EDGE).filter(pt=>Number.isFinite(pt[0])&&Number.isFinite(pt[1]));
+  if(pts.length<2)return;
+  const b=L.latLngBounds(pts);
+  if(!b.isValid())return;
+  try{streetMap.invalidateSize(false);}catch(e){}
+  streetMap.fitBounds(b.pad(0.14),{animate:false,maxZoom:14});
+  setTimeout(()=>{
+    try{
+      streetMap.invalidateSize(false);
+      streetMap.fitBounds(b.pad(0.14),{animate:false,maxZoom:14});
+    }catch(e){}
+  },130);
 }
 function ensureStreetMap(){
-  if(mapMode!=='street')return;
   if(typeof L==='undefined')return;
   const el=document.getElementById('street-map');
   if(!el)return;
@@ -1237,11 +1327,12 @@ function ensureStreetMap(){
   }
   renderStreetTerritory();
   renderStreetZips();
-  renderStreetCapillary();
   renderStreetLeads();
+  renderStreetVenues();
+  renderStreetSignals();
+  renderVenueList();
   renderLegend(curLayer);
-  fitStreetToTerritory();
-  setTimeout(()=>{try{streetMap.invalidateSize();}catch(e){}},60);
+  setTimeout(()=>{try{streetMap.invalidateSize();fitStreetToTerritory();}catch(e){}},70);
 }
 function renderStreetTerritory(){
   if(!streetMap||typeof L==='undefined')return;
@@ -1310,31 +1401,77 @@ function renderStreetLeads(){
   grp.addTo(streetMap);
   streetLayers.leads=grp;
 }
-function renderStreetCapillary(){
+function renderStreetVenues(){
   if(!streetMap||typeof L==='undefined')return;
-  if(streetLayers.capillary){streetMap.removeLayer(streetLayers.capillary);}
-  if(!showCapillary){streetLayers.capillary=null;return;}
+  if(streetLayers.venues){streetMap.removeLayer(streetLayers.venues);}
+  const vis=getVisibleVenues();
+  if(!vis.length){streetLayers.venues=null;return;}
   const grp=L.layerGroup();
-  CAPILLARY_STREETS.forEach(c=>{
-    const path=(c.coords||[]).map(pt=>[Number(pt[1]),Number(pt[0])]).filter(pt=>Number.isFinite(pt[0])&&Number.isFinite(pt[1]));
-    if(path.length<2)return;
-    const pl=L.polyline(path,{color:'#be185d',weight:3,opacity:.95});
-    pl.bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px"><strong>${c.name||'Capillary street'}</strong><br>Planner-priority corridor</div>`);
-    pl.addTo(grp);
+  vis.forEach(v=>{
+    const lat=Number(v.lat),lng=Number(v.lng);
+    if(!Number.isFinite(lat)||!Number.isFinite(lng))return;
+    const c=v.group==='whales'?'#f59e0b':'#3b82f6';
+    const mk=L.circleMarker([lat,lng],{
+      radius:v.group==='whales'?6:4.8,
+      color:c,weight:1.2,fillColor:c,fillOpacity:.85
+    });
+    mk.bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px;line-height:1.5"><strong>${v.name}</strong><br>${v.note||''}<br><span style="opacity:.7">${v.group==='whales'?'Whale venue':'ICL partner signal'}</span></div>`);
+    mk.addTo(grp);
   });
   grp.addTo(streetMap);
-  streetLayers.capillary=grp;
+  streetLayers.venues=grp;
 }
-function setMapMode(mode,btn){
-  mapMode=mode;
-  document.querySelectorAll('.mc-mode').forEach(b=>b.classList.remove('on'));
-  if(btn)btn.classList.add('on');
-  const streetWrap=document.getElementById('street-map-wrap');
-  const svgWrap=document.getElementById('map-svg-wrap');
-  if(streetWrap)streetWrap.style.display=mode==='street'?'block':'none';
-  if(svgWrap)svgWrap.style.display=mode==='choropleth'?'block':'none';
-  if(mode==='street')ensureStreetMap();
-  else ensureMapRendered();
+function renderStreetSignals(){
+  if(!streetMap||typeof L==='undefined')return;
+  if(streetLayers.signals){streetMap.removeLayer(streetLayers.signals);}
+  if(!showSignals){streetLayers.signals=null;return;}
+  const grp=L.layerGroup();
+  (signalData.permits||[]).forEach(p=>{
+    if(!Number.isFinite(Number(p.lat))||!Number.isFinite(Number(p.lng)))return;
+    L.circleMarker([Number(p.lat),Number(p.lng)],{radius:3.8,color:'#8b5cf6',weight:1,fillColor:'#8b5cf6',fillOpacity:.8})
+      .bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px"><strong>${p.title||'Permit'}</strong><br>${p.subtitle||''}</div>`)
+      .addTo(grp);
+  });
+  (signalData.housing||[]).forEach(p=>{
+    if(!Number.isFinite(Number(p.lat))||!Number.isFinite(Number(p.lng)))return;
+    L.circleMarker([Number(p.lat),Number(p.lng)],{radius:4.3,color:'#10b981',weight:1,fillColor:'#10b981',fillOpacity:.8})
+      .bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px"><strong>${p.title||'Housing'}</strong><br>${p.subtitle||''}</div>`)
+      .addTo(grp);
+  });
+  (signalData.transit||[]).forEach(t=>{
+    const path=(t.path||[]).map(pt=>[Number(pt.lat),Number(pt.lng)]).filter(pt=>Number.isFinite(pt[0])&&Number.isFinite(pt[1]));
+    if(path.length<2)return;
+    L.polyline(path,{color:'#ef4444',weight:2,opacity:.7,dashArray:'6 5'})
+      .bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px"><strong>${t.title||'Transit project'}</strong><br>${t.subtitle||''}</div>`)
+      .addTo(grp);
+  });
+  (signalData.corridors||[]).forEach(c=>{
+    const path=(c.path||[]).map(pt=>[Number(pt.lat),Number(pt.lng)]).filter(pt=>Number.isFinite(pt[0])&&Number.isFinite(pt[1]));
+    if(path.length<2)return;
+    L.polyline(path,{color:'#f59e0b',weight:2,opacity:.7})
+      .bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px"><strong>${c.title||'City corridor'}</strong><br>${c.subtitle||''}</div>`)
+      .addTo(grp);
+  });
+  grp.addTo(streetMap);
+  streetLayers.signals=grp;
+}
+async function fetchMapSignals(){
+  try{
+    const r=await fetch('/api/dashboard/opportunities',{headers:{'Accept':'application/json'}});
+    if(!r.ok)throw new Error(r.status);
+    const raw=await r.json();
+    signalData={
+      permits:Array.isArray(raw.permits)?raw.permits:[],
+      housing:Array.isArray(raw.housing)?raw.housing:[],
+      corridors:Array.isArray(raw.corridors)?raw.corridors:[],
+      transit:Array.isArray(raw.transit)?raw.transit:[],
+      meta:raw.meta||{}
+    };
+  }catch(e){
+    signalData={permits:[],housing:[],corridors:[],transit:[],meta:{}};
+  }
+  renderStreetSignals();
+  renderMapSourceTable({pins:getVisiblePins().length});
 }
 function openStreetView(){
   let lat=null,lng=null;
@@ -1453,7 +1590,6 @@ function renderMap(metric){
     html+=`<line x1="${x}" y1="0" x2="${x}" y2="520" stroke="#24375a" stroke-width=".6"/>`;
   }
   html+=basemapHtml();
-  html+=capillaryHtml();
   html+=territoryEdgeHtml();
 
   // Zone polygons
@@ -1546,10 +1682,7 @@ function showTooltip(e,zip){
     <div><span class="th">Home Value</span> <span class="tv">${f$(d.homeValue)}</span></div>
     <div><span class="th">Owner-Occ.</span> <span class="tv">${fPct(d.ownerPct)}</span></div>
     <div><span class="th">65+ Pop.</span> <span class="tv">${fPct(d.pct65)}</span></div>
-    <div><span class="th">Households</span> <span class="tv">${d.households?Number(d.households).toLocaleString():'—'}</span></div>
-    <div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--bd)">
-      <span class="th">Est. ICL Rev / yr</span> <span class="tg">${f$(d.estRevenue)}</span>
-    </div>`;
+    <div><span class="th">Households</span> <span class="tv">${d.households?Number(d.households).toLocaleString():'—'}</span></div>`;
   tt.style.display='block';
   moveTooltip(e);
 }
@@ -1582,41 +1715,50 @@ function setLayer(metric,btn){
   document.querySelectorAll('.mc-layer').forEach(b=>b.classList.remove('on'));
   btn.classList.add('on');
   curLayer=metric;
-  if(mapBuilt)renderMap(metric);
   if(streetMap)renderStreetZips();
+  renderLegend(metric);
 }
 function setLeadFilter(filter,btn){
   leadFilter=filter;
   document.querySelectorAll('.mc-lead-filter').forEach(b=>b.classList.remove('on'));
   btn.classList.add('on');
   updateLeadFilterCount();
-  if(mapBuilt)renderMap(curLayer);
   if(streetMap)renderStreetLeads();
+  renderMapSourceTable({pins:getVisiblePins().length});
   renderLegend(curLayer);
 }
 function toggleNeighborhoods(btn){
   showNeighborhoods=!showNeighborhoods;
   btn.classList.toggle('on',showNeighborhoods);
-  if(mapBuilt)renderMap(curLayer);
   if(streetMap)renderStreetZips();
 }
 function toggleTerritoryEdge(btn){
   showTerritoryEdge=!showTerritoryEdge;
   btn.classList.toggle('on',showTerritoryEdge);
-  if(mapBuilt)renderMap(curLayer);
   if(streetMap)renderStreetTerritory();
-}
-function toggleCapillary(btn){
-  showCapillary=!showCapillary;
-  btn.classList.toggle('on',showCapillary);
-  if(mapBuilt)renderMap(curLayer);
-  if(streetMap)renderStreetCapillary();
-  renderLegend(curLayer);
 }
 function toggleMapLegend(btn){
   showMapLegend=!showMapLegend;
   btn.classList.toggle('on',showMapLegend);
   renderLegend(curLayer);
+}
+function toggleVenues(btn){
+  showVenues=!showVenues;
+  btn.classList.toggle('on',showVenues);
+  if(streetMap)renderStreetVenues();
+  renderVenueList();
+}
+function setVenueFilter(filter,btn){
+  venueFilter=filter;
+  document.querySelectorAll('.mc-venue-filter').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  if(streetMap)renderStreetVenues();
+  renderVenueList();
+}
+function toggleSignals(btn){
+  showSignals=!showSignals;
+  btn.classList.toggle('on',showSignals);
+  if(streetMap)renderStreetSignals();
 }
 
 function ensureMapRendered(){
@@ -1640,7 +1782,7 @@ function renderLegend(metric){
   if(!showMapLegend)return;
   const pinCounts=(MAP_LEAD_PINS||[]).reduce((a,p)=>{const k=p.stage||'red';a[k]=(a[k]||0)+1;return a;},{red:0,yellow:0,green:0});
   legendEl.innerHTML=
-    `<div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:7px">${sc.label}</div>`+
+    `<div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:7px">Legend · ${sc.label}</div>`+
     [...sc.colors].reverse().map((c,i)=>{
       const idx=sc.colors.length-1-i;
       return`<div class="leg-item"><div class="leg-sw" style="background:${c}"></div>${sc.fmt(sc.breaks[idx])}+</div>`;
@@ -1649,7 +1791,14 @@ function renderLegend(metric){
     <div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px">Lead Lifecycle Pins</div>
     <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.red};border-radius:99px"></div>Lead (${pinCounts.red||0})</div>
     <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.yellow};border-radius:99px"></div>Deposit paid (${pinCounts.yellow||0})</div>
-    <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.green};border-radius:99px"></div>Completed / review (${pinCounts.green||0})</div>`;
+    <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.green};border-radius:99px"></div>Completed / review (${pinCounts.green||0})</div>
+    <div style="height:1px;background:var(--bd);margin:8px 0"></div>
+    <div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px">Opportunity Anchors</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#f59e0b;border-radius:99px"></div>Whales / iconic venues</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#3b82f6;border-radius:99px"></div>ICL partner classes</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#8b5cf6;border-radius:99px"></div>Permit signals</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#10b981;border-radius:99px"></div>Housing signals</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#ef4444;border-radius:99px"></div>Transit/project lines</div>`;
 }
 
 // ── REFERRALS ─────────────────────────────────────────────────────────────────
@@ -1688,6 +1837,7 @@ const DEFAULT={
     {id:'k1',tag:'dat',title:'Close-rate model by lead source',note:'Break out quote/deposit/close by source and ZIP.'},
     {id:'k2',tag:'sys',title:'Ops cost capture daily',note:'Crew sends COST [phone] | labor | disposal | fuel | other at job close.'},
     {id:'k3',tag:'sys',title:'A2P 10DLC registration',note:'Unblock delivery quality before paid traffic scale.'},
+    {id:'k15',tag:'dat',title:'Public records pipeline',note:'Death notices + probate filings + trustee sale signals into map layers.'},
   ],
   inprogress:[
     {id:'k4',tag:'dat',title:'Margin anomaly alerts',note:'Flag jobs with margin < 25% and route to ops review.'},
@@ -1699,6 +1849,7 @@ const DEFAULT={
     {id:'k8',tag:'sys',title:'Automation A/B prompts',note:'Test CTA verbs for red SLA recoveries.'},
     {id:'k9',tag:'grow',title:'Referral SLA scoreboard',note:'Track partner lead latency + conversion quality.'},
     {id:'k10',tag:'dat',title:'Full payment reconciliation',note:'Map additional Square order patterns to lead IDs.'},
+    {id:'k16',tag:'dat',title:'Partner directory geocoding',note:'Map real mortuaries, trust officers, probate firms, move managers.'},
   ],
   done:[
     {id:'k11',tag:'sys',title:'Auto Next Best Action engine',note:'SLA-red leads now auto-trigger customer + ops SMS reminders.'},
@@ -1871,14 +2022,11 @@ window.addEventListener('DOMContentLoaded',()=>{
   try{applyPageVisibility('overview');}catch(e){}
   try{fetchLeads();}catch(e){}
   try{fetchCensus();}catch(e){}
+  try{fetchMapSignals();}catch(e){}
   try{buildRefs();}catch(e){}
   try{loadK();renderK();}catch(e){KS=JSON.parse(JSON.stringify(DEFAULT));try{renderK();}catch(e2){}}
-  // Initialize map mode controls at load; map initializes on first map tab open.
-  try{setMapMode('street',document.querySelector('.mc-mode.on'));}catch(e){}
-  // Pre-render fallback for choropleth mode.
-  setTimeout(()=>{try{if(mapMode==='choropleth')ensureMapRendered();}catch(e){}},150);
-  [500,1000,2000].forEach(ms=>setTimeout(()=>{try{if(mapMode==='choropleth')ensureMapRendered();}catch(e){}},ms));
   setInterval(()=>{try{fetchLeads();}catch(e){}},60000);
+  setInterval(()=>{try{fetchMapSignals();}catch(e){}},300000);
 });
 </script>
 </body>
