@@ -25,6 +25,8 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 /* ── TOP BAR ── */
 .bar{background:var(--bg2);border-bottom:1px solid var(--bd);padding:0 20px;display:flex;align-items:center;justify-content:space-between;height:48px;position:sticky;top:0;z-index:999}
 .logo{font-family:'Syne',sans-serif;font-weight:800;font-size:14px;display:flex;align-items:center;gap:9px}
+.logo-btn{background:none;border:none;color:var(--tx);cursor:pointer;padding:0}
+.logo-btn:hover{color:#fff}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--blue);box-shadow:0 0 7px var(--blue);animation:pulse 3s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 7px var(--blue)}50%{opacity:.4;box-shadow:0 0 2px var(--blue)}}
 .bar-mid{font-size:10px;color:var(--tx3);letter-spacing:.8px;text-transform:uppercase}
@@ -237,7 +239,9 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 
 <!-- TOPBAR -->
 <div class="bar">
-  <div class="logo"><div class="dot"></div>ICL Junk Removal</div>
+  <button class="logo logo-btn" onclick="go('overview',document.querySelector('.nav-tab[data-page=&quot;overview&quot;]'))" title="Go to Overview">
+    <div class="dot"></div>ICL Junk Removal
+  </button>
   <div class="bar-r">
     <span id="clock" style="color:var(--tx3)">—</span>
     <div class="live-pill"><div class="live-dot"></div>Live</div>
@@ -401,7 +405,10 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
   <div class="card" id="map-card">
     <div class="ch">
       <div class="ct">Territory Map · God View</div>
-      <span class="tag tag-live">LIVE OPS MAP</span>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="tag tag-live">LIVE OPS MAP</span>
+        <button class="mc map-fullscreen-toggle" onclick="toggleMapFullscreen()">⛶ Fullscreen</button>
+      </div>
     </div>
     <div class="map-ctrl">
       <div class="map-ctrl-grid">
@@ -411,6 +418,13 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
           <button class="mc mc-lead-filter" onclick="setLeadFilter('red',this)">Red</button>
           <button class="mc mc-lead-filter" onclick="setLeadFilter('yellow',this)">Yellow</button>
           <button class="mc mc-lead-filter" onclick="setLeadFilter('green',this)">Green</button>
+          <span class="mc-lbl" style="margin-left:8px">Flow</span>
+          <button class="mc mc-flow-filter on" onclick="setLeadFlowFilter('all',this)">All</button>
+          <button class="mc mc-flow-filter" onclick="setLeadFlowFilter('new',this)">New</button>
+          <button class="mc mc-flow-filter" onclick="setLeadFlowFilter('media',this)">Media</button>
+          <button class="mc mc-flow-filter" onclick="setLeadFlowFilter('quoted',this)">Quoted</button>
+          <button class="mc mc-flow-filter" onclick="setLeadFlowFilter('deposit',this)">Deposit</button>
+          <button class="mc mc-flow-filter" onclick="setLeadFlowFilter('booked',this)">Booked</button>
           <span class="mc-lbl" id="map-filter-count">Showing: 0 / 0 leads</span>
         </div>
         <div class="map-ctrl-g">
@@ -427,7 +441,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
           <button class="mc on" id="signals-toggle" onclick="toggleSignals(this)">Signals</button>
           <button class="mc on" id="legend-toggle" onclick="toggleMapLegend(this)">Legend</button>
           <button class="mc" onclick="fitToTerritory()">Fit Territory</button>
-          <button class="mc" id="map-fullscreen-btn" onclick="toggleMapFullscreen(this)">Fullscreen</button>
+          <button class="mc map-fullscreen-toggle" onclick="toggleMapFullscreen()">Fullscreen</button>
           <button class="mc" onclick="openStreetView()">Street View ↗</button>
           <button class="mc" onclick="mapZoomIn()">＋</button>
           <button class="mc" onclick="mapZoomOut()">－</button>
@@ -604,10 +618,28 @@ function fAgo(ts){if(!ts)return'';const m=Math.floor((Date.now()-new Date(ts))/6
 let MAP_LEAD_PINS=[];
 let MAP_VISIBLE_PINS=[];
 let PIN_BY_PHONE=new Map();
+let CURRENT_LEADS=[];
+let leadFlowFilter='all';
+function flowBucketFromState(state){
+  const u=String(state||'').toUpperCase();
+  if(u==='NEW')return 'new';
+  if(u.includes('MEDIA')||u.includes('HAZMAT')||u.includes('ADDRESS')||u.includes('ACCESS')||u.includes('LOAD'))return 'media';
+  if(u.includes('QUOTE'))return 'quoted';
+  if(u.includes('DEPOSIT')||u.includes('BOOKING'))return 'deposit';
+  if(u.includes('DAY')||u.includes('WINDOW'))return 'booked';
+  return 'other';
+}
+function leadFlowBucket(lead){
+  return flowBucketFromState(lead?.state||lead?.conv_state||lead?.quote_status||'');
+}
+function pinFlowBucket(pin){
+  return flowBucketFromState(pin?.conv_state||pin?.quote_status||'');
+}
 function getVisiblePins(){
   const pins=Array.isArray(MAP_LEAD_PINS)?MAP_LEAD_PINS:[];
-  if(leadFilter==='all')return pins;
-  return pins.filter(p=>p.stage===leadFilter);
+  const byStage=leadFilter==='all'?pins:pins.filter(p=>p.stage===leadFilter);
+  if(leadFlowFilter==='all')return byStage;
+  return byStage.filter(p=>pinFlowBucket(p)===leadFlowFilter);
 }
 function updateLeadFilterCount(){
   const el=document.getElementById('map-filter-count');
@@ -688,6 +720,16 @@ function leadHtml(l){
     <div style="font-size:11px;color:var(--tx)">${amt}</div>
   </div>`;
 }
+function getFlowFilteredLeads(leads){
+  const arr=Array.isArray(leads)?leads:[];
+  if(leadFlowFilter==='all')return arr;
+  return arr.filter(l=>leadFlowBucket(l)===leadFlowFilter);
+}
+function renderLeadPanels(leads){
+  const filtered=getFlowFilteredLeads(leads);
+  document.getElementById('leads-mini').innerHTML=filtered.slice(0,5).map(leadHtml).join('')||'<div style="padding:8px;font-size:10px;color:var(--tx3)">No leads for this filter.</div>';
+  document.getElementById('leads-full').innerHTML=filtered.map(leadHtml).join('')||'<div style="padding:8px;font-size:10px;color:var(--tx3)">No leads for this filter.</div>';
+}
 function setPipe(leads){
   const t=leads.length||1,c={n:0,m:0,q:0,d:0,b:0};
   leads.forEach(l=>{
@@ -754,6 +796,7 @@ async function fetchLeads(){
         sla:slaMeta(inactivityMin)
       };
     });
+    CURRENT_LEADS=leadsEnriched;
     updateLeadFilterCount();
     renderOpsIntel(raw);
     const today=new Date().toDateString();
@@ -790,8 +833,7 @@ async function fetchLeads(){
       ? 'Square settled + cost truth live'
       : 'Square token missing';
     setPipe(leadsEnriched);
-    document.getElementById('leads-mini').innerHTML=leadsEnriched.slice(0,5).map(leadHtml).join('');
-    document.getElementById('leads-full').innerHTML=leadsEnriched.map(leadHtml).join('')||'<div style="padding:8px;font-size:10px;color:var(--tx3)">No leads yet.</div>';
+    renderLeadPanels(leadsEnriched);
     renderMapSourceTable(raw?.meta||{});
     if(streetMap){
       renderStreetLeads();
@@ -802,6 +844,7 @@ async function fetchLeads(){
   }catch(e){
     MAP_LEAD_PINS=[];
     PIN_BY_PHONE=new Map();
+    CURRENT_LEADS=[];
     updateLeadFilterCount();
     renderOpsIntel(null);
     ['kpi-tot','kpi-q','kpi-bk','kpi-rev'].forEach(id=>document.getElementById(id).textContent='—');
@@ -1489,13 +1532,12 @@ function openStreetView(){
 }
 function syncMapFullscreenUi(){
   const card=document.getElementById('map-card');
-  const btn=document.getElementById('map-fullscreen-btn');
   const on=!!(card&&document.fullscreenElement===card);
   if(card)card.classList.toggle('map-fullscreen',on);
-  if(btn){
-    btn.textContent=on?'Exit Fullscreen':'Fullscreen';
+  document.querySelectorAll('.map-fullscreen-toggle').forEach((btn,idx)=>{
+    btn.textContent=on?'Exit Fullscreen':(idx===0?'⛶ Fullscreen':'Fullscreen');
     btn.classList.toggle('on',on);
-  }
+  });
   setTimeout(()=>{try{if(streetMap){streetMap.invalidateSize(false);fitStreetToTerritory();}}catch(e){}},80);
 }
 async function toggleMapFullscreen(){
@@ -1748,6 +1790,17 @@ function setLeadFilter(filter,btn){
   btn.classList.add('on');
   updateLeadFilterCount();
   if(streetMap)renderStreetLeads();
+  renderLeadPanels(CURRENT_LEADS);
+  renderMapSourceTable({pins:getVisiblePins().length});
+  renderLegend(curLayer);
+}
+function setLeadFlowFilter(filter,btn){
+  leadFlowFilter=filter;
+  document.querySelectorAll('.mc-flow-filter').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  updateLeadFilterCount();
+  if(streetMap)renderStreetLeads();
+  renderLeadPanels(CURRENT_LEADS);
   renderMapSourceTable({pins:getVisiblePins().length});
   renderLegend(curLayer);
 }
