@@ -898,6 +898,59 @@ function buildRoadmapFromPlanning(state) {
   return { now, next, later, released };
 }
 
+function findPlanningCardColumn(state, cardId) {
+  const id = String(cardId || "").trim();
+  if (!id) return null;
+  for (const col of PLANNING_COLS) {
+    if ((state[col] || []).some((c) => String(c.id) === id)) return col;
+  }
+  return null;
+}
+
+function movePlanningCard(state, cardId, toCol) {
+  const id = String(cardId || "").trim();
+  const target = String(toCol || "").trim();
+  if (!id || !PLANNING_COLS.includes(target)) return false;
+  const fromCol = findPlanningCardColumn(state, id);
+  if (!fromCol) return false;
+  const idx = (state[fromCol] || []).findIndex((c) => String(c.id) === id);
+  if (idx < 0) return false;
+  const [card] = state[fromCol].splice(idx, 1);
+  state[target].unshift(card);
+  return true;
+}
+
+function deletePlanningCard(state, cardId) {
+  const id = String(cardId || "").trim();
+  if (!id) return false;
+  const fromCol = findPlanningCardColumn(state, id);
+  if (!fromCol) return false;
+  const before = state[fromCol].length;
+  state[fromCol] = state[fromCol].filter((c) => String(c.id) !== id);
+  return state[fromCol].length < before;
+}
+
+function parsePlanningCommand(commandText) {
+  const raw = String(commandText || "").trim();
+  if (!raw) return { error: "missing command" };
+  if (!raw.startsWith("/")) return { error: "command must start with /" };
+  const m = raw.match(/^\/([a-zA-Z]+)\s*(.*)$/);
+  if (!m) return { error: "invalid command format" };
+  const verb = String(m[1] || "").toLowerCase();
+  const rest = String(m[2] || "");
+  const args = {};
+  const kvRe = /([a-zA-Z_][a-zA-Z0-9_]*)=(?:"([^"]*)"|'([^']*)'|(\S+))/g;
+  let match;
+  while ((match = kvRe.exec(rest)) !== null) {
+    const key = String(match[1] || "").toLowerCase();
+    const val = String(match[2] ?? match[3] ?? match[4] ?? "").trim();
+    if (key) args[key] = val;
+  }
+  const freeText = rest.replace(kvRe, " ").replace(/\s+/g, " ").trim();
+  if (freeText) args._text = freeText;
+  return { verb, args };
+}
+
 const app = express();
 app.use("/public", require("express").static(require("path").join(__dirname, "public")));
 app.use(express.json({ limit: "2mb" }))
@@ -1347,6 +1400,88 @@ app.post("/api/dashboard/planning/idea", async (req, res) => {
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/dashboard/planning/command", async (req, res) => {
+  try {
+    const parsed = parsePlanningCommand(req.body?.command || req.body?.cmd || "");
+    if (parsed.error) return res.status(400).json({ ok: false, error: parsed.error });
+    const { verb, args } = parsed;
+    const { state } = await readPlanningState();
+    let message = "";
+    if (verb === "idea" || verb === "add") {
+      const title = String(args.title || args.t || args._text || "").trim();
+      if (!title) return res.status(400).json({ ok: false, error: "missing title (title=...)" });
+      const noteRaw = String(args.note || args.n || "").trim();
+      const source = String(args.source || "chat").trim();
+      const target = PLANNING_COLS.includes(String(args.target || args.to || "").trim())
+        ? String(args.target || args.to).trim()
+        : "upcoming";
+      const tag = PLANNING_TAGS.has(String(args.tag || "").trim())
+        ? String(args.tag).trim()
+        : "sys";
+      const card = normalizePlanningCard({
+        id: makePlanningId(),
+        title,
+        note: noteRaw ? `${noteRaw}${source ? ` · src:${source}` : ""}` : (source ? `src:${source}` : ""),
+        tag
+      });
+      if (!card) return res.status(400).json({ ok: false, error: "invalid title" });
+      state[target].push(card);
+      message = `Added ${card.id} -> ${target}`;
+    } else if (verb === "move") {
+      const id = String(args.id || args.card || "").trim();
+      const to = String(args.to || args.target || "").trim();
+      if (!id || !to) return res.status(400).json({ ok: false, error: "move requires id= and to=" });
+      if (!movePlanningCard(state, id, to)) return res.status(400).json({ ok: false, error: "card not found or invalid target" });
+      message = `Moved ${id} -> ${to}`;
+    } else if (verb === "start") {
+      const id = String(args.id || args.card || "").trim();
+      if (!id) return res.status(400).json({ ok: false, error: "start requires id=" });
+      if (!movePlanningCard(state, id, "inprogress")) return res.status(400).json({ ok: false, error: "card not found" });
+      message = `Started ${id}`;
+    } else if (verb === "ship") {
+      const id = String(args.id || args.card || "").trim();
+      if (!id) return res.status(400).json({ ok: false, error: "ship requires id=" });
+      if (!movePlanningCard(state, id, "done")) return res.status(400).json({ ok: false, error: "card not found" });
+      message = `Shipped ${id}`;
+    } else if (verb === "reopen") {
+      const id = String(args.id || args.card || "").trim();
+      if (!id) return res.status(400).json({ ok: false, error: "reopen requires id=" });
+      if (!movePlanningCard(state, id, "upcoming")) return res.status(400).json({ ok: false, error: "card not found" });
+      message = `Reopened ${id}`;
+    } else if (verb === "delete" || verb === "del" || verb === "rm") {
+      const id = String(args.id || args.card || "").trim();
+      if (!id) return res.status(400).json({ ok: false, error: "delete requires id=" });
+      if (!deletePlanningCard(state, id)) return res.status(400).json({ ok: false, error: "card not found" });
+      message = `Deleted ${id}`;
+    } else if (verb === "list") {
+      return res.json({
+        ok: true,
+        command: String(req.body?.command || req.body?.cmd || ""),
+        message: "Listed planning state",
+        kanban: state,
+        roadmap: buildRoadmapFromPlanning(state)
+      });
+    } else {
+      return res.status(400).json({
+        ok: false,
+        error: "unknown command",
+        supported: ["/idea", "/move", "/start", "/ship", "/reopen", "/delete", "/list"]
+      });
+    }
+    const saved = await writePlanningState(state);
+    return res.json({
+      ok: true,
+      command: String(req.body?.command || req.body?.cmd || ""),
+      message,
+      kanban: saved.state,
+      roadmap: buildRoadmapFromPlanning(saved.state),
+      updated_at: saved.updated_at
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 

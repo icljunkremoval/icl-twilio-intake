@@ -237,6 +237,8 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .ract{margin-top:6px}
 .rbtn{padding:3px 8px;font-size:8px;font-family:'DM Mono',monospace;border:1px solid var(--bd2);background:var(--bg4);color:var(--tx2);border-radius:3px;cursor:pointer}
 .rbtn:hover{border-color:var(--blue);color:var(--blue)}
+.cmd-row{display:flex;gap:8px;align-items:center;margin-top:8px}
+.cmd-input{flex:1}
 
 /* ── SKELETONS ── */
 .skel{background:linear-gradient(90deg,var(--bg3) 25%,var(--bg4) 50%,var(--bg3) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:4px;height:12px;margin:4px 0}
@@ -585,7 +587,12 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
           </div>
         </div>
       </div>
-      <div class="note">Use this to capture ideas from chat or ops calls. A single push writes one shared planning state used by Kanban + roadmap.</div>
+      <div class="cmd-row">
+        <input class="kadd-inp cmd-input" id="planning-command" placeholder="/idea title=&quot;Launch realtor blitz&quot; note=&quot;pilot in 90043&quot; tag=grow target=critical source=chat"/>
+        <button class="kadd-save" id="planning-command-btn" onclick="runPlanningCommand()">Run command</button>
+        <span class="idea-note" id="command-status">—</span>
+      </div>
+      <div class="note">Use this to capture ideas from chat or ops calls. Command examples: <code>/idea title="..." note="..." tag=dat target=upcoming source=chat</code> · <code>/move id=k123 to=inprogress</code> · <code>/ship id=k123</code>.</div>
     </div>
   </div>
   <div class="card">
@@ -2051,6 +2058,22 @@ function setIdeaStatus(msg,isErr=false){
   el.textContent=msg||'—';
   el.style.color=isErr?'var(--red)':'var(--tx3)';
 }
+function setCommandStatus(msg,isErr=false){
+  const el=document.getElementById('command-status');
+  if(!el)return;
+  el.textContent=msg||'—';
+  el.style.color=isErr?'var(--red)':'var(--tx3)';
+}
+function applyPlanningPayload(j){
+  if(!(j&&j.kanban))return false;
+  KS=normalizeState(j.kanban);
+  _memStore=cloneState(KS);
+  _planningUpdatedAt=j.updated_at||new Date().toISOString();
+  setRoadmapSyncLabel(_planningUpdatedAt);
+  renderK();
+  renderRoadmap(j.roadmap||buildRoadmapFromKanban(KS));
+  return true;
+}
 function findCardColumn(cardId){
   for(const c of COLS){
     if((KS[c.id]||[]).some(x=>x.id===cardId))return c.id;
@@ -2186,13 +2209,7 @@ async function pushIdeaFromDashboard(){
     });
     if(!r.ok)throw new Error('idea_failed');
     const j=await r.json();
-    if(j&&j.kanban){
-      KS=normalizeState(j.kanban);
-      _memStore=cloneState(KS);
-      _planningUpdatedAt=j.updated_at||new Date().toISOString();
-      setRoadmapSyncLabel(_planningUpdatedAt);
-      renderK();
-      renderRoadmap(j.roadmap||buildRoadmapFromKanban(KS));
+    if(applyPlanningPayload(j)){
       if(titleEl)titleEl.value='';
       if(noteEl)noteEl.value='';
       setIdeaStatus('Pushed');
@@ -2209,6 +2226,30 @@ async function pushIdeaFromDashboard(){
     }else{
       setIdeaStatus('Failed to save',true);
     }
+  }finally{
+    if(btn)btn.disabled=false;
+  }
+}
+async function runPlanningCommand(){
+  const input=document.getElementById('planning-command');
+  const btn=document.getElementById('planning-command-btn');
+  const command=String(input?.value||'').trim();
+  if(!command){setCommandStatus('Command required',true);return;}
+  if(btn)btn.disabled=true;
+  setCommandStatus('Running…');
+  try{
+    const r=await fetch('/api/dashboard/planning/command',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body:JSON.stringify({command})
+    });
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(String(j?.error||'command_failed'));
+    if(!applyPlanningPayload(j))throw new Error('bad_payload');
+    setCommandStatus(j?.message||'Done');
+    if(input)input.value='';
+  }catch(e){
+    setCommandStatus(String(e?.message||'Command failed'),true);
   }finally{
     if(btn)btn.disabled=false;
   }
@@ -2367,6 +2408,17 @@ window.addEventListener('DOMContentLoaded',()=>{
     KS=cloneState(DEFAULT);
     try{renderK();renderRoadmap();}catch(e2){}
   }
+  try{
+    const cmd=document.getElementById('planning-command');
+    if(cmd){
+      cmd.addEventListener('keydown',e=>{
+        if(e.key==='Enter'&&!e.shiftKey){
+          e.preventDefault();
+          runPlanningCommand();
+        }
+      });
+    }
+  }catch(e){}
   setInterval(()=>{try{fetchLeads();}catch(e){}},60000);
   setInterval(()=>{try{fetchMapSignals();}catch(e){}},300000);
 });
