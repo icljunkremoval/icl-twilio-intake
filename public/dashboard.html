@@ -1911,22 +1911,22 @@ function buildRefs(){
 
 const DEFAULT={
   critical:[
-    {id:'k1',tag:'dat',title:'Close-rate model by lead source',note:'Break out quote/deposit/close by source and ZIP.'},
-    {id:'k2',tag:'sys',title:'Ops cost capture daily',note:'Crew sends COST [phone] | labor | disposal | fuel | other at job close.'},
-    {id:'k3',tag:'sys',title:'A2P 10DLC registration',note:'Unblock delivery quality before paid traffic scale.'},
-    {id:'k15',tag:'dat',title:'Public records pipeline',note:'Death notices + probate filings + trustee sale signals into map layers.'},
+    {id:'k1',tag:'dat',title:'Event timeline + replay spine',note:'Unify lead, outreach, payment, and ops events into one scrub-able sequence.'},
+    {id:'k2',tag:'dat',title:'Signal provenance + confidence',note:'Every layer shows source, freshness, and confidence score before actioning.'},
+    {id:'k3',tag:'sys',title:'Progressive map loading budget',note:'Load anchor layers first, then secondary layers to avoid UI stalls/crashes.'},
+    {id:'k15',tag:'biz',title:'Operator camera presets',note:'One-click jump to key zones, partners, and active incidents for faster decisions.'},
   ],
   inprogress:[
-    {id:'k4',tag:'dat',title:'Margin anomaly alerts',note:'Flag jobs with margin < 25% and route to ops review.'},
+    {id:'k4',tag:'dat',title:'Correlation cards (cause + effect)',note:'Surface top shifts: SLA red → quote lag, venue proximity → close lift, etc.'},
     {id:'k5',tag:'sys',title:'SLA auto-action tuning',note:'Tune cooldown windows + message variants by conversion lift.'},
   ],
   upcoming:[
-    {id:'k6',tag:'dat',title:'Route-level close-rate model',note:'Correlate ETA and inactivity vs quote/deposit/close by week.'},
-    {id:'k7',tag:'biz',title:'Route profitability board',note:'Group jobs by corridor cluster and margin-per-mile.'},
-    {id:'k8',tag:'sys',title:'Automation A/B prompts',note:'Test CTA verbs for red SLA recoveries.'},
-    {id:'k9',tag:'grow',title:'Referral SLA scoreboard',note:'Track partner lead latency + conversion quality.'},
-    {id:'k10',tag:'dat',title:'Full payment reconciliation',note:'Map additional Square order patterns to lead IDs.'},
-    {id:'k16',tag:'dat',title:'Partner directory geocoding',note:'Map real mortuaries, trust officers, probate firms, move managers.'},
+    {id:'k6',tag:'sys',title:'Hypothesis mode (80/20)',note:'AI proposes top 3 high-impact tests weekly with expected uplift and risk.'},
+    {id:'k7',tag:'dat',title:'Ground-truth annotation loop',note:'Screenshot/comment workflow to fix map placement and model classification quickly.'},
+    {id:'k8',tag:'sys',title:'Automation prompt library',note:'Versioned prompts by role: sales rep, dispatcher, owner, partner manager.'},
+    {id:'k9',tag:'grow',title:'Partner campaign overlays',note:'Show mortuaries/realtors/probate clusters with conversion and response overlays.'},
+    {id:'k10',tag:'dat',title:'Multi-model research copilot',note:'Use search-grounded model ensemble for market scans, then summarize with citations.'},
+    {id:'k16',tag:'biz',title:'After-action review generator',note:'Auto-generate incident timeline + what changed + next decision recommendations.'},
   ],
   done:[
     {id:'k11',tag:'sys',title:'Auto Next Best Action engine',note:'SLA-red leads now auto-trigger customer + ops SMS reminders.'},
