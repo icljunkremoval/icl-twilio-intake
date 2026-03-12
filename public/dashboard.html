@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ICL · Territory 001</title>
+<link rel="icon" type="image/svg+xml" href="/public/favicon.svg">
+<link rel="shortcut icon" href="/public/favicon.svg">
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
@@ -239,6 +241,9 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .rbtn:hover{border-color:var(--blue);color:var(--blue)}
 .cmd-row{display:flex;gap:8px;align-items:center;margin-top:8px}
 .cmd-input{flex:1}
+.cmd-templates{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.cmd-chip{padding:3px 8px;font-size:8px;font-family:'DM Mono',monospace;border:1px solid var(--bd2);background:var(--bg4);color:var(--tx2);border-radius:999px;cursor:pointer}
+.cmd-chip:hover{border-color:var(--blue);color:var(--blue);background:rgba(59,130,246,.08)}
 
 /* ── SKELETONS ── */
 .skel{background:linear-gradient(90deg,var(--bg3) 25%,var(--bg4) 50%,var(--bg3) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:4px;height:12px;margin:4px 0}
@@ -591,6 +596,15 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
         <input class="kadd-inp cmd-input" id="planning-command" placeholder="/idea title=&quot;Launch realtor blitz&quot; note=&quot;pilot in 90043&quot; tag=grow target=critical source=chat"/>
         <button class="kadd-save" id="planning-command-btn" onclick="runPlanningCommand()">Run command</button>
         <span class="idea-note" id="command-status">—</span>
+      </div>
+      <div class="cmd-templates">
+        <button class="cmd-chip" onclick="setPlanningCommand('/idea title=&quot;&quot; note=&quot;&quot; tag=dat target=upcoming source=chat')">Template: idea</button>
+        <button class="cmd-chip" onclick="setPlanningCommand('/move id=k123 to=inprogress')">Template: move</button>
+        <button class="cmd-chip" onclick="setPlanningCommand('/start id=k123')">Template: start</button>
+        <button class="cmd-chip" onclick="setPlanningCommand('/ship id=k123')">Template: ship</button>
+        <button class="cmd-chip" onclick="setPlanningCommand('/reopen id=k123')">Template: reopen</button>
+        <button class="cmd-chip" onclick="setPlanningCommand('/delete id=k123')">Template: delete</button>
+        <button class="cmd-chip" onclick="setPlanningCommand('/list')">Template: list</button>
       </div>
       <div class="note">Use this to capture ideas from chat or ops calls. Command examples: <code>/idea title="..." note="..." tag=dat target=upcoming source=chat</code> · <code>/move id=k123 to=inprogress</code> · <code>/ship id=k123</code>.</div>
     </div>
@@ -2253,6 +2267,12 @@ async function runPlanningCommand(){
   }finally{
     if(btn)btn.disabled=false;
   }
+}
+function setPlanningCommand(v){
+  const input=document.getElementById('planning-command');
+  if(!input)return;
+  input.value=String(v||'');
+  input.focus();
 }
 
 function renderK(){

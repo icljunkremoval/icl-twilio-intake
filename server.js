@@ -951,6 +951,22 @@ function parsePlanningCommand(commandText) {
   return { verb, args };
 }
 
+function normalizePlanningTarget(target, fallback = "upcoming") {
+  const raw = String(target || "").trim().toLowerCase();
+  if (!raw) return fallback;
+  const aliases = {
+    now: "critical",
+    next: "upcoming",
+    later: "upcoming",
+    released: "done",
+    critical: "critical",
+    inprogress: "inprogress",
+    upcoming: "upcoming",
+    done: "done"
+  };
+  return aliases[raw] || fallback;
+}
+
 const app = express();
 app.use("/public", require("express").static(require("path").join(__dirname, "public")));
 app.use(express.json({ limit: "2mb" }))
@@ -1407,7 +1423,9 @@ app.post("/api/dashboard/planning/command", async (req, res) => {
   try {
     const parsed = parsePlanningCommand(req.body?.command || req.body?.cmd || "");
     if (parsed.error) return res.status(400).json({ ok: false, error: parsed.error });
-    const { verb, args } = parsed;
+    const verbRaw = String(parsed.verb || "").toLowerCase();
+    const verb = ({ ls: "list", done: "ship", complete: "ship" }[verbRaw] || verbRaw);
+    const { args } = parsed;
     const { state } = await readPlanningState();
     let message = "";
     if (verb === "idea" || verb === "add") {
@@ -1415,9 +1433,7 @@ app.post("/api/dashboard/planning/command", async (req, res) => {
       if (!title) return res.status(400).json({ ok: false, error: "missing title (title=...)" });
       const noteRaw = String(args.note || args.n || "").trim();
       const source = String(args.source || "chat").trim();
-      const target = PLANNING_COLS.includes(String(args.target || args.to || "").trim())
-        ? String(args.target || args.to).trim()
-        : "upcoming";
+      const target = normalizePlanningTarget(String(args.target || args.to || ""), "upcoming");
       const tag = PLANNING_TAGS.has(String(args.tag || "").trim())
         ? String(args.tag).trim()
         : "sys";
@@ -1432,7 +1448,7 @@ app.post("/api/dashboard/planning/command", async (req, res) => {
       message = `Added ${card.id} -> ${target}`;
     } else if (verb === "move") {
       const id = String(args.id || args.card || "").trim();
-      const to = String(args.to || args.target || "").trim();
+      const to = normalizePlanningTarget(String(args.to || args.target || ""), "");
       if (!id || !to) return res.status(400).json({ ok: false, error: "move requires id= and to=" });
       if (!movePlanningCard(state, id, to)) return res.status(400).json({ ok: false, error: "card not found or invalid target" });
       message = `Moved ${id} -> ${to}`;
@@ -1566,7 +1582,7 @@ app.get("/admin/leads", async (req, res) => {
     const modeAll = mode === "all";
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(
-      "<html><head><title>ICL Leads</title><style>body{font-family:system-ui;padding:16px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;font-size:13px;vertical-align:top}th{background:#f6f6f6}.tabs{display:flex;gap:8px;margin:8px 0 14px}.tab{padding:6px 10px;border:1px solid #ddd;border-radius:8px;background:#fff;color:#333;text-decoration:none;font-size:12px}.tab.on{background:#111827;color:#fff;border-color:#111827}</style></head><body>" +
+      "<html><head><title>ICL Leads</title><link rel='icon' type='image/svg+xml' href='/public/favicon.svg'><style>body{font-family:system-ui;padding:16px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;font-size:13px;vertical-align:top}th{background:#f6f6f6}.tabs{display:flex;gap:8px;margin:8px 0 14px}.tab{padding:6px 10px;border:1px solid #ddd;border-radius:8px;background:#fff;color:#333;text-decoration:none;font-size:12px}.tab.on{background:#111827;color:#fff;border-color:#111827}</style></head><body>" +
       "<h2>ICL Intake Leads</h2>" +
       "<div class='tabs'>" +
       "<a class='tab " + (modeActive ? "on" : "") + "' href='/admin/leads?show=active'>Active</a>" +
@@ -1646,7 +1662,7 @@ app.get("/admin/lead/:from", async (req, res) => {
       ? "<span style='display:inline-block;margin-left:8px;padding:2px 8px;border-radius:999px;background:#fef3c7;border:1px solid #f59e0b;color:#92400e;font-size:11px'>Archived</span>"
       : "";
     res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.end("<html><head><title>Lead " + esc(from) + "</title><style>body{font-family:system-ui;padding:16px}a{color:#0366d6}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;font-size:12px;vertical-align:top}th{background:#f6f6f6}pre{max-width:100%;overflow-x:auto}</style></head><body><div><a href='/admin/leads'>← Back</a></div><h2>Lead: " + esc(from) + archivedBadge + archiveControl + "</h2><pre>" + esc(JSON.stringify(lead,null,2)) + "</pre><h3>Media</h3>" + mediaHtml + "<h3>Events</h3><table><thead><tr><th>Time</th><th>Type</th><th>Payload</th></tr></thead><tbody>" + evHtml + "</tbody></table></body></html>");
+    res.end("<html><head><title>Lead " + esc(from) + "</title><link rel='icon' type='image/svg+xml' href='/public/favicon.svg'><style>body{font-family:system-ui;padding:16px}a{color:#0366d6}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;font-size:12px;vertical-align:top}th{background:#f6f6f6}pre{max-width:100%;overflow-x:auto}</style></head><body><div><a href='/admin/leads'>← Back</a></div><h2>Lead: " + esc(from) + archivedBadge + archiveControl + "</h2><pre>" + esc(JSON.stringify(lead,null,2)) + "</pre><h3>Media</h3>" + mediaHtml + "<h3>Events</h3><table><thead><tr><th>Time</th><th>Type</th><th>Payload</th></tr></thead><tbody>" + evHtml + "</tbody></table></body></html>");
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }
