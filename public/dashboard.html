@@ -2314,16 +2314,21 @@ function buildRefs(){
 
 const DEFAULT={
   critical:[
+    {id:'bo1',tag:'dat',title:'Build 1/5 - Live dumpsite availability feed',note:'Replace static hours with live open/closed gate status, cutoffs, outages, and call-ahead checks.'},
+    {id:'bo2',tag:'sys',title:'Build 2/5 - Route optimizer v2 (lead + dump + window)',note:'Optimize lead stops with valid MSW dump site, traffic, close times, and truck capacity.'},
     {id:'k1',tag:'dat',title:'Event timeline + replay spine',note:'Unify lead, outreach, payment, and ops events into one scrub-able sequence.'},
     {id:'k2',tag:'dat',title:'Signal provenance + confidence',note:'Every layer shows source, freshness, and confidence score before actioning.'},
     {id:'k3',tag:'sys',title:'Progressive map loading budget',note:'Load anchor layers first, then secondary layers to avoid UI stalls/crashes.'},
     {id:'k15',tag:'biz',title:'Operator camera presets',note:'One-click jump to key zones, partners, and active incidents for faster decisions.'},
   ],
   inprogress:[
+    {id:'bo3',tag:'sys',title:'Build 3/5 - Best Dump Plan per job card',note:'Show primary + backup dumpsite, ETA, open window, restrictions, and estimated tip cost per job.'},
     {id:'k4',tag:'dat',title:'Correlation cards (cause + effect)',note:'Surface top shifts: SLA red → quote lag, venue proximity → close lift, etc.'},
     {id:'k5',tag:'sys',title:'SLA auto-action tuning',note:'Tune cooldown windows + message variants by conversion lift.'},
   ],
   upcoming:[
+    {id:'bo4',tag:'sys',title:'Build 4/5 - Driver mode + scale ticket OCR loop',note:'Mobile flow for dump check-in/out and ticket OCR to auto-write disposal costs.'},
+    {id:'bo5',tag:'sys',title:'Build 5/5 - Ops guardrails engine',note:'Pre-dispatch warnings for closing gates, HHW risk, uncovered load surcharges, and wasteshed mismatches.'},
     {id:'k6',tag:'sys',title:'Hypothesis mode (80/20)',note:'AI proposes top 3 high-impact tests weekly with expected uplift and risk.'},
     {id:'k7',tag:'dat',title:'Ground-truth annotation loop',note:'Screenshot/comment workflow to fix map placement and model classification quickly.'},
     {id:'k8',tag:'sys',title:'Automation prompt library',note:'Versioned prompts by role: sales rep, dispatcher, owner, partner manager.'},

@@ -800,16 +800,21 @@ const PLANNING_COLS = ["critical", "inprogress", "upcoming", "done"];
 const PLANNING_TAGS = new Set(["sys", "biz", "dat", "grow"]);
 const DEFAULT_PLANNING_STATE = {
   critical: [
+    { id: "bo1", tag: "dat", title: "Build 1/5 - Live dumpsite availability feed", note: "Replace static hours with live open/closed gate status, cutoffs, outages, and call-ahead checks." },
+    { id: "bo2", tag: "sys", title: "Build 2/5 - Route optimizer v2 (lead + dump + window)", note: "Optimize lead stops with valid MSW dump site, traffic, close times, and truck capacity." },
     { id: "k1", tag: "dat", title: "Event timeline + replay spine", note: "Unify lead, outreach, payment, and ops events into one scrub-able sequence." },
     { id: "k2", tag: "dat", title: "Signal provenance + confidence", note: "Every layer shows source, freshness, and confidence score before actioning." },
     { id: "k3", tag: "sys", title: "Progressive map loading budget", note: "Load anchor layers first, then secondary layers to avoid UI stalls/crashes." },
     { id: "k15", tag: "biz", title: "Operator camera presets", note: "One-click jump to key zones, partners, and active incidents for faster decisions." }
   ],
   inprogress: [
+    { id: "bo3", tag: "sys", title: "Build 3/5 - Best Dump Plan per job card", note: "Show primary + backup dumpsite, ETA, open window, restrictions, and estimated tip cost per job." },
     { id: "k4", tag: "dat", title: "Correlation cards (cause + effect)", note: "Surface top shifts: SLA red -> quote lag, venue proximity -> close lift, etc." },
     { id: "k5", tag: "sys", title: "SLA auto-action tuning", note: "Tune cooldown windows + message variants by conversion lift." }
   ],
   upcoming: [
+    { id: "bo4", tag: "sys", title: "Build 4/5 - Driver mode + scale ticket OCR loop", note: "Mobile flow for dump check-in/out and ticket OCR to auto-write disposal costs." },
+    { id: "bo5", tag: "sys", title: "Build 5/5 - Ops guardrails engine", note: "Pre-dispatch warnings for closing gates, HHW risk, uncovered load surcharges, and wasteshed mismatches." },
     { id: "k6", tag: "sys", title: "Hypothesis mode (80/20)", note: "AI proposes top 3 high-impact tests weekly with expected uplift and risk." },
     { id: "k7", tag: "dat", title: "Ground-truth annotation loop", note: "Screenshot/comment workflow to fix map placement and model classification quickly." },
     { id: "k8", tag: "sys", title: "Automation prompt library", note: "Versioned prompts by role: sales rep, dispatcher, owner, partner manager." },
@@ -824,6 +829,54 @@ const DEFAULT_PLANNING_STATE = {
     { id: "k14", tag: "sys", title: "Map controls simplification", note: "Removed unstable corridor layer to keep map reliable." }
   ]
 };
+
+const REQUIRED_BUILD_ORDER_CARDS = [
+  {
+    column: "critical",
+    card: {
+      id: "bo1",
+      tag: "dat",
+      title: "Build 1/5 - Live dumpsite availability feed",
+      note: "Replace static hours with live open/closed gate status, cutoffs, outages, and call-ahead checks."
+    }
+  },
+  {
+    column: "critical",
+    card: {
+      id: "bo2",
+      tag: "sys",
+      title: "Build 2/5 - Route optimizer v2 (lead + dump + window)",
+      note: "Optimize lead stops with valid MSW dump site, traffic, close times, and truck capacity."
+    }
+  },
+  {
+    column: "inprogress",
+    card: {
+      id: "bo3",
+      tag: "sys",
+      title: "Build 3/5 - Best Dump Plan per job card",
+      note: "Show primary + backup dumpsite, ETA, open window, restrictions, and estimated tip cost per job."
+    }
+  },
+  {
+    column: "upcoming",
+    card: {
+      id: "bo4",
+      tag: "sys",
+      title: "Build 4/5 - Driver mode + scale ticket OCR loop",
+      note: "Mobile flow for dump check-in/out and ticket OCR to auto-write disposal costs."
+    }
+  },
+  {
+    column: "upcoming",
+    card: {
+      id: "bo5",
+      tag: "sys",
+      title: "Build 5/5 - Ops guardrails engine",
+      note: "Pre-dispatch warnings for closing gates, HHW risk, uncovered load surcharges, and wasteshed mismatches."
+    }
+  }
+];
 
 function cloneJson(v) {
   return JSON.parse(JSON.stringify(v));
@@ -858,22 +911,45 @@ function sanitizePlanningState(raw) {
   return out;
 }
 
+function ensureBuildOrderCards(state) {
+  const next = sanitizePlanningState(state || {});
+  const hasCard = (probe) => {
+    const pid = String(probe.id || "").trim();
+    const pTitle = String(probe.title || "").trim().toLowerCase();
+    for (const col of PLANNING_COLS) {
+      for (const c of next[col] || []) {
+        if (pid && String(c.id || "") === pid) return true;
+        if (pTitle && String(c.title || "").trim().toLowerCase() === pTitle) return true;
+      }
+    }
+    return false;
+  };
+  for (const req of REQUIRED_BUILD_ORDER_CARDS) {
+    if (!PLANNING_COLS.includes(req.column)) continue;
+    if (hasCard(req.card)) continue;
+    const normalized = normalizePlanningCard(req.card);
+    if (!normalized) continue;
+    next[req.column] = [normalized, ...(next[req.column] || [])];
+  }
+  return next;
+}
+
 async function readPlanningState() {
   const row = (await pool.query(
     "SELECT state_json, updated_at FROM dashboard_state WHERE state_key = $1",
     [PLANNING_STATE_KEY]
   )).rows[0];
-  if (!row) return { state: cloneJson(DEFAULT_PLANNING_STATE), updated_at: null };
+  if (!row) return { state: ensureBuildOrderCards(cloneJson(DEFAULT_PLANNING_STATE)), updated_at: null };
   try {
     const parsed = JSON.parse(String(row.state_json || "{}"));
-    return { state: sanitizePlanningState(parsed), updated_at: row.updated_at || null };
+    return { state: ensureBuildOrderCards(sanitizePlanningState(parsed)), updated_at: row.updated_at || null };
   } catch {
-    return { state: cloneJson(DEFAULT_PLANNING_STATE), updated_at: row.updated_at || null };
+    return { state: ensureBuildOrderCards(cloneJson(DEFAULT_PLANNING_STATE)), updated_at: row.updated_at || null };
   }
 }
 
 async function writePlanningState(state) {
-  const safe = sanitizePlanningState(state);
+  const safe = ensureBuildOrderCards(sanitizePlanningState(state));
   const updatedAt = new Date().toISOString();
   await pool.query(
     `INSERT INTO dashboard_state (state_key, state_json, updated_at)
