@@ -1,0 +1,23 @@
+@import "tailwindcss";
+@import "../styles/tokens.css";
+
+@theme inline {
+  --font-mono: var(--font-ibm-plex-mono);
+}
+
+body {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ibm-plex-mono), "SF Mono", "Fira Code", monospace;
+}
+
+* {
+  border-color: var(--border);
+}
+
+textarea,
+input,
+button {
+  font: inherit;
+}
