@@ -56,8 +56,41 @@ function suggestedLoadFromVision(lead) {
 
 async function sendLoadPrompt(from_phone, lead) {
   const hint = suggestedLoadFromVision(lead);
-  const prefix = hint ? `Photo estimate: ${hint}. Please confirm below.\n\n` : "";
+  let conf = "";
+  try {
+    const vision = typeof lead?.vision_analysis === "string" ? JSON.parse(lead.vision_analysis) : lead?.vision_analysis;
+    conf = String(vision?.load_confidence || "").toUpperCase();
+  } catch (e) {}
+  const confSuffix = conf && conf !== "HIGH" ? ` (${conf} confidence)` : "";
+  const prefix = hint ? `Photo estimate: ${hint}${confSuffix}. Please confirm below.\n\n` : "";
   await sendSms(from_phone, `${prefix}How much are you removing?\n\nSMALL — pickup-truck bed\nMEDIUM — half a truck\nLARGE — full truck`);
+}
+
+function readVisionLoad(lead) {
+  let vision = null;
+  try { vision = typeof lead?.vision_analysis === "string" ? JSON.parse(lead.vision_analysis) : lead?.vision_analysis; } catch (e) {}
+  const bucket = String(lead?.vision_load_bucket || vision?.load_bucket || "").toUpperCase();
+  const confidence = String(vision?.load_confidence || "").toUpperCase();
+  return { bucket, confidence };
+}
+
+async function maybeAutoQuoteFromVision(from_phone, reason = "vision_high_confidence") {
+  const lead = await getLead.get(from_phone);
+  if (!lead) return false;
+  if (lead.load_bucket || lead.customer_load_bucket) return false;
+  if (!lead.access_level) return false;
+  if (!(lead.address_text || lead.zip || lead.zip_text)) return false;
+  const { bucket, confidence } = readVisionLoad(lead);
+  if (!bucket || confidence !== "HIGH") return false;
+  await pool.query(
+    "UPDATE leads SET load_bucket=$1, conv_state=$2, quote_ready=1, last_seen_at=NOW() WHERE from_phone=$3",
+    [bucket, STATES.QUOTE_READY, from_phone]
+  );
+  logEvent(from_phone, "vision_load_autolock", { load_bucket: bucket, reason });
+  const label = bucket === "MIN" || bucket === "QTR" ? "SMALL" : (bucket === "HALF" ? "MEDIUM" : "LARGE");
+  await sendSms(from_phone, `Photo estimate is HIGH confidence: ${label}. Building your quote now. Reply SMALL, MEDIUM, or LARGE to adjust before deposit.`);
+  await triggerQuote(from_phone);
+  return true;
 }
 
 async function triggerQuote(from_phone) {
@@ -72,6 +105,8 @@ async function advanceAfterAddress(from_phone) {
   const lead = await getLead.get(from_phone);
   const hasAccess = lead && lead.access_level;
   if (hasAccess) {
+    const autoQuoted = await maybeAutoQuoteFromVision(from_phone, "after_address");
+    if (autoQuoted) return;
     setState(from_phone, STATES.AWAITING_LOAD);
     await sendLoadPrompt(from_phone, lead);
   } else {
@@ -103,6 +138,9 @@ function runVisionAsync(from_phone, mediaUrl, allUrls) {
       params.push(from_phone);
       pool.query("UPDATE leads SET "+pgU.join(",")+",last_seen_at=NOW() WHERE from_phone=$"+(cols.length+1), params).catch(()=>{});
     }
+    setTimeout(() => {
+      maybeAutoQuoteFromVision(from_phone, "vision_async").catch(()=>{});
+    }, 220);
     if (vision.load_confidence === "LOW") {
       sendSms(from_phone, "Quick note: load size confidence is low from this photo. If possible, send 1-2 wider shots so we can quote more accurately.").catch(()=>{});
     }
@@ -266,6 +304,8 @@ async function handleConversation(payload) {
       await pool.query("UPDATE leads SET access_level=$1, customer_access_level=$1, last_seen_at=NOW() WHERE from_phone=$2", [accessLevel, from_phone]);
       logEvent(from_phone,"access_capture",{access_level:accessLevel});
       const afterAccess=await getLead.get(from_phone);
+      const autoQuoted = await maybeAutoQuoteFromVision(from_phone, "after_access");
+      if (autoQuoted) break;
       setState(from_phone,STATES.AWAITING_LOAD);
       await sendLoadPrompt(from_phone, afterAccess);
       break;
@@ -282,6 +322,18 @@ async function handleConversation(payload) {
     }
 
     case STATES.AWAITING_DEPOSIT: {
+      let loadBucket=null;
+      for(const [key,val] of Object.entries(LOAD_MAP)){if(bodyUpper.includes(key)){loadBucket=val;break;}}
+      if (loadBucket) {
+        await pool.query(
+          "UPDATE leads SET load_bucket=$1, customer_load_bucket=$1, conv_state=$2, quote_status='READY', quote_ready=1, square_payment_link_id=NULL, square_payment_link_url=NULL, square_order_id=NULL, last_seen_at=NOW() WHERE from_phone=$3",
+          [loadBucket, STATES.QUOTE_READY, from_phone]
+        );
+        logEvent(from_phone, "load_adjust_before_deposit", { load_bucket: loadBucket });
+        await sendSms(from_phone, "Updated — rebuilding your quote with that load size now.");
+        await triggerQuote(from_phone);
+        break;
+      }
       await sendSms(from_phone,"Your deposit link is waiting — place the $50 to lock your arrival window. Reply HELP if you need it resent.");
       break;
     }
