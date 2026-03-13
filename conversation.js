@@ -88,13 +88,16 @@ async function maybeAutoQuoteFromVision(from_phone, reason = "vision_high_confid
   );
   logEvent(from_phone, "vision_load_autolock", { load_bucket: bucket, reason });
   const label = bucket === "MIN" || bucket === "QTR" ? "SMALL" : (bucket === "HALF" ? "MEDIUM" : "LARGE");
-  await sendSms(from_phone, `Photo estimate is HIGH confidence: ${label}. Building your quote now. Reply SMALL, MEDIUM, or LARGE to adjust before deposit.`);
+  await sendSms(
+    from_phone,
+    `Based on your photos, this appears to be a ${label.toLowerCase()} load. If needed, reply SMALL, MEDIUM, or LARGE to adjust before checkout.`
+  );
   await triggerQuote(from_phone);
   return true;
 }
 
 async function triggerQuote(from_phone) {
-  await sendSms(from_phone, "Got it — building your quote and checkout options now.");
+  await sendSms(from_phone, "Your quote and booking options are ready shortly. Thank you for your patience.");
   try { await recomputeDerived(from_phone); } catch (e) {}
   setTimeout(async () => { try { const r = await maybeCreateQuote(from_phone); if (!r.ok) logEvent(from_phone, "quote_trigger_failed", r); }
     catch (e) { logEvent(from_phone, "quote_trigger_error", { error: String(e.message || e) }); }
@@ -304,7 +307,7 @@ async function handleConversation(payload) {
       const zipMatch=body.match(/\b(\d{5})\b/); const zip=zipMatch?zipMatch[1]:null;
       await pool.query('UPDATE leads SET address_text=$1,zip=$2,zip_text=$2,last_seen_at=NOW() WHERE from_phone=$3', [body,zip,from_phone]);
       logEvent(from_phone,"address_capture",{address:body,zip});
-      await sendSms(from_phone, "Got it — " + body + " confirmed. Hang tight while we build your quote.");
+      await sendSms(from_phone, "Excellent — we have " + body + " confirmed. We're preparing your quote now.");
       await advanceAfterAddress(from_phone);
       break;
     }
