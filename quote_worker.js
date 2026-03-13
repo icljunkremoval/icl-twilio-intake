@@ -1,12 +1,17 @@
 const { db, pool, insertEvent } = require("./db");
 const { priceQuoteV1 } = require("./pricing_v1");
-const { createSquarePaymentLink } = require("./square_quote");
+const { createSquarePaymentOptions } = require("./square_quote");
 const { sendSms } = require("./twilio_sms");
 
-function buildQuoteSms(lead, pricing, paymentUrl) {
+const DEPOSIT_CENTS = 5000;
+const UPFRONT_DISCOUNT_PCT = 10;
+
+function buildQuoteSms(lead, pricing, payment) {
   const bucket = pricing.bucket;
   const total = (pricing.total_cents / 100).toFixed(0);
-  const deposit = 50;
+  const deposit = (DEPOSIT_CENTS / 100).toFixed(0);
+  const upfrontTotal = (payment.upfrontTotalCents / 100).toFixed(0);
+  const upfrontSavings = ((pricing.total_cents - payment.upfrontTotalCents) / 100).toFixed(0);
 
   let itemLines = "";
   try {
@@ -23,10 +28,22 @@ function buildQuoteSms(lead, pricing, paymentUrl) {
     ""
   ];
   if (itemLines) { parts.push(itemLines); parts.push(""); }
-  parts.push("To lock your spot, place a $" + deposit + " deposit here:");
-  parts.push(paymentUrl);
+  parts.push("Pick your checkout option:");
+  parts.push("1) Reserve with $" + deposit + " deposit:");
+  parts.push(payment.deposit.payment_link_url);
   parts.push("");
-  parts.push("After deposit, choose your arrival window: 8-10am, 10-12pm, 12-2pm, 2-4pm, or 4-6pm.");
+  parts.push(
+    "2) Pay upfront and save " +
+    payment.upfrontDiscountPct +
+    "% ($" +
+    upfrontSavings +
+    " off, total $" +
+    upfrontTotal +
+    "):"
+  );
+  parts.push(payment.upfront.payment_link_url);
+  parts.push("");
+  parts.push("After payment, choose your arrival window: 8-10am, 10-12pm, 12-2pm, 2-4pm, or 4-6pm.");
   return parts.join("\n");
 }
 
@@ -77,7 +94,7 @@ async function maybeCreateQuote(from_phone) {
   const lead0 = await getLead(from_phone);
   if (!lead0) return { ok: false, reason: "no_lead" };
 
-  if (!claimForQuoting(from_phone)) {
+  if (!(await claimForQuoting(from_phone))) {
     return { ok: true, changed: false, reason: "not_claimed" };
   }
 
@@ -92,23 +109,57 @@ async function maybeCreateQuote(from_phone) {
 
     writePricing(from_phone, pricing);
 
-    const square = await createSquarePaymentLink(lead, pricing.total_cents);
+    const payment = await createSquarePaymentOptions(lead, {
+      quoteTotalCents: pricing.total_cents,
+      depositCents: DEPOSIT_CENTS,
+      upfrontDiscountPct: UPFRONT_DISCOUNT_PCT
+    });
 
     await pool.query(
-      'UPDATE leads SET square_payment_link_id=$1, square_payment_link_url=$2, square_order_id=$3, quote_status=\'AWAITING_DEPOSIT\', last_seen_at=NOW() WHERE from_phone=$4',
-      [square.payment_link_id, square.payment_link_url, square.order_id, from_phone]
+      `UPDATE leads
+       SET square_payment_link_id=$1,
+           square_payment_link_url=$2,
+           square_order_id=$3,
+           square_upfront_payment_link_id=$4,
+           square_upfront_payment_link_url=$5,
+           square_upfront_order_id=$6,
+           quote_total_cents=$7,
+           upfront_total_cents=$8,
+           upfront_discount_pct=$9,
+           quote_status='AWAITING_DEPOSIT',
+           last_seen_at=NOW()
+       WHERE from_phone=$10`,
+      [
+        payment.deposit.payment_link_id,
+        payment.deposit.payment_link_url,
+        payment.deposit.order_id,
+        payment.upfront.payment_link_id,
+        payment.upfront.payment_link_url,
+        payment.upfront.order_id,
+        payment.quoteTotalCents,
+        payment.upfrontTotalCents,
+        payment.upfrontDiscountPct,
+        from_phone
+      ]
     );
 
     try {
       insertEvent.run({
         from_phone,
         event_type: "square_quote_created",
-        payload_json: JSON.stringify({ from_phone, ...square, total_cents: pricing.total_cents }),
+        payload_json: JSON.stringify({
+          from_phone,
+          quote_total_cents: payment.quoteTotalCents,
+          upfront_total_cents: payment.upfrontTotalCents,
+          upfront_discount_pct: payment.upfrontDiscountPct,
+          deposit: payment.deposit,
+          upfront: payment.upfront
+        }),
         created_at: new Date().toISOString(),
       });
     } catch (e) {}
 
-    const smsBody = buildQuoteSms(lead, pricing, square.payment_link_url);
+    const smsBody = buildQuoteSms(lead, pricing, payment);
     const sms = await sendSms(from_phone, smsBody);
 
     try {
@@ -126,8 +177,11 @@ async function maybeCreateQuote(from_phone) {
       ok: true,
       changed: true,
       reason: "square_quote_created_and_sms_sent",
-      payment_link_url: square.payment_link_url,
-      quote_total_cents: pricing.total_cents,
+      payment_link_url: payment.deposit.payment_link_url,
+      upfront_payment_link_url: payment.upfront.payment_link_url,
+      quote_total_cents: payment.quoteTotalCents,
+      upfront_total_cents: payment.upfrontTotalCents,
+      upfront_discount_pct: payment.upfrontDiscountPct,
       sms_sid: sms.sid,
       sms_status: sms.status,
     };

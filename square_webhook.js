@@ -16,8 +16,15 @@ function verifySquareSignature(body, signature, url) {
   return expected === signature;
 }
 
-function buildWindowPickerSms() {
-  return "Deposit received ✅ Your spot is locked in!\n\nReply with your arrival window:\n1) 8–10am\n2) 10am–12pm\n3) 12–2pm\n4) 2–4pm\n5) 4–6pm";
+function buildWindowPickerSms(paymentKind) {
+  const headline =
+    paymentKind === "upfront"
+      ? "Payment received ✅ Your upfront booking is locked in!"
+      : "Deposit received ✅ Your spot is locked in!";
+  return (
+    headline +
+    "\n\nReply with your arrival window:\n1) 8–10am\n2) 10am–12pm\n3) 12–2pm\n4) 2–4pm\n5) 4–6pm"
+  );
 }
 
 function phoneDigits(v) {
@@ -26,8 +33,21 @@ function phoneDigits(v) {
 
 async function findLeadByOrderOrPhone(orderId, payment) {
   if (orderId) {
-    const byOrder = await pool.query("SELECT * FROM leads WHERE square_order_id = $1", [orderId]);
-    if (byOrder.rows[0]) return { lead: byOrder.rows[0], match: "order" };
+    const byOrder = await pool.query(
+      `SELECT *,
+              CASE
+                WHEN square_upfront_order_id = $1 THEN 'order_upfront'
+                WHEN square_order_id = $1 THEN 'order_deposit'
+                ELSE 'none'
+              END AS _match
+       FROM leads
+       WHERE square_order_id = $1
+          OR square_upfront_order_id = $1
+       ORDER BY last_seen_at DESC
+       LIMIT 1`,
+      [orderId]
+    );
+    if (byOrder.rows[0]) return { lead: byOrder.rows[0], match: byOrder.rows[0]._match || "order_deposit" };
   }
   const pDigits = phoneDigits(
     payment?.buyer_details?.phone_number ||
@@ -132,12 +152,14 @@ async function handleSquareWebhook(req, res) {
       });
     }
 
-    // Deposit workflow should only fire from direct order match.
-    if (lead.deposit_paid || match !== "order") {
+    // Booking workflow should only fire from direct order match.
+    const isOrderPayment = match === "order_deposit" || match === "order_upfront";
+    if (lead.deposit_paid || !isOrderPayment) {
       console.log("[square_webhook] revenue logged; deposit flow skipped", { phone: lead.from_phone, match, deposit_paid: lead.deposit_paid });
       return res.status(200).send("ok");
     }
 
+    const paymentKind = match === "order_upfront" ? "upfront" : "deposit";
     await pool.query(
       "UPDATE leads SET deposit_paid=1, deposit_paid_at=NOW(), quote_status='DEPOSIT_PAID', last_seen_at=NOW() WHERE from_phone=$1",
       [lead.from_phone]
@@ -146,14 +168,20 @@ async function handleSquareWebhook(req, res) {
     try {
       insertEvent.run({
         from_phone: lead.from_phone,
-        event_type: "deposit_paid",
-        payload_json: JSON.stringify({ order_id: orderId, event_type: eventType, payment_id: paymentId, amount_cents: amountCents }),
+        event_type: paymentKind === "upfront" ? "upfront_paid" : "deposit_paid",
+        payload_json: JSON.stringify({
+          order_id: orderId,
+          event_type: eventType,
+          payment_id: paymentId,
+          amount_cents: amountCents,
+          payment_kind: paymentKind
+        }),
         created_at: new Date().toISOString(),
       });
     } catch {}
 
     // Send window picker SMS
-    const sms = await sendSms(lead.from_phone, buildWindowPickerSms());
+    const sms = await sendSms(lead.from_phone, buildWindowPickerSms(paymentKind));
     console.log("[square_webhook] window picker sent to:", lead.from_phone);
     sendCrewBrief(lead).catch(()=>{});
     processSalvage(lead).catch(()=>{});

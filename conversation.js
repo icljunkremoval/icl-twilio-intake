@@ -94,7 +94,7 @@ async function maybeAutoQuoteFromVision(from_phone, reason = "vision_high_confid
 }
 
 async function triggerQuote(from_phone) {
-  await sendSms(from_phone, "Got it — here's your upfront quote.");
+  await sendSms(from_phone, "Got it — building your quote and checkout options now.");
   try { await recomputeDerived(from_phone); } catch (e) {}
   setTimeout(async () => { try { const r = await maybeCreateQuote(from_phone); if (!r.ok) logEvent(from_phone, "quote_trigger_failed", r); }
     catch (e) { logEvent(from_phone, "quote_trigger_error", { error: String(e.message || e) }); }
@@ -216,9 +216,15 @@ async function handleConversation(payload) {
                square_payment_link_id=NULL,
                square_payment_link_url=NULL,
                square_order_id=NULL,
+               square_upfront_payment_link_id=NULL,
+               square_upfront_payment_link_url=NULL,
+               square_upfront_order_id=NULL,
                square_payment_id=NULL,
                deposit_paid=0,
                deposit_paid_at=NULL,
+               quote_total_cents=NULL,
+               upfront_total_cents=NULL,
+               upfront_discount_pct=NULL,
                conv_state=$1,
                last_seen_at=NOW()
            WHERE from_phone=$2`,
@@ -244,9 +250,15 @@ async function handleConversation(payload) {
                    square_payment_link_id=NULL,
                    square_payment_link_url=NULL,
                    square_order_id=NULL,
+                   square_upfront_payment_link_id=NULL,
+                   square_upfront_payment_link_url=NULL,
+                   square_upfront_order_id=NULL,
                    square_payment_id=NULL,
                    deposit_paid=0,
                    deposit_paid_at=NULL,
+                   quote_total_cents=NULL,
+                   upfront_total_cents=NULL,
+                   upfront_discount_pct=NULL,
                    conv_state=$3,
                    last_seen_at=NOW()
                WHERE from_phone=$4`,
@@ -326,7 +338,7 @@ async function handleConversation(payload) {
       for(const [key,val] of Object.entries(LOAD_MAP)){if(bodyUpper.includes(key)){loadBucket=val;break;}}
       if (loadBucket) {
         await pool.query(
-          "UPDATE leads SET load_bucket=$1, customer_load_bucket=$1, conv_state=$2, quote_status='READY', quote_ready=1, square_payment_link_id=NULL, square_payment_link_url=NULL, square_order_id=NULL, last_seen_at=NOW() WHERE from_phone=$3",
+          "UPDATE leads SET load_bucket=$1, customer_load_bucket=$1, conv_state=$2, quote_status='READY', quote_ready=1, square_payment_link_id=NULL, square_payment_link_url=NULL, square_order_id=NULL, square_upfront_payment_link_id=NULL, square_upfront_payment_link_url=NULL, square_upfront_order_id=NULL, quote_total_cents=NULL, upfront_total_cents=NULL, upfront_discount_pct=NULL, last_seen_at=NOW() WHERE from_phone=$3",
           [loadBucket, STATES.QUOTE_READY, from_phone]
         );
         logEvent(from_phone, "load_adjust_before_deposit", { load_bucket: loadBucket });
@@ -334,7 +346,7 @@ async function handleConversation(payload) {
         await triggerQuote(from_phone);
         break;
       }
-      await sendSms(from_phone,"Your deposit link is waiting — place the $50 to lock your arrival window. Reply HELP if you need it resent.");
+      await sendSms(from_phone,"Your checkout links are ready — use either the $50 deposit or upfront-save option to lock your arrival window. Reply HELP if you need links resent.");
       break;
     }
 
