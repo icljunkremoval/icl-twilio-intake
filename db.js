@@ -83,6 +83,15 @@ async function initDb() {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS dumpsite_overrides (
+      site_id TEXT PRIMARY KEY,
+      override_state TEXT NOT NULL,
+      reason TEXT,
+      active_until TEXT,
+      updated_at TEXT NOT NULL,
+      updated_by TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_events_from_phone ON events(from_phone);
     CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
   `);

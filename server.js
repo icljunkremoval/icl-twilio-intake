@@ -9,6 +9,7 @@ const { evaluateQuoteReadyRow } = require("./quote_gate");
 const { handleConversation } = require("./conversation");
 const { sendSms } = require("./twilio_sms");
 const { recordJobCosts } = require("./finance_pipeline");
+const { BASE_COORD: DUMPSITE_BASE_COORD, listDumpSites, recommendDumpSites } = require("./dumpsite_feed");
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
@@ -800,7 +801,6 @@ const PLANNING_COLS = ["critical", "inprogress", "upcoming", "done"];
 const PLANNING_TAGS = new Set(["sys", "biz", "dat", "grow"]);
 const DEFAULT_PLANNING_STATE = {
   critical: [
-    { id: "bo1", tag: "dat", title: "Build 1/5 - Live dumpsite availability feed", note: "Replace static hours with live open/closed gate status, cutoffs, outages, and call-ahead checks." },
     { id: "bo2", tag: "sys", title: "Build 2/5 - Route optimizer v2 (lead + dump + window)", note: "Optimize lead stops with valid MSW dump site, traffic, close times, and truck capacity." },
     { id: "k1", tag: "dat", title: "Event timeline + replay spine", note: "Unify lead, outreach, payment, and ops events into one scrub-able sequence." },
     { id: "k2", tag: "dat", title: "Signal provenance + confidence", note: "Every layer shows source, freshness, and confidence score before actioning." },
@@ -808,6 +808,7 @@ const DEFAULT_PLANNING_STATE = {
     { id: "k15", tag: "biz", title: "Operator camera presets", note: "One-click jump to key zones, partners, and active incidents for faster decisions." }
   ],
   inprogress: [
+    { id: "bo1", tag: "dat", title: "Build 1/5 - Live dumpsite availability feed", note: "MVP shipped: API feed + open/closed windows + manual overrides. Next: add facility outage auto-ingest." },
     { id: "bo3", tag: "sys", title: "Build 3/5 - Best Dump Plan per job card", note: "Show primary + backup dumpsite, ETA, open window, restrictions, and estimated tip cost per job." },
     { id: "k4", tag: "dat", title: "Correlation cards (cause + effect)", note: "Surface top shifts: SLA red -> quote lag, venue proximity -> close lift, etc." },
     { id: "k5", tag: "sys", title: "SLA auto-action tuning", note: "Tune cooldown windows + message variants by conversion lift." }
@@ -832,12 +833,12 @@ const DEFAULT_PLANNING_STATE = {
 
 const REQUIRED_BUILD_ORDER_CARDS = [
   {
-    column: "critical",
+    column: "inprogress",
     card: {
       id: "bo1",
       tag: "dat",
       title: "Build 1/5 - Live dumpsite availability feed",
-      note: "Replace static hours with live open/closed gate status, cutoffs, outages, and call-ahead checks."
+      note: "MVP shipped: API feed + open/closed windows + manual overrides. Next: add facility outage auto-ingest."
     }
   },
   {
@@ -913,20 +914,29 @@ function sanitizePlanningState(raw) {
 
 function ensureBuildOrderCards(state) {
   const next = sanitizePlanningState(state || {});
-  const hasCard = (probe) => {
+  const locateCard = (probe) => {
     const pid = String(probe.id || "").trim();
     const pTitle = String(probe.title || "").trim().toLowerCase();
     for (const col of PLANNING_COLS) {
-      for (const c of next[col] || []) {
-        if (pid && String(c.id || "") === pid) return true;
-        if (pTitle && String(c.title || "").trim().toLowerCase() === pTitle) return true;
+      const cards = next[col] || [];
+      for (let i = 0; i < cards.length; i += 1) {
+        const c = cards[i];
+        if (pid && String(c.id || "") === pid) return { col, idx: i, card: c };
+        if (pTitle && String(c.title || "").trim().toLowerCase() === pTitle) return { col, idx: i, card: c };
       }
     }
-    return false;
+    return null;
   };
   for (const req of REQUIRED_BUILD_ORDER_CARDS) {
     if (!PLANNING_COLS.includes(req.column)) continue;
-    if (hasCard(req.card)) continue;
+    const existing = locateCard(req.card);
+    if (existing) {
+      if (existing.col !== req.column) {
+        const [moved] = next[existing.col].splice(existing.idx, 1);
+        next[req.column] = [moved, ...(next[req.column] || [])];
+      }
+      continue;
+    }
     const normalized = normalizePlanningCard(req.card);
     if (!normalized) continue;
     next[req.column] = [normalized, ...(next[req.column] || [])];
@@ -1041,6 +1051,22 @@ function normalizePlanningTarget(target, fallback = "upcoming") {
     done: "done"
   };
   return aliases[raw] || fallback;
+}
+
+function normalizeDumpOverrideState(v) {
+  const s = String(v || "").trim().toLowerCase();
+  if (["open", "closed", "outage", "call", "restricted", "clear"].includes(s)) return s;
+  if (["remove", "none", "off", "delete"].includes(s)) return "clear";
+  return "";
+}
+
+async function getActiveDumpSiteOverrides() {
+  const rows = (await pool.query(
+    `SELECT site_id, override_state, reason, active_until, updated_at, updated_by
+     FROM dumpsite_overrides
+     WHERE active_until IS NULL OR active_until > NOW()`
+  )).rows;
+  return rows;
 }
 
 const app = express();
@@ -1433,6 +1459,89 @@ app.get("/api/dashboard/opportunities", async (_req, res) => {
     res.json({ ok: true, ...data });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/dashboard/dumpsites", async (req, res) => {
+  try {
+    const filter = String(req.query?.filter || "all").toLowerCase();
+    const lat = Number(req.query?.lat);
+    const lng = Number(req.query?.lng);
+    const overrides = await getActiveDumpSiteOverrides();
+    const sites = listDumpSites({ filter, overrides, now: new Date() });
+    const recLat = Number.isFinite(lat) ? lat : Number(DUMPSITE_BASE_COORD.lat);
+    const recLng = Number.isFinite(lng) ? lng : Number(DUMPSITE_BASE_COORD.lng);
+    const recommendations = recommendDumpSites({
+      lat: recLat,
+      lng: recLng,
+      overrides,
+      now: new Date(),
+      requireMsw: true,
+      limit: 3
+    });
+    res.json({
+      ok: true,
+      sites,
+      recommendations,
+      meta: {
+        generated_at: new Date().toISOString(),
+        override_count: overrides.length,
+        base_coord: DUMPSITE_BASE_COORD
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/admin/dumpsites/override", async (req, res) => {
+  try {
+    const siteId = String(req.body?.site_id || req.body?.id || "").trim();
+    if (!siteId) return res.status(400).json({ ok: false, error: "missing site_id" });
+    const state = normalizeDumpOverrideState(req.body?.state || req.body?.override_state);
+    if (!state) return res.status(400).json({ ok: false, error: "invalid state" });
+    if (state === "clear") {
+      await pool.query("DELETE FROM dumpsite_overrides WHERE site_id = $1", [siteId]);
+      const overrides = await getActiveDumpSiteOverrides();
+      return res.json({
+        ok: true,
+        site_id: siteId,
+        cleared: true,
+        sites: listDumpSites({ filter: "all", overrides })
+      });
+    }
+    const reason = String(req.body?.reason || "").trim().slice(0, 280) || null;
+    const updatedBy = String(req.body?.updated_by || req.body?.by || "admin").trim().slice(0, 80) || "admin";
+    const untilRaw = String(req.body?.active_until || req.body?.until || "").trim();
+    let untilIso = null;
+    if (untilRaw) {
+      const parsed = new Date(untilRaw);
+      if (!Number.isFinite(parsed.getTime())) {
+        return res.status(400).json({ ok: false, error: "invalid active_until datetime" });
+      }
+      untilIso = parsed.toISOString();
+    }
+    await pool.query(
+      `INSERT INTO dumpsite_overrides (site_id, override_state, reason, active_until, updated_at, updated_by)
+       VALUES ($1, $2, $3, $4, NOW(), $5)
+       ON CONFLICT (site_id) DO UPDATE
+       SET override_state = EXCLUDED.override_state,
+           reason = EXCLUDED.reason,
+           active_until = EXCLUDED.active_until,
+           updated_at = NOW(),
+           updated_by = EXCLUDED.updated_by`,
+      [siteId, state, reason, untilIso, updatedBy]
+    );
+    const overrides = await getActiveDumpSiteOverrides();
+    return res.json({
+      ok: true,
+      site_id: siteId,
+      override_state: state,
+      sites: listDumpSites({ filter: "all", overrides }),
+      updated_at: new Date().toISOString()
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 

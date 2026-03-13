@@ -778,6 +778,9 @@ function nextOpenWindow(site,pt){
   return null;
 }
 function dumpSiteAvailability(site,now=new Date()){
+  if(site&&site.availability&&site.availability.state){
+    return site.availability;
+  }
   const st=String(site?.status||'').toLowerCase();
   if(st==='closed')return {state:'closed',label:'Closed'};
   if(st==='restricted')return {state:'restricted',label:'Restricted'};
@@ -840,8 +843,8 @@ function rankDumpSitesForPoint(lat,lng,opts={}){
   return sites.map(s=>{
     const av=dumpSiteAvailability(s,now);
     const dist=haversineMilesClient(lat,lng,Number(s.lat),Number(s.lng));
-    const tierPenalty={primary:0,nearby:1.2,regional:3.5,far:6,restricted:12,closed:40}[String(s.tier||'regional')]??4;
-    const statePenalty={open:0,closed_now:1.5,call:2,unknown:2.5,restricted:6,closed:50}[av.state]??3;
+    const tierPenalty={primary:0,nearby:6,regional:12,far:20,restricted:40,closed:60}[String(s.tier||'regional')]??10;
+    const statePenalty={open:0,closed_now:2.5,call:4,unknown:5,restricted:10,closed:50}[av.state]??5;
     const score=dist+tierPenalty+statePenalty;
     return {site:s,availability:av,distance_mi:dist,score};
   }).sort((a,b)=>a.score-b.score);
@@ -874,7 +877,9 @@ function renderDumpSiteList(){
   }
   el.innerHTML=rows.map(site=>{
     const av=dumpSiteAvailability(site);
-    const dist=haversineMilesClient(BASE_COORD.lat,BASE_COORD.lng,Number(site.lat),Number(site.lng));
+    const dist=Number.isFinite(Number(site.distance_to_base_mi))
+      ? Number(site.distance_to_base_mi)
+      : haversineMilesClient(BASE_COORD.lat,BASE_COORD.lng,Number(site.lat),Number(site.lng));
     const icon=site.kind==='landfill'?'⛰️':'🗑️';
     return `<div class="dr"><span class="dl">${icon} ${site.name}</span><span class="dv ${dumpSiteClass(av)}">${av.label} · ${dist.toFixed(1)} mi</span></div>`;
   }).join('');
@@ -898,11 +903,14 @@ function renderMapSourceTable(meta){
   const transitCt=Number(signalData?.transit?.length||0)+Number(signalData?.corridors?.length||0);
   const dumpTotal=(Array.isArray(DUMP_SITES)?DUMP_SITES.length:0);
   const dumpOpen=(Array.isArray(DUMP_SITES)?DUMP_SITES.filter(s=>dumpSiteAvailability(s).state==='open').length:0);
+  const dumpOverrides=Number(dumpSitesMeta.override_count||0);
+  const dumpStatus=dumpSitesMeta.source==='api'?'Live':'Fallback';
+  const dumpStatusCls=dumpSitesMeta.source==='api'?'sig-live':'sig-plan';
   body.innerHTML=`
     <tr><td>Live Leads</td><td class="sig-live">Live</td><td>${leadCt}</td><td>Pipeline + SLA risk</td></tr>
     <tr><td>ACS Demographics</td><td class="sig-live">Live</td><td>${Object.keys(CD||{}).length}</td><td>Neighborhood context</td></tr>
     <tr><td>City Opportunities API</td><td class="${(permitCt+housingCt+transitCt)>0?'sig-live':'sig-plan'}">${(permitCt+housingCt+transitCt)>0?'Live':'Pending'}</td><td>${permitCt+housingCt+transitCt}</td><td>Permits/housing/transit</td></tr>
-    <tr><td>Dumpsite Layer (MSW)</td><td class="sig-live">Live</td><td>${dumpOpen}/${dumpTotal} open now</td><td>Ops drop timing + route optimization</td></tr>
+    <tr><td>Dumpsite Layer (MSW)</td><td class="${dumpStatusCls}">${dumpStatus}</td><td>${dumpOpen}/${dumpTotal} open now · ${dumpOverrides} overrides</td><td>Ops drop timing + route optimization</td></tr>
     <tr><td>Probate / Death / Obituaries</td><td class="sig-plan">Planned</td><td>—</td><td>Household transition triggers</td></tr>
     <tr><td>Partner Directory Imports</td><td class="sig-private">Planned</td><td>${KEY_VENUES.filter(v=>v.group==='partners').length}</td><td>Attorneys, mortuaries, move managers, realtors</td></tr>`;
 }
@@ -1283,7 +1291,7 @@ const KEY_VENUES=[
 
 const BASE_COORD={lat:33.9776848,lng:-118.3523303};
 const DUMP_TIER_RANK={primary:0,nearby:1,regional:2,far:3,restricted:4,closed:5};
-const DUMP_SITES=[
+const DUMP_SITES_FALLBACK=[
   {
     id:'south_gate_lacsd',name:'South Gate Transfer Station (LACSD)',kind:'transfer',tier:'primary',status:'open',
     address:'9530 S Garfield Ave, South Gate, CA 90280',phone:'(562) 927-0146',
@@ -1385,6 +1393,8 @@ const DUMP_SITES=[
     notes:'Remove from routing tools and dispatch playbooks.'
   }
 ];
+let DUMP_SITES=[...DUMP_SITES_FALLBACK];
+let dumpSitesMeta={source:'fallback',generated_at:null,override_count:0};
 
 // Stylized basemap context so the choropleth isn't floating on a blank background.
 const BASEMAP_AREAS=[
@@ -1906,6 +1916,27 @@ async function fetchMapSignals(){
   renderStreetSignals();
   renderMapSourceTable({pins:getVisiblePins().length});
 }
+async function fetchDumpSites(){
+  try{
+    const r=await fetch('/api/dashboard/dumpsites?filter=all',{headers:{'Accept':'application/json'}});
+    if(!r.ok)throw new Error(r.status);
+    const raw=await r.json();
+    const sites=Array.isArray(raw?.sites)?raw.sites:[];
+    if(!sites.length)throw new Error('no_sites');
+    DUMP_SITES=sites;
+    dumpSitesMeta={
+      source:'api',
+      generated_at:raw?.meta?.generated_at||new Date().toISOString(),
+      override_count:Number(raw?.meta?.override_count||0)
+    };
+  }catch(e){
+    DUMP_SITES=[...DUMP_SITES_FALLBACK];
+    dumpSitesMeta={source:'fallback',generated_at:null,override_count:0};
+  }
+  if(streetMap)renderStreetDumpSites();
+  renderDumpSiteList();
+  renderMapSourceTable({pins:getVisiblePins().length});
+}
 function openStreetView(){
   let lat=null,lng=null;
   if(selectedStreetLatLng){lat=selectedStreetLatLng.lat;lng=selectedStreetLatLng.lng;}
@@ -2314,7 +2345,6 @@ function buildRefs(){
 
 const DEFAULT={
   critical:[
-    {id:'bo1',tag:'dat',title:'Build 1/5 - Live dumpsite availability feed',note:'Replace static hours with live open/closed gate status, cutoffs, outages, and call-ahead checks.'},
     {id:'bo2',tag:'sys',title:'Build 2/5 - Route optimizer v2 (lead + dump + window)',note:'Optimize lead stops with valid MSW dump site, traffic, close times, and truck capacity.'},
     {id:'k1',tag:'dat',title:'Event timeline + replay spine',note:'Unify lead, outreach, payment, and ops events into one scrub-able sequence.'},
     {id:'k2',tag:'dat',title:'Signal provenance + confidence',note:'Every layer shows source, freshness, and confidence score before actioning.'},
@@ -2322,6 +2352,7 @@ const DEFAULT={
     {id:'k15',tag:'biz',title:'Operator camera presets',note:'One-click jump to key zones, partners, and active incidents for faster decisions.'},
   ],
   inprogress:[
+    {id:'bo1',tag:'dat',title:'Build 1/5 - Live dumpsite availability feed',note:'MVP shipped: API feed + open/closed windows + manual overrides. Next: add facility outage auto-ingest.'},
     {id:'bo3',tag:'sys',title:'Build 3/5 - Best Dump Plan per job card',note:'Show primary + backup dumpsite, ETA, open window, restrictions, and estimated tip cost per job.'},
     {id:'k4',tag:'dat',title:'Correlation cards (cause + effect)',note:'Surface top shifts: SLA red → quote lag, venue proximity → close lift, etc.'},
     {id:'k5',tag:'sys',title:'SLA auto-action tuning',note:'Tune cooldown windows + message variants by conversion lift.'},
@@ -2752,6 +2783,7 @@ window.addEventListener('DOMContentLoaded',()=>{
   try{fetchLeads();}catch(e){}
   try{fetchCensus();}catch(e){}
   try{fetchMapSignals();}catch(e){}
+  try{fetchDumpSites();}catch(e){}
   try{buildRefs();}catch(e){}
   try{
     loadK();
@@ -2776,6 +2808,7 @@ window.addEventListener('DOMContentLoaded',()=>{
   }catch(e){}
   setInterval(()=>{try{fetchLeads();}catch(e){}},60000);
   setInterval(()=>{try{fetchMapSignals();}catch(e){}},300000);
+  setInterval(()=>{try{fetchDumpSites();}catch(e){}},180000);
 });
 </script>
 </body>
