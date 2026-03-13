@@ -90,7 +90,7 @@ async function maybeAutoQuoteFromVision(from_phone, reason = "vision_high_confid
   const label = bucket === "MIN" || bucket === "QTR" ? "SMALL" : (bucket === "HALF" ? "MEDIUM" : "LARGE");
   await sendSms(
     from_phone,
-    `Based on your photos, this appears to be a ${label.toLowerCase()} load. If needed, reply SMALL, MEDIUM, or LARGE to adjust before checkout.`
+    `Based on your photos, this appears to be a ${label.toLowerCase()} load. If you want to adjust it, reply SMALL, MEDIUM, or LARGE before checkout.`
   );
   await triggerQuote(from_phone);
   return true;
