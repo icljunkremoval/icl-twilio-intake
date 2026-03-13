@@ -87,6 +87,7 @@ Respond with ONLY the JSON object, no other text.`;
     body: JSON.stringify({
       model: "claude-opus-4-20250514",
       max_tokens: 1024,
+      temperature: 0,
       messages: [
         {
           role: "user",

@@ -32,6 +32,9 @@ const WINDOW_MAP = {
   "8-10": "8-10am", "10-12": "10-12pm", "12-2": "12-2pm", "2-4": "2-4pm", "4-6": "4-6pm",
 };
 
+const APP_BASE_URL = String(process.env.APP_BASE_URL || "https://icl-twilio-intake-production.up.railway.app").replace(/\/+$/, "");
+const CONTACT_CARD_URL = `${APP_BASE_URL}/contact.vcf`;
+
 function getConvState(lead) { return (lead && lead.conv_state) || STATES.NEW; }
 
 function logEvent(from_phone, event_type, data) {
@@ -40,6 +43,21 @@ function logEvent(from_phone, event_type, data) {
 
 function setState(from_phone, state) {
   pool.query('UPDATE leads SET conv_state = $1, last_seen_at = NOW() WHERE from_phone = $2', [state, from_phone]).catch(e => console.error('[setState]', e.message));
+}
+
+function suggestedLoadFromVision(lead) {
+  const b = String(lead?.vision_load_bucket || "").toUpperCase();
+  if (!b) return null;
+  if (b === "MIN" || b === "QTR") return "SMALL";
+  if (b === "HALF") return "MEDIUM";
+  if (b === "3Q" || b === "FULL") return "LARGE";
+  return null;
+}
+
+async function sendLoadPrompt(from_phone, lead) {
+  const hint = suggestedLoadFromVision(lead);
+  const prefix = hint ? `Photo estimate: ${hint}. Please confirm below.\n\n` : "";
+  await sendSms(from_phone, `${prefix}How much are you removing?\n\nSMALL — pickup-truck bed\nMEDIUM — half a truck\nLARGE — full truck`);
 }
 
 async function triggerQuote(from_phone) {
@@ -52,14 +70,10 @@ async function triggerQuote(from_phone) {
 
 async function advanceAfterAddress(from_phone) {
   const lead = await getLead.get(from_phone);
-  const hasLoad = lead && lead.load_bucket;
   const hasAccess = lead && lead.access_level;
-  if (hasLoad && hasAccess) {
-    setState(from_phone, STATES.QUOTE_READY);
-    await triggerQuote(from_phone);
-  } else if (hasAccess && !hasLoad) {
+  if (hasAccess) {
     setState(from_phone, STATES.AWAITING_LOAD);
-    await sendSms(from_phone, "How much are you removing?\n\nSMALL — pickup-truck bed\nMEDIUM — half a truck\nLARGE — full truck");
+    await sendLoadPrompt(from_phone, lead);
   } else {
     setState(from_phone, STATES.AWAITING_ACCESS);
     await sendSms(from_phone, "Where are the items?\n\nCURB / DRIVEWAY / GARAGE / INSIDE HOME / STAIRS / APARTMENT / OTHER");
@@ -81,13 +95,16 @@ function runVisionAsync(from_phone, mediaUrl, allUrls) {
       return;
     }
     const updates=[]; const params=[];
-    if (vision.load_bucket && vision.load_confidence==="HIGH") { updates.push("load_bucket=?"); params.push(vision.load_bucket); logEvent(from_phone,"vision_load_set",{load_bucket:vision.load_bucket}); }
+    if (vision.load_bucket) { logEvent(from_phone,"vision_load_hint",{load_bucket:vision.load_bucket,load_confidence:vision.load_confidence||null}); }
     if (vision.access_level && vision.access_level!=="UNKNOWN" && vision.access_confidence==="HIGH") { updates.push("access_level=?"); params.push(vision.access_level); logEvent(from_phone,"vision_access_set",{access_level:vision.access_level}); }
     if (updates.length>0) {
       const cols = updates.map(u => u.split('=')[0]);
       const pgU = cols.map((col, idx) => col+'=$'+(idx+1));
       params.push(from_phone);
       pool.query("UPDATE leads SET "+pgU.join(",")+",last_seen_at=NOW() WHERE from_phone=$"+(cols.length+1), params).catch(()=>{});
+    }
+    if (vision.load_confidence === "LOW") {
+      sendSms(from_phone, "Quick note: load size confidence is low from this photo. If possible, send 1-2 wider shots so we can quote more accurately.").catch(()=>{});
     }
   }).catch((e)=>{ logEvent(from_phone,"vision_error",{error:String(e.message||e)}); });
 }
@@ -149,14 +166,54 @@ async function handleConversation(payload) {
         try { upsertLead.run({from_phone,to_phone,ts:new Date().toISOString(),last_event:"media_received",last_body:body,num_media:numMedia,media_url0:mediaUrl||null}); } catch(e){}
         logEvent(from_phone,"media_received",{numMedia,mediaUrl});
         setState(from_phone,STATES.AWAITING_HAZMAT);
-        pool.query('UPDATE leads SET has_media=1,last_seen_at=NOW() WHERE from_phone=$1', [from_phone]).catch(()=>{});
+        pool.query(
+          `UPDATE leads
+           SET has_media=1,
+               load_bucket=NULL,
+               access_level=NULL,
+               customer_load_bucket=NULL,
+               customer_access_level=NULL,
+               quote_ready=0,
+               quote_status=NULL,
+               square_payment_link_id=NULL,
+               square_payment_link_url=NULL,
+               square_order_id=NULL,
+               square_payment_id=NULL,
+               deposit_paid=0,
+               deposit_paid_at=NULL,
+               conv_state=$1,
+               last_seen_at=NOW()
+           WHERE from_phone=$2`,
+          [STATES.AWAITING_HAZMAT, from_phone]
+        ).catch(()=>{});
         if (allMediaUrls.length>0) runVisionAsync(from_phone, allMediaUrls[0], allMediaUrls);
         await sendSms(from_phone,"Got it — quick safety check: any paint, chemicals, fuel, batteries, asbestos, or medical waste in the mix?\n\nReply YES or NO");
       } else {
         setState(from_phone,STATES.AWAITING_MEDIA);
         backfillLatestMedia({from:from_phone,maxAgeSeconds:120}).then((b)=>{
           if (b&&b.mediaUrl0) {
-            pool.query('UPDATE leads SET has_media=1,num_media=$1,media_url0=$2,last_seen_at=NOW() WHERE from_phone=$3', [b.numMedia,b.mediaUrl0,from_phone]).catch(()=>{});
+            pool.query(
+              `UPDATE leads
+               SET has_media=1,
+                   num_media=$1,
+                   media_url0=$2,
+                   load_bucket=NULL,
+                   access_level=NULL,
+                   customer_load_bucket=NULL,
+                   customer_access_level=NULL,
+                   quote_ready=0,
+                   quote_status=NULL,
+                   square_payment_link_id=NULL,
+                   square_payment_link_url=NULL,
+                   square_order_id=NULL,
+                   square_payment_id=NULL,
+                   deposit_paid=0,
+                   deposit_paid_at=NULL,
+                   conv_state=$3,
+                   last_seen_at=NOW()
+               WHERE from_phone=$4`,
+              [b.numMedia,b.mediaUrl0,STATES.AWAITING_HAZMAT,from_phone]
+            ).catch(()=>{});
             setState(from_phone,STATES.AWAITING_HAZMAT);
             logEvent(from_phone,"media_backfill_hit",b);
             runVisionAsync(from_phone,b.mediaUrl0,[b.mediaUrl0]);
@@ -168,7 +225,7 @@ async function handleConversation(payload) {
                 ? "Hey! You just called us — glad you reached out. Go ahead and send up to 10 photos of what needs to go — different angles help us give you the most accurate quote. 📦\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote."
                 : "Hi! Thanks for texting ICL Junk Removal.\n\nSend us up to 10 photos of what you need removed — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.";
               sendSms(from_phone, msg).then(() => {
-              sendSms(from_phone, "Save our contact card: https://icl-twilio-intake-production.up.railway.app/contact.vcf").catch(()=>{});
+              sendSms(from_phone, "Save our contact card: " + CONTACT_CARD_URL).catch(()=>{});
             }).catch(()=>{});
             }).catch(()=>{ sendSms(from_phone,"Hi! Thanks for texting ICL Junk Removal.\n\nSend us up to 10 photos of what you need removed — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.").catch(()=>{}); });
           }
@@ -209,8 +266,8 @@ async function handleConversation(payload) {
       await pool.query("UPDATE leads SET access_level=$1, customer_access_level=$1, last_seen_at=NOW() WHERE from_phone=$2", [accessLevel, from_phone]);
       logEvent(from_phone,"access_capture",{access_level:accessLevel});
       const afterAccess=await getLead.get(from_phone);
-      if (afterAccess&&afterAccess.load_bucket) { setState(from_phone,STATES.QUOTE_READY); await triggerQuote(from_phone); }
-      else { setState(from_phone,STATES.AWAITING_LOAD); await sendSms(from_phone,"How much are you removing?\n\nSMALL — pickup-truck bed\nMEDIUM — half a truck\nLARGE — full truck"); }
+      setState(from_phone,STATES.AWAITING_LOAD);
+      await sendLoadPrompt(from_phone, afterAccess);
       break;
     }
 

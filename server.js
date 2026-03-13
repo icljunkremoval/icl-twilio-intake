@@ -1249,7 +1249,9 @@ app.post("/twilio/inbound", (req, res) => {
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-app.get("/contact.vcf", (_req, res) => {
+app.get("/contact.vcf", (req, res) => {
+  const baseUrl = String(process.env.APP_BASE_URL || "https://icl-twilio-intake-production.up.railway.app").replace(/\/+$/, "");
+  const logoUrl = `${baseUrl}/public/logo.jpg`;
   const vcard = [
     "BEGIN:VCARD",
     "VERSION:3.0",
@@ -1258,7 +1260,8 @@ app.get("/contact.vcf", (_req, res) => {
     "TEL;TYPE=CELL:+18555785014",
     "EMAIL:admin@icljunkremoval.com",
     "URL:https://icljunkremoval.com",
-    "PHOTO;VALUE=URL:https://icl-twilio-intake-production.up.railway.app/public/logo.jpg",
+    "PHOTO;TYPE=JPEG;VALUE=URI:" + logoUrl,
+    "LOGO;TYPE=JPEG;VALUE=URI:" + logoUrl,
     "END:VCARD"
   ].join("\n");
   res.set("Content-Type", "text/vcard");
