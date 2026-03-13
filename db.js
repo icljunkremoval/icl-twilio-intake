@@ -98,6 +98,8 @@ async function initDb() {
 
   // Run migrations for any missing columns
   const migrations = [
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS stall_count INTEGER DEFAULT 0",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS dropoff_alerted_at TIMESTAMPTZ",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_error TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS zip TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS geo_lat DOUBLE PRECISION",

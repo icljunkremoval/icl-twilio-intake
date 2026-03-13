@@ -24,7 +24,8 @@ async function checkDropoffs() {
     FROM leads
     WHERE last_seen_at < $1
       AND conv_state NOT IN ('AWAITING_DEPOSIT', 'DEPOSIT_PAID', 'BOOKING_SENT', 'WINDOW_SELECTED', 'ESCALATED', 'QUOTE_READY')
-      AND dropoff_alerted_at IS NULL
+      AND COALESCE(stall_count, 0) < 3
+      AND (dropoff_alerted_at IS NULL OR dropoff_alerted_at < NOW() - INTERVAL '2 hours')
       AND archived_at IS NULL
     ORDER BY last_seen_at DESC
     LIMIT 20
@@ -52,7 +53,7 @@ async function checkDropoffs() {
     try {
       await sendSms(lead.from_phone, msg);
       await pool.query(
-        "UPDATE leads SET dropoff_alerted_at=NOW() WHERE from_phone=$1",
+        "UPDATE leads SET dropoff_alerted_at=NOW(), stall_count=COALESCE(stall_count,0)+1 WHERE from_phone=$1",
         [lead.from_phone]
       );
       insertEvent.run({
