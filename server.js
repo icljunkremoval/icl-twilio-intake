@@ -185,16 +185,20 @@ function flowBucketFromState(state) {
 }
 
 function stageFromLead(lead) {
-  if (Number(lead?.deposit_paid) === 1) return "green";
+  const stateU = String(leadState(lead)).toUpperCase();
+  const quoteU = String(lead?.quote_status || "").toUpperCase();
+  if (stateU.includes("COMPLETED") || quoteU.includes("COMPLETED")) return "completed";
+  if (Number(lead?.deposit_paid) === 1) return "paid";
   const flow = flowBucketFromState(leadState(lead));
-  if (flow === "quoted" || flow === "deposit" || flow === "booked") return "yellow";
-  return "red";
+  if (flow === "quoted" || flow === "deposit" || flow === "booked") return "deposit";
+  return "lead";
 }
 
 function stageLabel(stage) {
-  if (stage === "green") return "Completed / review";
-  if (stage === "yellow") return "Deposit paid";
-  return "Lead (pre-deposit)";
+  if (stage === "completed") return "Job completed";
+  if (stage === "paid") return "Paid";
+  if (stage === "deposit") return "Deposit requested";
+  return "Lead";
 }
 
 function riskFromInactivity(minutes) {
@@ -643,7 +647,7 @@ app.get("/api/dashboard/leads", async (req, res) => {
       const inactivityMinutes = toMinAgeSince(toIsoMaybe(raw.last_seen_at || raw.first_seen_at) || null);
       const risk = riskFromInactivity(inactivityMinutes);
       const stage = stageFromLead(raw);
-      const stageWeight = stage === "red" ? 90 : stage === "yellow" ? 60 : 30;
+      const stageWeight = stage === "lead" ? 90 : stage === "deposit" ? 65 : stage === "paid" ? 40 : 20;
       const riskWeight = risk === "high" ? 30 : risk === "medium" ? 15 : 0;
       const priorityScore = stageWeight + riskWeight + Math.min(120, Math.floor(inactivityMinutes / 5));
       pins.push({
@@ -685,7 +689,7 @@ app.get("/api/dashboard/leads", async (req, res) => {
       });
     }
 
-    const stageCounts = { red: 0, yellow: 0, green: 0 };
+    const stageCounts = { lead: 0, deposit: 0, paid: 0, completed: 0 };
     const riskCounts = { high: 0, medium: 0, low: 0 };
     let etaSum = 0;
     for (const p of pins) {
@@ -703,7 +707,7 @@ app.get("/api/dashboard/leads", async (req, res) => {
       const ts = new Date(r.last_seen_at || r.first_seen_at || 0);
       return ts.getUTCFullYear() === y && ts.getUTCMonth() === m && ts.getUTCDate() === d;
     }).length;
-    const slaRedCount = pins.filter((p) => Number(p.inactivity_minutes || 0) >= 120 && p.stage !== "green").length;
+    const slaRedCount = pins.filter((p) => Number(p.inactivity_minutes || 0) >= 120 && p.stage !== "completed").length;
     const nextActionsSentTotal = leads.reduce((s, l) => s + Number(l.next_action_sent_count || 0), 0);
 
     return res.json({
@@ -735,15 +739,45 @@ app.get("/api/dashboard/leads", async (req, res) => {
 });
 
 app.get("/api/dashboard/opportunities", async (_req, res) => {
+  const permits = [
+    { title: "Demo permit cluster", subtitle: "Turnover cleanouts likely", lat: 34.0069, lng: -118.3462 },
+    { title: "Remodel permit cluster", subtitle: "Post-project debris opportunity", lat: 33.9862, lng: -118.3528 }
+  ];
+  const housing = [
+    { title: "Multifamily turnover", subtitle: "Move-out pulse", lat: 33.9776, lng: -118.3334 },
+    { title: "Senior move activity", subtitle: "Downsize transition", lat: 33.9922, lng: -118.3658 }
+  ];
+  const transit = [
+    {
+      title: "Transit corridor works",
+      subtitle: "Temporary displacement risk",
+      path: [
+        { lat: 33.946, lng: -118.341 },
+        { lat: 33.975, lng: -118.339 },
+        { lat: 34.008, lng: -118.334 }
+      ]
+    }
+  ];
+  const corridors = [
+    {
+      title: "Retail corridor pressure",
+      subtitle: "Vacancy cleanout signal",
+      path: [
+        { lat: 33.986, lng: -118.392 },
+        { lat: 33.989, lng: -118.364 },
+        { lat: 33.992, lng: -118.334 }
+      ]
+    }
+  ];
   return res.json({
     ok: true,
-    permits: [],
-    housing: [],
-    corridors: [],
-    transit: [],
+    permits,
+    housing,
+    corridors,
+    transit,
     meta: {
       generated_at: new Date().toISOString(),
-      source: "fallback_empty"
+      source: "fallback_seeded"
     }
   });
 });

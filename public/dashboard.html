@@ -128,6 +128,9 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .card.map-fullscreen #street-map{height:100%}
 .card.map-fullscreen .map-meta{display:none}
 .lead-dot{width:14px;height:14px;border-radius:50%;border:2px solid rgba(8,13,23,.95);box-shadow:0 0 0 1px rgba(255,255,255,.2)}
+.lead-dot.lead-dot-square{border-radius:2px}
+.lead-dot.lead-dot-triangle{border-radius:1px;clip-path:polygon(50% 6%, 6% 92%, 94% 92%)}
+.lead-dot.lead-dot-diamond{border-radius:2px;transform:rotate(45deg)}
 .map-tooltip{
   position:absolute;pointer-events:none;
   background:var(--bg2);border:1px solid var(--bd2);border-radius:6px;
@@ -425,7 +428,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 <div class="page" id="page-map">
   <div class="card" id="map-card">
     <div class="ch">
-      <div class="ct">Territory Map · God View</div>
+      <div class="ct">Territory Map</div>
       <div style="display:flex;align-items:center;gap:8px">
         <span class="tag tag-live">LIVE OPS MAP</span>
         <button class="mc map-fullscreen-toggle" onclick="toggleMapFullscreen()">⛶ Fullscreen</button>
@@ -436,9 +439,10 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
         <div class="map-ctrl-g">
           <span class="mc-lbl">Lead filter</span>
           <button class="mc mc-lead-filter on" onclick="setLeadFilter('all',this)">All</button>
-          <button class="mc mc-lead-filter" onclick="setLeadFilter('red',this)">Red</button>
-          <button class="mc mc-lead-filter" onclick="setLeadFilter('yellow',this)">Yellow</button>
-          <button class="mc mc-lead-filter" onclick="setLeadFilter('green',this)">Green</button>
+          <button class="mc mc-lead-filter" onclick="setLeadFilter('lead',this)">Lead</button>
+          <button class="mc mc-lead-filter" onclick="setLeadFilter('deposit',this)">Deposit</button>
+          <button class="mc mc-lead-filter" onclick="setLeadFilter('paid',this)">Paid</button>
+          <button class="mc mc-lead-filter" onclick="setLeadFilter('completed',this)">Job Completed</button>
           <span class="mc-lbl" style="margin-left:8px">Flow</span>
           <button class="mc mc-flow-filter on" onclick="setLeadFlowFilter('all',this)">All</button>
           <button class="mc mc-flow-filter" onclick="setLeadFlowFilter('new',this)">New</button>
@@ -724,7 +728,7 @@ function pinFlowBucket(pin){
 }
 function getVisiblePins(){
   const pins=Array.isArray(MAP_LEAD_PINS)?MAP_LEAD_PINS:[];
-  const byStage=leadFilter==='all'?pins:pins.filter(p=>p.stage===leadFilter);
+  const byStage=leadFilter==='all'?pins:pins.filter(p=>normalizePinStage(p.stage)===leadFilter);
   if(leadFlowFilter==='all')return byStage;
   return byStage.filter(p=>pinFlowBucket(p)===leadFlowFilter);
 }
@@ -926,11 +930,20 @@ function stateCls(s){
   return'sn';
 }
 function stateLabel(s){return(s||'?').replace('AWAITING_','').replace(/_/g,' ');}
+function normalizePinStage(stage){
+  const s=String(stage||'').toLowerCase();
+  if(s==='green')return'paid';
+  if(s==='yellow')return'deposit';
+  if(s==='red')return'lead';
+  if(s==='lead'||s==='deposit'||s==='paid'||s==='completed')return s;
+  return'lead';
+}
 function nextBestAction(lead,pin,inactivityMin){
   const s=String(lead.state||lead.conv_state||'').toUpperCase();
-  const stage=pin&&pin.stage?pin.stage:'red';
-  if(stage==='green')return 'Review/referral';
-  if(stage==='yellow')return 'Confirm window';
+  const stage=normalizePinStage(pin&&pin.stage?pin.stage:'lead');
+  if(stage==='completed')return 'Review/referral';
+  if(stage==='paid')return 'Confirm window';
+  if(stage==='deposit')return 'Close payment';
   if(s.includes('AWAITING_MEDIA'))return 'Get photos';
   if(s.includes('AWAITING_ADDRESS'))return 'Get address';
   if(s.includes('QUOTE_READY')||s.includes('QUOTE'))return 'Close deposit';
@@ -1020,7 +1033,11 @@ async function fetchLeads(){
     if(!r.ok)throw new Error(r.status);
     const raw=await r.json();
     const leads=Array.isArray(raw)?raw:(raw.leads||raw.data||[]);
-    MAP_LEAD_PINS=Array.isArray(raw.pins)?raw.pins:[];
+    MAP_LEAD_PINS=(Array.isArray(raw.pins)?raw.pins:[]).map(p=>{
+      const stage=normalizePinStage(p&&p.stage);
+      const labelByStage={lead:'Lead',deposit:'Deposit',paid:'Paid',completed:'Job completed'};
+      return {...p,stage,stage_label:String(p?.stage_label||labelByStage[stage]||'Lead')};
+    });
     PIN_BY_PHONE=new Map(MAP_LEAD_PINS.map(p=>[String(p.phone||''),p]));
     const leadsEnriched=leads.map(l=>{
       const phone=String(l.phone||l.from_phone||'');
@@ -1534,9 +1551,17 @@ function getColor(val,metric){
   return c;
 }
 
-const PIN_COLORS={red:'#ef4444',yellow:'#f59e0b',green:'#10b981'};
+const PIN_COLORS={lead:'#ef4444',deposit:'#f59e0b',paid:'#10b981',completed:'#3b82f6'};
+const PIN_SHAPES={lead:'circle',deposit:'square',paid:'triangle',completed:'diamond'};
 function clamp(v,min,max){return Math.min(max,Math.max(min,v));}
-function pinColor(stage){return PIN_COLORS[stage]||PIN_COLORS.red;}
+function pinColor(stage){
+  const key=normalizePinStage(stage);
+  return PIN_COLORS[key]||PIN_COLORS.lead;
+}
+function pinShape(stage){
+  const key=normalizePinStage(stage);
+  return PIN_SHAPES[key]||'circle';
+}
 const MAP_VB_DEFAULT={x:0,y:0,w:800,h:520};
 const STREET_DEFAULT_VIEW={lat:33.9925,lng:-118.3535,zoom:12};
 let mapView={...MAP_VB_DEFAULT};
@@ -1667,9 +1692,29 @@ function renderLeadPinsHtml(){
     const j=jitterFromPhone(p.phone);
     const x=Math.round(x0+j.dx),y=Math.round(y0+j.dy);
     const c=pinColor(p.stage);
+    const shape=pinShape(p.stage);
+    const ringSize=7.5;
+    const dotSize=4.7;
+    let ringHtml='';
+    let dotHtml='';
+    if(shape==='square'){
+      ringHtml=`<rect class="lead-pin-ring" x="${(x-ringSize).toFixed(1)}" y="${(y-ringSize).toFixed(1)}" width="${(ringSize*2).toFixed(1)}" height="${(ringSize*2).toFixed(1)}" rx="1.2" ry="1.2" stroke="${c}"/>`;
+      dotHtml=`<rect class="lead-pin-dot" x="${(x-dotSize).toFixed(1)}" y="${(y-dotSize).toFixed(1)}" width="${(dotSize*2).toFixed(1)}" height="${(dotSize*2).toFixed(1)}" rx="0.8" ry="0.8" fill="${c}"/>`;
+    }else if(shape==='triangle'){
+      const p1=[[x,y-ringSize],[x-ringSize*0.92,y+ringSize*0.82],[x+ringSize*0.92,y+ringSize*0.82]];
+      const p2=[[x,y-dotSize],[x-dotSize*0.92,y+dotSize*0.82],[x+dotSize*0.92,y+dotSize*0.82]];
+      ringHtml=`<polygon class="lead-pin-ring" points="${p1.map(a=>`${a[0].toFixed(1)},${a[1].toFixed(1)}`).join(' ')}" stroke="${c}"/>`;
+      dotHtml=`<polygon class="lead-pin-dot" points="${p2.map(a=>`${a[0].toFixed(1)},${a[1].toFixed(1)}`).join(' ')}" fill="${c}"/>`;
+    }else if(shape==='diamond'){
+      ringHtml=`<polygon class="lead-pin-ring" points="${x.toFixed(1)},${(y-ringSize).toFixed(1)} ${(x+ringSize).toFixed(1)},${y.toFixed(1)} ${x.toFixed(1)},${(y+ringSize).toFixed(1)} ${(x-ringSize).toFixed(1)},${y.toFixed(1)}" stroke="${c}"/>`;
+      dotHtml=`<polygon class="lead-pin-dot" points="${x.toFixed(1)},${(y-dotSize).toFixed(1)} ${(x+dotSize).toFixed(1)},${y.toFixed(1)} ${x.toFixed(1)},${(y+dotSize).toFixed(1)} ${(x-dotSize).toFixed(1)},${y.toFixed(1)}" fill="${c}"/>`;
+    }else{
+      ringHtml=`<circle class="lead-pin-ring" cx="${x}" cy="${y}" r="7.5" stroke="${c}"/>`;
+      dotHtml=`<circle class="lead-pin-dot" cx="${x}" cy="${y}" r="4.7" fill="${c}"/>`;
+    }
     out+=`<g class="lead-pin" data-pin-idx="${idx}" style="cursor:pointer">
-      <circle class="lead-pin-ring" cx="${x}" cy="${y}" r="7.5" stroke="${c}"/>
-      <circle class="lead-pin-dot" cx="${x}" cy="${y}" r="4.7" fill="${c}"/>
+      ${ringHtml}
+      ${dotHtml}
     </g>`;
   });
   return out;
@@ -1685,9 +1730,21 @@ function appendLeadPinsDom(svg){
     const j=jitterFromPhone(p.phone);
     const x=Math.round(x0+j.dx),y=Math.round(y0+j.dy);
     const c=pinColor(p.stage);
+    const shape=pinShape(p.stage);
     const g=svgEl('g',{'class':'lead-pin','data-pin-idx':idx,style:'cursor:pointer'});
-    g.appendChild(svgEl('circle',{cx:x,cy:y,r:'7.5','class':'lead-pin-ring',stroke:c}));
-    g.appendChild(svgEl('circle',{cx:x,cy:y,r:'4.7','class':'lead-pin-dot',fill:c}));
+    if(shape==='square'){
+      g.appendChild(svgEl('rect',{x:(x-7.5).toFixed(1),y:(y-7.5).toFixed(1),width:'15',height:'15',rx:'1.2',ry:'1.2','class':'lead-pin-ring',stroke:c}));
+      g.appendChild(svgEl('rect',{x:(x-4.7).toFixed(1),y:(y-4.7).toFixed(1),width:'9.4',height:'9.4',rx:'0.8',ry:'0.8','class':'lead-pin-dot',fill:c}));
+    }else if(shape==='triangle'){
+      g.appendChild(svgEl('polygon',{points:`${x},${(y-7.5).toFixed(1)} ${(x-6.9).toFixed(1)},${(y+6.1).toFixed(1)} ${(x+6.9).toFixed(1)},${(y+6.1).toFixed(1)}`,'class':'lead-pin-ring',stroke:c}));
+      g.appendChild(svgEl('polygon',{points:`${x},${(y-4.7).toFixed(1)} ${(x-4.3).toFixed(1)},${(y+3.9).toFixed(1)} ${(x+4.3).toFixed(1)},${(y+3.9).toFixed(1)}`,'class':'lead-pin-dot',fill:c}));
+    }else if(shape==='diamond'){
+      g.appendChild(svgEl('polygon',{points:`${x},${(y-7.5).toFixed(1)} ${(x+7.5).toFixed(1)},${y} ${x},${(y+7.5).toFixed(1)} ${(x-7.5).toFixed(1)},${y}`,'class':'lead-pin-ring',stroke:c}));
+      g.appendChild(svgEl('polygon',{points:`${x},${(y-4.7).toFixed(1)} ${(x+4.7).toFixed(1)},${y} ${x},${(y+4.7).toFixed(1)} ${(x-4.7).toFixed(1)},${y}`,'class':'lead-pin-dot',fill:c}));
+    }else{
+      g.appendChild(svgEl('circle',{cx:x,cy:y,r:'7.5','class':'lead-pin-ring',stroke:c}));
+      g.appendChild(svgEl('circle',{cx:x,cy:y,r:'4.7','class':'lead-pin-dot',fill:c}));
+    }
     svg.appendChild(g);
   });
 }
@@ -1791,10 +1848,11 @@ function renderStreetLeads(){
     const lat=Number(lead.lat),lng=Number(lead.lng);
     if(!Number.isFinite(lat)||!Number.isFinite(lng))return;
     const c=pinColor(lead.stage);
+    const shape=pinShape(lead.stage);
     const marker=L.marker([lat,lng],{
       icon:L.divIcon({
         className:'',
-        html:`<div class="lead-dot" style="background:${c}"></div>`,
+        html:`<div class="lead-dot lead-dot-${shape}" style="background:${c}"></div>`,
         iconSize:[14,14],
         iconAnchor:[7,7]
       })
@@ -2288,7 +2346,16 @@ function renderLegend(metric){
   if(!legendEl)return;
   legendEl.style.display=showMapLegend?'flex':'none';
   if(!showMapLegend)return;
-  const pinCounts=(MAP_LEAD_PINS||[]).reduce((a,p)=>{const k=p.stage||'red';a[k]=(a[k]||0)+1;return a;},{red:0,yellow:0,green:0});
+  const pinCounts=(MAP_LEAD_PINS||[]).reduce((a,p)=>{const k=normalizePinStage(p.stage);a[k]=(a[k]||0)+1;return a;},{lead:0,deposit:0,paid:0,completed:0});
+  const swatch=(stage)=>{
+    const color=pinColor(stage);
+    const shape=pinShape(stage);
+    let extra='border-radius:99px;';
+    if(shape==='square')extra='border-radius:2px;';
+    else if(shape==='triangle')extra='border-radius:1px;clip-path:polygon(50% 6%, 6% 92%, 94% 92%);';
+    else if(shape==='diamond')extra='border-radius:2px;transform:rotate(45deg);';
+    return `<div class="leg-sw" style="background:${color};${extra}"></div>`;
+  };
   legendEl.innerHTML=
     `<div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:7px">Legend · ${sc.label}</div>`+
     [...sc.colors].reverse().map((c,i)=>{
@@ -2297,9 +2364,10 @@ function renderLegend(metric){
     }).join('')+
     `<div style="height:1px;background:var(--bd);margin:8px 0"></div>
     <div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px">Lead Lifecycle Pins</div>
-    <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.red};border-radius:99px"></div>Lead (${pinCounts.red||0})</div>
-    <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.yellow};border-radius:99px"></div>Deposit paid (${pinCounts.yellow||0})</div>
-    <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.green};border-radius:99px"></div>Completed / review (${pinCounts.green||0})</div>
+    <div class="leg-item">${swatch('lead')}Lead (${pinCounts.lead||0})</div>
+    <div class="leg-item">${swatch('deposit')}Deposit (${pinCounts.deposit||0})</div>
+    <div class="leg-item">${swatch('paid')}Paid (${pinCounts.paid||0})</div>
+    <div class="leg-item">${swatch('completed')}Job Completed (${pinCounts.completed||0})</div>
     <div style="height:1px;background:var(--bd);margin:8px 0"></div>
     <div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px">Opportunity Anchors</div>
     <div class="leg-item"><div class="leg-sw" style="background:#f59e0b;border-radius:99px"></div>Whales / iconic venues</div>
