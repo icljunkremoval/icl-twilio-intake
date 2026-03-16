@@ -14,10 +14,47 @@ const { sendSms } = require("./twilio_sms");
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+const { execSync } = require("child_process");
 const { db, pool, upsertLead, insertEvent, getLead } = require("./db");
 const fetch = (...args) => import("node-fetch").then(({default: f}) => f(...args));
 
 const BASE_LOCATION = "506 E Brett St, Inglewood, CA 90301";
+
+function resolveBuildInfo() {
+  const envSha = String(
+    process.env.RAILWAY_GIT_COMMIT_SHA ||
+    process.env.RENDER_GIT_COMMIT ||
+    process.env.VERCEL_GIT_COMMIT_SHA ||
+    ""
+  ).trim();
+  const envBranch = String(
+    process.env.RAILWAY_GIT_BRANCH ||
+    process.env.RENDER_GIT_BRANCH ||
+    process.env.VERCEL_GIT_COMMIT_REF ||
+    ""
+  ).trim();
+  if (envSha) {
+    return {
+      sha: envSha,
+      sha_short: envSha.slice(0, 7),
+      branch: envBranch || null,
+      source: "env"
+    };
+  }
+  try {
+    const sha = execSync("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString("utf8").trim();
+    const branch = execSync("git rev-parse --abbrev-ref HEAD", { stdio: ["ignore", "pipe", "ignore"] }).toString("utf8").trim();
+    return {
+      sha,
+      sha_short: sha.slice(0, 7),
+      branch: branch || null,
+      source: "git"
+    };
+  } catch {
+    return { sha: null, sha_short: "unknown", branch: null, source: "unknown" };
+  }
+}
+const BUILD_INFO = resolveBuildInfo();
 
 function haversineMiles(lat1, lon1, lat2, lon2) {
   const toRad = (d) => (d * Math.PI) / 180;
@@ -101,9 +138,20 @@ app.get("/payment/confirmed", (_req, res) => {
 });
 // Territory dashboard
 app.get('/dashboard', (req, res) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
   res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 ;
+app.get("/api/version", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  return res.json({
+    ok: true,
+    build: BUILD_INFO,
+    served_at: new Date().toISOString()
+  });
+});
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";

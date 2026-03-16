@@ -28,6 +28,7 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .bar-r{display:flex;align-items:center;gap:12px;font-size:10px;color:var(--tx2)}
 .live-pill{display:flex;align-items:center;gap:4px;background:var(--green2);border:1px solid var(--green);color:var(--green);padding:2px 9px;border-radius:100px;font-size:9px}
 .live-dot{width:4px;height:4px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+.build-pill{display:inline-flex;align-items:center;gap:4px;background:var(--bg4);border:1px solid var(--bd2);color:var(--tx2);padding:2px 8px;border-radius:100px;font-size:9px;max-width:230px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* ── NAV ── */
 .nav{background:var(--bg2);border-bottom:1px solid var(--bd);display:flex;padding:0 20px;position:sticky;top:48px;z-index:998}
@@ -226,6 +227,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
   <div class="bar-r">
     <span id="clock" style="color:var(--tx3)">—</span>
     <div class="live-pill"><div class="live-dot"></div>Live</div>
+    <span class="build-pill" id="build-pill">build —</span>
   </div>
 </div>
 
@@ -474,6 +476,24 @@ function tick(){
   }
 }
 setInterval(tick,1000);tick();
+
+async function fetchBuildVersion(){
+  const el=document.getElementById('build-pill');
+  if(!el)return;
+  try{
+    const r=await fetch('/api/version',{cache:'no-store'});
+    if(!r.ok)throw new Error('version_http_'+r.status);
+    const j=await r.json();
+    const b=(j&&j.build)||{};
+    const sha=String(b.sha_short||b.sha||'unknown');
+    const branch=b.branch?String(b.branch):'';
+    el.textContent='build '+(branch?branch+' · ':'')+sha;
+    el.title='source: '+String(b.source||'unknown')+(j&&j.served_at?(' | served: '+String(j.served_at)):'');
+  }catch(e){
+    el.textContent='build unavailable';
+    el.title=String(e&&e.message||e||'version unavailable');
+  }
+}
 
 // ── PAGE NAV ─────────────────────────────────────────────────────────────────
 let mapBuilt=false;
@@ -1436,6 +1456,7 @@ function delCard(id,colId){
 
 // ── INIT ─────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded',()=>{
+  try{fetchBuildVersion();}catch(e){}
   try{fetchLeads();}catch(e){}
   try{fetchCensus();}catch(e){}
   try{buildRefs();}catch(e){}
