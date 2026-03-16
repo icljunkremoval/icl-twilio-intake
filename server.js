@@ -571,6 +571,15 @@ app.get("/api/dashboard/leads", async (req, res) => {
   try {
     const limit = Math.max(1, Math.min(200, Number(req.query.limit || 120) || 120));
     const geocodeBudget = Math.max(0, Math.min(20, Number(req.query.geocode_budget || 6) || 6));
+    let worldviewByPhone = new Map();
+    try {
+      const worldviewLeads = await listWorldviewLeads({ limit });
+      worldviewByPhone = new Map(
+        worldviewLeads
+          .map((l) => [String(l.phone || ""), l])
+          .filter(([phone]) => !!phone)
+      );
+    } catch {}
 
     const rows = (
       await pool.query(
@@ -618,6 +627,7 @@ app.get("/api/dashboard/leads", async (req, res) => {
     const leads = rows.map((r) => {
       const phone = String(r.from_phone || "");
       const state = leadState(r);
+      const worldview = worldviewByPhone.get(phone) || null;
       return {
         phone,
         from_phone: phone,
@@ -633,7 +643,8 @@ app.get("/api/dashboard/leads", async (req, res) => {
         total_cost_cents: null,
         margin_cents: null,
         margin_pct: null,
-        next_action_sent_count: Number(actionCounts.get(phone) || 0)
+        next_action_sent_count: Number(actionCounts.get(phone) || 0),
+        intel: worldview?.hover || null
       };
     });
 
@@ -665,7 +676,8 @@ app.get("/api/dashboard/leads", async (req, res) => {
         distance_miles_to_base: Math.round(distance * 10) / 10,
         inactivity_minutes: inactivityMinutes,
         risk,
-        priority_score: priorityScore
+        priority_score: priorityScore,
+        intel: lead.intel || null
       });
     }
 

@@ -1562,6 +1562,44 @@ function pinShape(stage){
   const key=normalizePinStage(stage);
   return PIN_SHAPES[key]||'circle';
 }
+function fCents(c){
+  const n=Number(c);
+  if(!Number.isFinite(n)||n<=0)return'—';
+  return '$'+(n/100).toLocaleString(undefined,{maximumFractionDigits:0});
+}
+function leadHoverInfoHtml(lead){
+  const intel=(lead&&lead.intel&&typeof lead.intel==='object')?lead.intel:{};
+  const items=intel.items||{};
+  const top=Array.isArray(items.top)?items.top.filter(Boolean).slice(0,2):[];
+  return `<div style="font-family:DM Mono,monospace;font-size:11px;line-height:1.45">
+    <div style="font-weight:700;margin-bottom:4px">${h(lead.stage_label||'Lead')} · ${h(fPhone(lead.phone))}</div>
+    <div>${h(lead.address||'No address')}</div>
+    <div style="opacity:.85">State: ${h(stateLabel(lead.conv_state||lead.quote_status||'NEW'))}</div>
+    <div style="opacity:.85">Quote: ${h(fCents(intel.quote_total_cents))} · Payment: ${h(intel.payment_status||'—')}</div>
+    <div style="opacity:.85">Items R/S/D/Dp: ${Number(items.resell||0)}/${Number(items.scrap||0)}/${Number(items.donate||0)}/${Number(items.dump||0)}</div>
+    ${top.length?`<div style="opacity:.75">Top: ${h(top.join(' · '))}</div>`:''}
+  </div>`;
+}
+function leadClickInfoHtml(lead){
+  const intel=(lead&&lead.intel&&typeof lead.intel==='object')?lead.intel:{};
+  const items=intel.items||{};
+  const value=intel.value||{};
+  const ops=intel.ops||{};
+  const journey=intel.journey||{};
+  const steps=Array.isArray(journey.steps)?journey.steps:[];
+  const journeyLine=steps.length?steps.map(s=>`${s.done?'✓':'○'} ${s.label}`).join(' · '):'—';
+  return `<div style="font-family:DM Mono,monospace;font-size:11px;line-height:1.5;min-width:260px;max-width:340px">
+    <div style="font-weight:700;font-size:12px;margin-bottom:4px">${h(fPhone(lead.phone))}</div>
+    <div style="opacity:.9;margin-bottom:6px">${h(lead.address||'No address')}</div>
+    <div><strong>Stage:</strong> ${h(lead.stage_label||'Lead')}</div>
+    <div><strong>State:</strong> ${h(stateLabel(lead.conv_state||lead.quote_status||'NEW'))}</div>
+    <div><strong>Quote:</strong> ${h(fCents(intel.quote_total_cents))} · <strong>Payment:</strong> ${h(intel.payment_status||'—')}</div>
+    <div><strong>Resale value:</strong> ${h(fCents(value.resale_low_cents))} - ${h(fCents(value.resale_high_cents))}</div>
+    <div><strong>Items:</strong> R ${Number(items.resell||0)} · S ${Number(items.scrap||0)} · Dn ${Number(items.donate||0)} · Dp ${Number(items.dump||0)}</div>
+    <div><strong>Next:</strong> ${h(ops.next_action||'Review lead')}</div>
+    <div style="margin-top:6px;opacity:.78"><strong>Journey:</strong> ${h(journeyLine)}</div>
+  </div>`;
+}
 const MAP_VB_DEFAULT={x:0,y:0,w:800,h:520};
 const STREET_DEFAULT_VIEW={lat:33.9925,lng:-118.3535,zoom:12};
 let mapView={...MAP_VB_DEFAULT};
@@ -1857,13 +1895,13 @@ function renderStreetLeads(){
         iconAnchor:[7,7]
       })
     });
-    marker.bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px;line-height:1.45">
-      <div style="font-weight:700;color:${c};margin-bottom:4px">${lead.stage_label||'Lead'}</div>
-      <div>${fPhone(lead.phone)}</div>
-      <div style="opacity:.8">${lead.address||'No address'}</div>
-      <div style="opacity:.75">${stateLabel(lead.conv_state||lead.quote_status||'NEW')}</div>
-    </div>`);
-    marker.on('click',()=>{selectedStreetLatLng={lat,lng};});
+    marker.bindTooltip(leadHoverInfoHtml(lead),{sticky:true,direction:'top',offset:[0,-10],opacity:.96});
+    marker.bindPopup(leadClickInfoHtml(lead),{maxWidth:360});
+    marker.on('mouseover',()=>{try{marker.openTooltip();}catch(e){}});
+    marker.on('click',()=>{
+      selectedStreetLatLng={lat,lng};
+      try{marker.openPopup();}catch(e){}
+    });
     marker.addTo(grp);
   });
   grp.addTo(streetMap);
@@ -2228,11 +2266,7 @@ function showTooltip(e,zip){
 }
 function showLeadTooltip(e,lead){
   const tt=document.getElementById('map-tt');
-  const color=pinColor(lead.stage);
-  tt.innerHTML=`<h4>${fPhone(lead.phone)} · <span style="color:${color}">${lead.stage_label||'Lead'}</span></h4>
-    <div><span class="th">Address</span> <span class="tv">${lead.address||'—'}</span></div>
-    <div><span class="th">State</span> <span class="tv">${stateLabel(lead.conv_state||lead.quote_status||'NEW')}</span></div>
-    <div><span class="th">Status</span> <span class="tv">${lead.quote_status||'—'}</span></div>`;
+  tt.innerHTML=leadHoverInfoHtml(lead);
   tt.style.display='block';
   moveTooltip(e);
 }
