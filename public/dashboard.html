@@ -337,17 +337,23 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 <div class="page" id="page-map">
   <div class="card">
     <div class="ch">
-      <div class="ct">Territory 001 · Choropleth</div>
+      <div class="ct">Territory 001 · Leads Command View</div>
       <span class="tag tag-acs">Census ACS 2023 · svg rendering</span>
     </div>
     <div class="map-ctrl">
       <div class="map-ctrl-g">
         <span class="mc-lbl">Color by:</span>
-        <button class="mc mc-metric on" onclick="setLayer('income',this)">Median Income</button>
+        <button class="mc mc-metric on" onclick="setLayer('none',this)">None (Territory only)</button>
+        <button class="mc mc-metric" onclick="setLayer('income',this)">Median Income</button>
         <button class="mc mc-metric" onclick="setLayer('homevalue',this)">Home Value</button>
         <button class="mc mc-metric" onclick="setLayer('owner',this)">Owner-Occupancy</button>
         <button class="mc mc-metric" onclick="setLayer('seniors',this)">65+ Population</button>
         <button class="mc mc-metric" onclick="setLayer('revenue',this)">Est. ICL Revenue</button>
+      </div>
+      <div class="map-ctrl-sep"></div>
+      <div class="map-ctrl-g">
+        <span class="mc-lbl">Overlays:</span>
+        <button class="mc mc-overlay" onclick="toggleVenues(this)">Key Venues</button>
       </div>
       <div class="map-ctrl-sep"></div>
       <div class="map-ctrl-g">
@@ -377,7 +383,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
       <div style="display:flex;gap:24px;align-items:start;flex-wrap:wrap">
         <div id="map-legend" class="map-legend"></div>
         <div id="map-lead-legend" class="map-legend"></div>
-        <div style="flex:1;min-width:200px">
+        <div id="map-venues-panel" style="flex:1;min-width:200px;display:none">
           <div style="font-size:9px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Key Venues</div>
           <div class="dr"><span class="dl">🏟 SoFi Stadium</span><span class="dv b">2.1 mi · Opening Ceremony</span></div>
           <div class="dr"><span class="dl">🏀 Intuit Dome</span><span class="dv b">2.4 mi · Olympic Basketball</span></div>
@@ -827,21 +833,24 @@ const SCALES={
 };
 
 function getZipVal(zip,metric){
+  if(metric==='none')return 0;
   if(!CD||!CD[zip])return 0;
   return {income:CD[zip].income,homevalue:CD[zip].homeValue,owner:CD[zip].ownerPct,seniors:CD[zip].pct65,revenue:CD[zip].estRevenue}[metric]||0;
 }
 function getColor(val,metric){
+  if(metric==='none') return '#1b2a44';
   const sc=SCALES[metric];
   let c=sc.colors[0];
   for(let i=0;i<sc.breaks.length;i++){if(val>=sc.breaks[i])c=sc.colors[i];}
   return c;
 }
 
-let curLayer='income';
+let curLayer='none';
 let hoveredZip=null;
 let mapSelectedLeadPhone=null;
 let mapLeadStageFilter='all';
 let mapLeadValueFilter='all';
+let mapShowVenues=false;
 
 function getLeadByPhone(phone){
   return (WORLDVIEW_LEADS||[]).find(l=>String(l.phone||'')===String(phone||''))||null;
@@ -927,6 +936,16 @@ function setLeadValueFilter(kind,btn){
   if(btn)btn.classList.add('on');
   if(mapBuilt)renderMap(curLayer);
 }
+function toggleVenues(btn){
+  mapShowVenues=!mapShowVenues;
+  if(btn){
+    if(mapShowVenues)btn.classList.add('on');
+    else btn.classList.remove('on');
+  }
+  const panel=document.getElementById('map-venues-panel');
+  if(panel)panel.style.display=mapShowVenues?'block':'none';
+  if(mapBuilt)renderMap(curLayer);
+}
 function renderLeadFilterStats(visible,total){
   const el=document.getElementById('map-lead-filter-stats');
   if(!el)return;
@@ -971,11 +990,12 @@ function renderMap(metric){
     const val=getZipVal(zip,metric);
     const col=getColor(val,metric); // always returns a valid color (breaks[0] color as default)
     const isHov=hoveredZip===zip;
+    const noMetric = metric === 'none';
     const polygon=`<polygon
       data-zip="${zip}"
       points="${pts(zone.coords)}"
       fill="${col}"
-      fill-opacity="${isHov?0.95:0.78}"
+      fill-opacity="${noMetric?(isHov?0.26:0.12):(isHov?0.95:0.78)}"
       stroke="${isHov?'#fff':'#3b82f6'}"
       stroke-width="${isHov?2.5:1.5}"
       style="cursor:pointer;transition:fill-opacity .15s"
@@ -988,19 +1008,21 @@ function renderMap(metric){
     const [px,py]=project(cx,cy);
     html+=`<text x="${px}" y="${py-8}" text-anchor="middle" fill="rgba(255,255,255,0.9)" font-size="11" font-family="DM Mono,monospace" font-weight="500">${zip}</text>`;
     html+=`<text x="${px}" y="${py+8}" text-anchor="middle" fill="rgba(255,255,255,0.55)" font-size="8.5" font-family="DM Mono,monospace">${zone.name}</text>`;
-    if(CD&&CD[zip]){
+    if(!noMetric&&CD&&CD[zip]){
       const val=getZipVal(zip,metric);
       html+=`<text x="${px}" y="${py+22}" text-anchor="middle" fill="rgba(255,255,255,0.85)" font-size="9" font-family="DM Mono,monospace" font-weight="500">${SCALES[metric].fmt(val)}</text>`;
     }
   });
 
   // Venue markers
-  VENUES.forEach(([lng,lat,emoji,note])=>{
-    const [vx,vy]=project(lng,lat);
-    html+=`<circle cx="${vx}" cy="${vy}" r="7" fill="#f59e0b" fill-opacity=".9" stroke="#fcd34d" stroke-width="1.5"/>`;
-    html+=`<text x="${vx}" y="${vy+4}" text-anchor="middle" font-size="8">${emoji}</text>`;
-    html+=`<text x="${vx+11}" y="${vy+4}" fill="#f59e0b" font-size="8" font-family="DM Mono,monospace">${note}</text>`;
-  });
+  if(mapShowVenues){
+    VENUES.forEach(([lng,lat,emoji,note])=>{
+      const [vx,vy]=project(lng,lat);
+      html+=`<circle cx="${vx}" cy="${vy}" r="7" fill="#f59e0b" fill-opacity=".9" stroke="#fcd34d" stroke-width="1.5"/>`;
+      html+=`<text x="${vx}" y="${vy+4}" text-anchor="middle" font-size="8">${emoji}</text>`;
+      html+=`<text x="${vx+11}" y="${vy+4}" fill="#f59e0b" font-size="8" font-family="DM Mono,monospace">${note}</text>`;
+    });
+  }
 
   const allLeads=(WORLDVIEW_LEADS||[]);
   const visibleLeads=allLeads.filter(leadPassesFilters).slice(0,220);
@@ -1037,7 +1059,7 @@ function renderMap(metric){
     poly.addEventListener('mouseenter',e=>{
       hoveredZip=poly.dataset.zip;
       showTooltip(e,poly.dataset.zip);
-      poly.setAttribute('fill-opacity','0.95');
+      poly.setAttribute('fill-opacity',metric==='none'?'0.26':'0.95');
       poly.setAttribute('stroke','#fff');
       poly.setAttribute('stroke-width','2.5');
     });
@@ -1045,7 +1067,7 @@ function renderMap(metric){
     poly.addEventListener('mouseleave',()=>{
       hoveredZip=null;
       hideTooltip();
-      poly.setAttribute('fill-opacity','0.78');
+      poly.setAttribute('fill-opacity',metric==='none'?'0.12':'0.78');
       poly.setAttribute('stroke','#3b82f6');
       poly.setAttribute('stroke-width','1.5');
     });
@@ -1151,8 +1173,18 @@ function setLayer(metric,btn){
 }
 
 function renderLegend(metric){
+  const root=document.getElementById('map-legend');
+  if(!root)return;
+  if(metric==='none'){
+    root.innerHTML=`
+      <div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:7px">Territory View</div>
+      <div class="leg-item"><div class="leg-sw" style="background:#1b2a44;border:1px solid #3b82f6"></div>Territory boundaries only</div>
+      <div class="leg-item"><div class="leg-sw" style="background:#0d1422;border:1px solid #1e2d47"></div>Demographic shading off (opt-in)</div>
+    `;
+    return;
+  }
   const sc=SCALES[metric];
-  document.getElementById('map-legend').innerHTML=
+  root.innerHTML=
     `<div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:7px">${sc.label}</div>`+
     [...sc.colors].reverse().map((c,i)=>{
       const idx=sc.colors.length-1-i;
