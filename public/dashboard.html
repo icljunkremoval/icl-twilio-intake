@@ -4,7 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ICL · Territory 001</title>
+<link rel="icon" type="image/svg+xml" href="/public/favicon.svg">
+<link rel="shortcut icon" href="/public/favicon.svg">
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
 <style>
 :root{
   --bg:#070912;--bg2:#0f1623;--bg3:#162032;--bg4:#1c2a42;
@@ -22,13 +27,14 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 /* ── TOP BAR ── */
 .bar{background:var(--bg2);border-bottom:1px solid var(--bd);padding:0 20px;display:flex;align-items:center;justify-content:space-between;height:48px;position:sticky;top:0;z-index:999}
 .logo{font-family:'Syne',sans-serif;font-weight:800;font-size:14px;display:flex;align-items:center;gap:9px}
+.logo-btn{background:none;border:none;color:var(--tx);cursor:pointer;padding:0}
+.logo-btn:hover{color:#fff}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--blue);box-shadow:0 0 7px var(--blue);animation:pulse 3s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 7px var(--blue)}50%{opacity:.4;box-shadow:0 0 2px var(--blue)}}
 .bar-mid{font-size:10px;color:var(--tx3);letter-spacing:.8px;text-transform:uppercase}
 .bar-r{display:flex;align-items:center;gap:12px;font-size:10px;color:var(--tx2)}
 .live-pill{display:flex;align-items:center;gap:4px;background:var(--green2);border:1px solid var(--green);color:var(--green);padding:2px 9px;border-radius:100px;font-size:9px}
 .live-dot{width:4px;height:4px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
-.build-pill{display:inline-flex;align-items:center;gap:4px;background:var(--bg4);border:1px solid var(--bd2);color:var(--tx2);padding:2px 8px;border-radius:100px;font-size:9px;max-width:230px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* ── NAV ── */
 .nav{background:var(--bg2);border-bottom:1px solid var(--bd);display:flex;padding:0 20px;position:sticky;top:48px;z-index:998}
@@ -95,9 +101,8 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .pid{width:5px;height:5px;border-radius:50%;flex-shrink:0}
 
 /* ── LEAD ROW ── */
-.lead{display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--bd);cursor:default;transition:background .12s}
+.lead{display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--bd)}
 .lead:last-child{border-bottom:none}
-.lead:hover{background:rgba(59,130,246,.05)}
 .av{width:28px;height:28px;border-radius:50%;background:var(--bg3);border:1px solid var(--bd2);display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--tx2)}
 .sb{font-size:8px;letter-spacing:.4px;padding:2px 7px;border-radius:4px;text-transform:uppercase;white-space:nowrap}
 .sn{background:rgba(74,90,120,.3);color:var(--tx3);border:1px solid var(--tx3)}
@@ -115,6 +120,14 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 /* ── SVG MAP ── */
 #map-svg-wrap{position:relative;background:var(--bg3);border-radius:0 0 6px 6px;overflow:hidden}
 #map-svg{width:100%;display:block;cursor:crosshair}
+#street-map-wrap{position:relative;background:var(--bg3);border-radius:0 0 6px 6px;overflow:hidden}
+#street-map{width:100%;height:520px}
+.leaflet-container{background:#0d1422}
+.card.map-fullscreen{height:100%;display:flex;flex-direction:column}
+.card.map-fullscreen #street-map-wrap{flex:1;min-height:0}
+.card.map-fullscreen #street-map{height:100%}
+.card.map-fullscreen .map-meta{display:none}
+.lead-dot{width:14px;height:14px;border-radius:50%;border:2px solid rgba(8,13,23,.95);box-shadow:0 0 0 1px rgba(255,255,255,.2)}
 .map-tooltip{
   position:absolute;pointer-events:none;
   background:var(--bg2);border:1px solid var(--bd2);border-radius:6px;
@@ -127,12 +140,30 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .map-tooltip .tv{color:var(--tx)}
 .map-tooltip .tg{color:var(--green)}
 .map-ctrl{display:flex;align-items:center;gap:6px;padding:10px 16px;border-bottom:1px solid var(--bd);background:var(--bg3);flex-wrap:wrap}
+.map-ctrl-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;width:100%}
+.map-ctrl-g{display:flex;align-items:center;gap:6px;flex-wrap:wrap;background:var(--bg2);border:1px solid var(--bd);border-radius:6px;padding:7px}
 .mc{padding:4px 10px;font-size:9px;font-family:'DM Mono',monospace;background:var(--bg4);border:1px solid var(--bd2);color:var(--tx2);border-radius:3px;cursor:pointer;transition:all .12s;letter-spacing:.3px}
 .mc:hover,.mc.on{background:rgba(59,130,246,.1);border-color:var(--blue);color:var(--blue)}
 .mc-lbl{font-size:9px;color:var(--tx3)}
 .map-legend{display:flex;flex-direction:column;gap:4px}
 .leg-item{display:flex;align-items:center;gap:7px;font-size:9px;color:var(--tx2)}
 .leg-sw{width:13px;height:13px;border-radius:2px;flex-shrink:0}
+.map-source{width:100%;border-collapse:collapse}
+.map-source th,.map-source td{padding:7px 8px;border-bottom:1px solid var(--bd);font-size:9px;text-align:left}
+.map-source th{font-size:8px;color:var(--tx3);text-transform:uppercase;letter-spacing:.6px}
+.sig-live{color:var(--green)}
+.sig-plan{color:var(--amber)}
+.sig-private{color:var(--tx2)}
+.lead-pin-dot{stroke:rgba(8,13,23,.95);stroke-width:1.6}
+.lead-pin-ring{fill:none;stroke-width:1.2;opacity:.65}
+.ops-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:10px}
+.ops-k{background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:9px}
+.ops-kv{font-family:'Syne',sans-serif;font-size:20px;font-weight:800;line-height:1}
+.ops-kl{font-size:8px;color:var(--tx3);letter-spacing:.7px;text-transform:uppercase;margin-top:3px}
+.ops-route{display:flex;flex-direction:column;gap:6px}
+.ops-r{display:flex;justify-content:space-between;gap:8px;padding:7px 8px;background:var(--bg3);border:1px solid var(--bd);border-radius:5px}
+.ops-rl{font-size:9px;color:var(--tx)}
+.ops-rr{font-size:9px;color:var(--tx2);text-align:right;white-space:nowrap}
 
 /* ── BAR CHART ── */
 .bc{display:flex;flex-direction:column;gap:8px}
@@ -194,6 +225,25 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .kadd-save{flex:1;padding:5px;font-size:9px;font-family:'DM Mono',monospace;background:var(--blue);color:#fff;border:none;border-radius:3px;cursor:pointer}
 .kadd-save:hover{background:var(--blue2)}
 .kadd-cancel{flex:1;padding:5px;font-size:9px;font-family:'DM Mono',monospace;background:var(--bg4);color:var(--tx2);border:none;border-radius:3px;cursor:pointer}
+.idea-grid{display:grid;grid-template-columns:2fr 1fr;gap:8px}
+.idea-actions{display:flex;gap:6px;align-items:center}
+.idea-note{font-size:8px;color:var(--tx3)}
+.roadmap-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.rcol{background:var(--bg3);border:1px solid var(--bd);border-radius:8px;display:flex;flex-direction:column;min-height:130px}
+.rcol-h{display:flex;align-items:center;gap:6px;padding:10px 10px 8px;border-bottom:1px solid var(--bd)}
+.rtitle{font-size:10px;font-family:'Syne',sans-serif;font-weight:700;color:var(--tx);flex:1}
+.rzone{padding:8px;display:flex;flex-direction:column;gap:6px}
+.ritem{background:var(--bg2);border:1px solid var(--bd2);border-radius:5px;padding:7px}
+.rit{font-size:9px;color:var(--tx);line-height:1.35}
+.rin{font-size:8px;color:var(--tx3);line-height:1.35;margin-top:3px}
+.ract{margin-top:6px}
+.rbtn{padding:3px 8px;font-size:8px;font-family:'DM Mono',monospace;border:1px solid var(--bd2);background:var(--bg4);color:var(--tx2);border-radius:3px;cursor:pointer}
+.rbtn:hover{border-color:var(--blue);color:var(--blue)}
+.cmd-row{display:flex;gap:8px;align-items:center;margin-top:8px}
+.cmd-input{flex:1}
+.cmd-templates{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.cmd-chip{padding:3px 8px;font-size:8px;font-family:'DM Mono',monospace;border:1px solid var(--bd2);background:var(--bg4);color:var(--tx2);border-radius:999px;cursor:pointer}
+.cmd-chip:hover{border-color:var(--blue);color:var(--blue);background:rgba(59,130,246,.08)}
 
 /* ── SKELETONS ── */
 .skel{background:linear-gradient(90deg,var(--bg3) 25%,var(--bg4) 50%,var(--bg3) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:4px;height:12px;margin:4px 0}
@@ -204,30 +254,18 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .note{font-size:8px;color:var(--tx3);margin-top:10px;padding-top:8px;border-top:1px solid var(--bd);line-height:1.6}
 a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--bd2);border-radius:2px}
-.intel-grid{display:grid;grid-template-columns:1fr auto;gap:3px 8px}
-.intel-label{color:var(--tx3)}
-.intel-value{color:var(--tx)}
-.intel-top{color:var(--tx2);font-size:9px;line-height:1.4;margin-top:6px}
-.lead-panel{background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:10px 12px;min-height:138px}
-.lead-panel .ttl{font-size:9px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px}
-.lead-panel .ph{font-family:'Syne',sans-serif;font-size:13px;color:var(--tx);margin-bottom:6px}
-.lead-panel .rows{display:grid;grid-template-columns:1fr auto;gap:4px 8px}
-.lead-panel .k{color:var(--tx3);font-size:9px}
-.lead-panel .v{color:var(--tx);font-size:9px;text-align:right}
-.map-ctrl-g{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.map-ctrl-sep{width:1px;height:18px;background:var(--bd2)}
 </style>
 </head>
 <body>
 
 <!-- TOPBAR -->
 <div class="bar">
-  <div class="logo"><div class="dot"></div>ICL Junk Removal</div>
-  <div class="bar-mid">Territory 001 · Baldwin Hills · Windsor Hills · View Park · Park Mesa</div>
+  <button class="logo logo-btn" onclick="go('overview',document.querySelector('.nav-tab[data-page=&quot;overview&quot;]'))" title="Go to Overview">
+    <div class="dot"></div>ICL Junk Removal
+  </button>
   <div class="bar-r">
     <span id="clock" style="color:var(--tx3)">—</span>
     <div class="live-pill"><div class="live-dot"></div>Live</div>
-    <span class="build-pill" id="build-pill">build —</span>
   </div>
 </div>
 
@@ -242,16 +280,47 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 
 <!-- ═══════════════ OVERVIEW ═══════════════ -->
 <div class="page" id="page-overview" data-active="true">
-
-  <div>
-    <div class="alert a-red"><span class="a-ico">⚠</span><div><strong>A2P 10DLC unregistered</strong> — 323-307-7855 carrier-filtered. Fix before marketing. <a href="https://console.twilio.com" target="_blank">Twilio Console →</a></div></div>
-    <div class="alert a-red" style="margin-top:7px"><span class="a-ico">⚠</span><div><strong>Ops webhook broken</strong> — DONE/DIVERT/SOLD not routing. 213-880-6318 is personal cell, needs a Twilio number.</div></div>
-  </div>
-
   <!-- KPIs -->
   <div class="card">
     <div class="ch"><div class="ct">Live Pipeline</div><div style="display:flex;gap:7px;align-items:center"><span class="tag tag-live">RAILWAY · 60s</span><a href="https://icl-twilio-intake-production.up.railway.app/admin/leads" target="_blank" style="font-size:9px">Admin →</a></div></div>
     <div class="cb">
+      <div style="display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px;margin-bottom:12px">
+        <div style="background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:9px 10px">
+          <div id="ns-booked-day" style="font:800 19px/1 Syne,sans-serif;color:var(--green)">—</div>
+          <div style="font-size:8px;color:var(--tx3);margin-top:3px;letter-spacing:.45px;text-transform:uppercase">Booked jobs/day</div>
+        </div>
+        <div style="background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:9px 10px">
+          <div id="ns-deposit-rate" style="font:800 19px/1 Syne,sans-serif;color:var(--amber)">—</div>
+          <div style="font-size:8px;color:var(--tx3);margin-top:3px;letter-spacing:.45px;text-transform:uppercase">Deposit rate</div>
+        </div>
+        <div style="background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:9px 10px">
+          <div id="ns-avg-rev" style="font:800 19px/1 Syne,sans-serif;color:var(--blue)">—</div>
+          <div style="font-size:8px;color:var(--tx3);margin-top:3px;letter-spacing:.45px;text-transform:uppercase">Avg revenue/job</div>
+        </div>
+        <div style="background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:9px 10px">
+          <div id="ns-margin-job" style="font:800 19px/1 Syne,sans-serif;color:var(--purple)">—</div>
+          <div style="font-size:8px;color:var(--tx3);margin-top:3px;letter-spacing:.45px;text-transform:uppercase">Margin/job</div>
+        </div>
+      </div>
+      <div id="ns-note" style="font-size:8px;color:var(--tx3);margin:-2px 0 8px">Waiting on settled payment + cost signals.</div>
+      <div style="display:grid;grid-template-columns:repeat(4,minmax(90px,1fr));gap:7px;margin-bottom:12px">
+        <div style="background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:8px 9px">
+          <div id="gv-eta" style="font:800 15px/1 Syne,sans-serif;color:var(--blue)">—</div>
+          <div style="font-size:7px;color:var(--tx3);margin-top:3px;letter-spacing:.4px;text-transform:uppercase">Avg ETA</div>
+        </div>
+        <div style="background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:8px 9px">
+          <div id="gv-sla-red" style="font:800 15px/1 Syne,sans-serif;color:var(--red)">—</div>
+          <div style="font-size:7px;color:var(--tx3);margin-top:3px;letter-spacing:.4px;text-transform:uppercase">SLA red</div>
+        </div>
+        <div style="background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:8px 9px">
+          <div id="gv-actions" style="font:800 15px/1 Syne,sans-serif;color:var(--amber)">—</div>
+          <div style="font-size:7px;color:var(--tx3);margin-top:3px;letter-spacing:.4px;text-transform:uppercase">Auto-actions</div>
+        </div>
+        <div style="background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:8px 9px">
+          <div id="gv-truth" style="font:800 15px/1 Syne,sans-serif;color:var(--green)">—</div>
+          <div style="font-size:7px;color:var(--tx3);margin-top:3px;letter-spacing:.4px;text-transform:uppercase">Truth jobs</div>
+        </div>
+      </div>
       <div class="kpi-grid">
         <div class="kpi kb"><div class="kv b" id="kpi-tot">—</div><div class="kl">Total Leads</div><div class="ks" id="kpi-today"></div></div>
         <div class="kpi ka"><div class="kv a" id="kpi-q">—</div><div class="kl">Quoted</div></div>
@@ -267,6 +336,22 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
         <div class="pi"><div class="pid" style="background:var(--green)"></div>Booked</div>
       </div>
       <div id="leads-mini"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="ch"><div class="ct">Ops Command Center</div><span class="tag tag-live">ETA · RISK · ROUTE</span></div>
+    <div class="cb">
+      <div class="ops-grid">
+        <div class="ops-k"><div class="ops-kv" id="ops-risk-high" style="color:var(--red)">0</div><div class="ops-kl">High Risk Leads</div></div>
+        <div class="ops-k"><div class="ops-kv" id="ops-risk-med" style="color:var(--amber)">0</div><div class="ops-kl">Medium Risk</div></div>
+        <div class="ops-k"><div class="ops-kv" id="ops-risk-low" style="color:var(--green)">0</div><div class="ops-kl">Low Risk</div></div>
+        <div class="ops-k"><div class="ops-kv" id="ops-eta-avg" style="color:var(--blue)">—</div><div class="ops-kl">Avg ETA (min)</div></div>
+      </div>
+      <div style="font-size:8px;color:var(--tx3);letter-spacing:.6px;text-transform:uppercase;margin-bottom:6px">Suggested Dispatch Route</div>
+      <div id="ops-route" class="ops-route">
+        <div style="font-size:9px;color:var(--tx3)">No active route suggestions.</div>
+      </div>
     </div>
   </div>
 
@@ -333,79 +418,107 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
       </div>
     </div>
 
-</div>
+  </div>
+</div><!-- /page-overview -->
 
 <!-- ═══════════════ MAP ═══════════════ -->
 <div class="page" id="page-map">
-  <div class="card">
+  <div class="card" id="map-card">
     <div class="ch">
-      <div class="ct">Territory 001 · Leads Command View</div>
-      <span class="tag tag-acs">Census ACS 2023 · svg rendering</span>
+      <div class="ct">Territory Map · God View</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="tag tag-live">LIVE OPS MAP</span>
+        <button class="mc map-fullscreen-toggle" onclick="toggleMapFullscreen()">⛶ Fullscreen</button>
+      </div>
     </div>
     <div class="map-ctrl">
-      <div class="map-ctrl-g">
-        <span class="mc-lbl">Color by:</span>
-        <button class="mc mc-metric on" onclick="setLayer('none',this)">None (Territory only)</button>
-        <button class="mc mc-metric" onclick="setLayer('income',this)">Median Income</button>
-        <button class="mc mc-metric" onclick="setLayer('homevalue',this)">Home Value</button>
-        <button class="mc mc-metric" onclick="setLayer('owner',this)">Owner-Occupancy</button>
-        <button class="mc mc-metric" onclick="setLayer('seniors',this)">65+ Population</button>
-        <button class="mc mc-metric" onclick="setLayer('revenue',this)">Est. ICL Revenue</button>
+      <div class="map-ctrl-grid">
+        <div class="map-ctrl-g">
+          <span class="mc-lbl">Lead filter</span>
+          <button class="mc mc-lead-filter on" onclick="setLeadFilter('all',this)">All</button>
+          <button class="mc mc-lead-filter" onclick="setLeadFilter('red',this)">Red</button>
+          <button class="mc mc-lead-filter" onclick="setLeadFilter('yellow',this)">Yellow</button>
+          <button class="mc mc-lead-filter" onclick="setLeadFilter('green',this)">Green</button>
+          <span class="mc-lbl" style="margin-left:8px">Flow</span>
+          <button class="mc mc-flow-filter on" onclick="setLeadFlowFilter('all',this)">All</button>
+          <button class="mc mc-flow-filter" onclick="setLeadFlowFilter('new',this)">New</button>
+          <button class="mc mc-flow-filter" onclick="setLeadFlowFilter('media',this)">Media</button>
+          <button class="mc mc-flow-filter" onclick="setLeadFlowFilter('quoted',this)">Quoted</button>
+          <button class="mc mc-flow-filter" onclick="setLeadFlowFilter('deposit',this)">Deposit</button>
+          <button class="mc mc-flow-filter" onclick="setLeadFlowFilter('booked',this)">Booked</button>
+          <span class="mc-lbl" id="map-filter-count">Showing: 0 / 0 leads</span>
+        </div>
+        <div class="map-ctrl-g">
+          <span class="mc-lbl">Demographic tint</span>
+          <button class="mc mc-layer on" onclick="setLayer('income',this)">Income</button>
+          <button class="mc mc-layer" onclick="setLayer('homevalue',this)">Home Value</button>
+          <button class="mc mc-layer" onclick="setLayer('owner',this)">Owner%</button>
+          <button class="mc mc-layer" onclick="setLayer('seniors',this)">65+%</button>
+          <button class="mc on" id="neighborhoods-toggle" onclick="toggleNeighborhoods(this)">Neighborhoods</button>
+        </div>
+        <div class="map-ctrl-g">
+          <span class="mc-lbl">Map tools</span>
+          <button class="mc on" id="territory-toggle" onclick="toggleTerritoryEdge(this)">Territory Edge</button>
+          <button class="mc on" id="signals-toggle" onclick="toggleSignals(this)">Signals</button>
+          <button class="mc on" id="legend-toggle" onclick="toggleMapLegend(this)">Legend</button>
+          <button class="mc" onclick="fitToTerritory()">Fit Territory</button>
+          <button class="mc map-fullscreen-toggle" onclick="toggleMapFullscreen()">Fullscreen</button>
+          <button class="mc" onclick="openStreetView()">Street View ↗</button>
+          <button class="mc" onclick="mapZoomIn()">＋</button>
+          <button class="mc" onclick="mapZoomOut()">－</button>
+          <button class="mc" onclick="mapResetView()">Reset</button>
+        </div>
+        <div class="map-ctrl-g" style="grid-column:1/-1">
+          <span class="mc-lbl">Key venues</span>
+          <button class="mc on" id="venues-toggle" onclick="toggleVenues(this)">On</button>
+          <button class="mc mc-venue-filter on" onclick="setVenueFilter('all',this)">All</button>
+          <button class="mc mc-venue-filter" onclick="setVenueFilter('whales',this)">Whales</button>
+          <button class="mc mc-venue-filter" onclick="setVenueFilter('partners',this)">ICL Partners</button>
+        </div>
+        <div class="map-ctrl-g" style="grid-column:1/-1">
+          <span class="mc-lbl">Dumpsites</span>
+          <button class="mc on" id="dumpsites-toggle" onclick="toggleDumpSites(this)">On</button>
+          <button class="mc mc-dump-filter on" onclick="setDumpSiteFilter('msw',this)">MSW Priority</button>
+          <button class="mc mc-dump-filter" onclick="setDumpSiteFilter('open',this)">Open Now</button>
+          <button class="mc mc-dump-filter" onclick="setDumpSiteFilter('all',this)">All</button>
+        </div>
       </div>
-      <div class="map-ctrl-sep"></div>
-      <div class="map-ctrl-g">
-        <span class="mc-lbl">Overlays:</span>
-        <button class="mc mc-overlay" onclick="toggleVenues(this)">Key Venues</button>
-      </div>
-      <div class="map-ctrl-sep"></div>
-      <div class="map-ctrl-g">
-        <span class="mc-lbl">Stage:</span>
-        <button class="mc mc-stage on" onclick="setLeadStageFilter('all',this)">All</button>
-        <button class="mc mc-stage" onclick="setLeadStageFilter('new',this)">New</button>
-        <button class="mc mc-stage" onclick="setLeadStageFilter('media',this)">Media</button>
-        <button class="mc mc-stage" onclick="setLeadStageFilter('quoted',this)">Quoted</button>
-        <button class="mc mc-stage" onclick="setLeadStageFilter('deposit',this)">Deposit</button>
-        <button class="mc mc-stage" onclick="setLeadStageFilter('booked',this)">Booked</button>
-      </div>
-      <div class="map-ctrl-sep"></div>
-      <div class="map-ctrl-g">
-        <span class="mc-lbl">Value:</span>
-        <button class="mc mc-value on" onclick="setLeadValueFilter('all',this)">All</button>
-        <button class="mc mc-value" onclick="setLeadValueFilter('high_quote',this)">Quote $600+</button>
-        <button class="mc mc-value" onclick="setLeadValueFilter('resale',this)">Has resale</button>
-      </div>
-      <div class="map-ctrl-sep"></div>
-      <span class="mc-lbl" id="map-lead-filter-stats">Clients: 0</span>
     </div>
-    <div class="cb0" id="map-svg-wrap" style="position:relative;background:#0d1422;min-height:520px">
-      <div class="map-tooltip" id="map-tt"></div>
-      <svg id="map-svg" viewBox="0 0 800 520" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:520px;display:block"></svg>
+    <div class="cb0" id="street-map-wrap" style="position:relative;background:#0d1422;min-height:520px">
+      <div id="street-map"></div>
     </div>
-    <div class="cb" style="border-top:1px solid var(--bd);padding:14px 16px">
+    <div class="cb map-meta" style="border-top:1px solid var(--bd);padding:14px 16px">
       <div style="display:flex;gap:24px;align-items:start;flex-wrap:wrap">
         <div id="map-legend" class="map-legend"></div>
-        <div id="map-lead-legend" class="map-legend"></div>
-        <div id="map-venues-panel" style="flex:1;min-width:200px;display:none">
+        <div style="flex:1;min-width:200px">
           <div style="font-size:9px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Key Venues</div>
-          <div class="dr"><span class="dl">🏟 SoFi Stadium</span><span class="dv b">2.1 mi · Opening Ceremony</span></div>
-          <div class="dr"><span class="dl">🏀 Intuit Dome</span><span class="dv b">2.4 mi · Olympic Basketball</span></div>
-          <div class="dr"><span class="dl">🚇 K-Line Leimert</span><span class="dv b">0.8 mi · Metro operational</span></div>
-          <div class="dr"><span class="dl">✈ LAX</span><span class="dv b">4.2 mi</span></div>
+          <div id="map-venue-list">
+            <div class="dr"><span class="dl">Loading venues…</span><span class="dv">—</span></div>
+          </div>
         </div>
         <div style="flex:1;min-width:180px">
-          <div style="font-size:9px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Data Sources</div>
-          <div style="font-size:9px;color:var(--tx3);line-height:1.9">
-            Boundaries: <a href="https://tigerweb.geo.census.gov" target="_blank">Census TIGERweb 2020 ZCTA</a><br>
-            Demographics: <a href="https://api.census.gov" target="_blank">ACS 2023 · api.census.gov</a><br>
-            Rendered in SVG — no external tile server
+          <div style="font-size:9px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Dump Sites (MSW)</div>
+          <div id="map-dumpsite-list">
+            <div class="dr"><span class="dl">Loading dumpsites…</span><span class="dv">—</span></div>
           </div>
         </div>
-        <div style="flex:1;min-width:240px">
-          <div id="map-lead-detail" class="lead-panel">
-            <div class="ttl">Lead Detail (click a client dot)</div>
-            <div style="font-size:10px;color:var(--tx2);line-height:1.5">Hover dots for quick preview. Click a dot to load full lead intelligence here.</div>
+        <div style="flex:1;min-width:180px">
+          <div style="font-size:9px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Stack</div>
+          <div style="font-size:9px;color:var(--tx3);line-height:1.8">
+            Demographics: ACS 2023<br>
+            Routing: Google/OSRM<br>
+            City projects: permits/housing/transit<br>
+            Disposal reference: ICL Disposal Sites Master (Mar 2026)
           </div>
         </div>
+      </div>
+      <div style="margin-top:10px">
+        <table class="map-source">
+          <thead><tr><th>Source</th><th>Status</th><th>Records</th><th>Purpose</th></tr></thead>
+          <tbody id="map-source-body">
+            <tr><td>Loading…</td><td>—</td><td>—</td><td>—</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -414,11 +527,16 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 <!-- ═══════════════ LEADS ═══════════════ -->
 <div class="page" id="page-leads">
   <div class="card">
-    <div class="ch"><div class="ct">All Leads</div><span class="tag tag-live">Railway · PostgreSQL</span></div>
+    <div class="ch">
+      <div class="ct">All Leads</div>
+      <div style="display:flex;gap:7px;align-items:center">
+        <span class="tag tag-live">Railway · PostgreSQL</span>
+        <a href="/admin/leads" target="_blank" style="font-size:9px">Admin →</a>
+      </div>
+    </div>
     <div class="cb"><div id="leads-full"><div class="skel" style="width:80%;margin:8px 0"></div><div class="skel" style="width:60%;margin:8px 0"></div><div class="skel" style="width:75%;margin:8px 0"></div></div></div>
   </div>
 </div>
-<div class="map-tooltip" id="lead-hover" style="display:none;min-width:270px;max-width:360px"></div>
 
 <!-- ═══════════════ REFERRALS ═══════════════ -->
 <div class="page" id="page-referrals">
@@ -454,69 +572,128 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 <!-- ═══════════════ KANBAN ═══════════════ -->
 <div class="page" id="page-kanban">
   <div class="card">
+    <div class="ch"><div class="ct">System Flags</div></div>
+    <div class="cb">
+      <div class="alert a-red"><span class="a-ico">⚠</span><div><strong>A2P 10DLC unregistered</strong> — 323-307-7855 carrier-filtered. Fix before marketing. <a href="https://console.twilio.com" target="_blank">Twilio Console →</a></div></div>
+      <div class="alert a-red" style="margin-top:7px"><span class="a-ico">⚠</span><div><strong>Ops webhook broken</strong> — DONE/DIVERT/SOLD not routing. 213-880-6318 is personal cell, needs a Twilio number.</div></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="ch"><div class="ct">Push Idea → Kanban + Roadmap</div><span class="tag tag-live">SYNCED</span></div>
+    <div class="cb">
+      <div class="idea-grid">
+        <div>
+          <textarea class="kadd-inp" id="idea-title" rows="2" placeholder="Example: Add partner scorecard by source quality + close rate"></textarea>
+          <textarea class="kadd-inp" id="idea-note" rows="2" placeholder="Why this matters / desired KPI / owner"></textarea>
+        </div>
+        <div>
+          <select class="kadd-sel" id="idea-target">
+            <option value="critical">Critical</option>
+            <option value="inprogress">In Progress</option>
+            <option value="upcoming" selected>Up Next</option>
+            <option value="done">Done</option>
+          </select>
+          <select class="kadd-sel" id="idea-tag">
+            <option value="sys">System</option>
+            <option value="biz">Business</option>
+            <option value="dat" selected>Data</option>
+            <option value="grow">Growth</option>
+          </select>
+          <input class="kadd-inp" id="idea-source" placeholder="Source (chat, ops, sales)" value="chat" />
+          <div class="idea-actions">
+            <button class="kadd-save" id="idea-push-btn" onclick="pushIdeaFromDashboard()">Push idea</button>
+            <span class="idea-note" id="idea-status">—</span>
+          </div>
+        </div>
+      </div>
+      <div class="cmd-row">
+        <input class="kadd-inp cmd-input" id="planning-command" placeholder="/idea title=&quot;Launch realtor blitz&quot; note=&quot;pilot in 90043&quot; tag=grow target=critical source=chat"/>
+        <button class="kadd-save" id="planning-command-btn" onclick="runPlanningCommand()">Run command</button>
+        <span class="idea-note" id="command-status">—</span>
+      </div>
+      <div class="cmd-templates">
+        <button class="cmd-chip" onclick="setPlanningCommand('/idea title=&quot;&quot; note=&quot;&quot; tag=dat target=upcoming source=chat')">Template: idea</button>
+        <button class="cmd-chip" onclick="setPlanningCommand('/move id=k123 to=inprogress')">Template: move</button>
+        <button class="cmd-chip" onclick="setPlanningCommand('/start id=k123')">Template: start</button>
+        <button class="cmd-chip" onclick="setPlanningCommand('/ship id=k123')">Template: ship</button>
+        <button class="cmd-chip" onclick="setPlanningCommand('/reopen id=k123')">Template: reopen</button>
+        <button class="cmd-chip" onclick="setPlanningCommand('/delete id=k123')">Template: delete</button>
+        <button class="cmd-chip" onclick="setPlanningCommand('/list')">Template: list</button>
+      </div>
+      <div class="note">Use this to capture ideas from chat or ops calls. Command examples: <code>/idea title="..." note="..." tag=dat target=upcoming source=chat</code> · <code>/move id=k123 to=inprogress</code> · <code>/ship id=k123</code>.</div>
+    </div>
+  </div>
+  <div class="card">
     <div class="ch"><div class="ct">Next Steps</div><span style="font-size:9px;color:var(--tx3)">Drag cards anywhere · Click × to delete · + to add</span></div>
     <div class="cb"><div class="kanban" id="kanban"></div></div>
   </div>
+  <div class="card">
+    <div class="ch">
+      <div class="ct">Feature Roadmap (synced with Kanban)</div>
+      <span style="font-size:9px;color:var(--tx3)" id="roadmap-sync-status">Sync: local</span>
+    </div>
+    <div class="cb"><div class="roadmap-grid" id="roadmap-grid"></div></div>
+  </div>
 </div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script>
 'use strict';
 
 // ── CLOCK & COUNTDOWN ────────────────────────────────────────────────────────
 function tick(){
   const now=new Date();
-  document.getElementById('clock').textContent=
-    now.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true})+' PT';
-  const t=new Date('2028-07-14T20:00:00-07:00')-now;
-  if(t>0){
-    document.getElementById('cd-d').textContent=Math.floor(t/86400000);
-    document.getElementById('cd-h').textContent=Math.floor(t%86400000/3600000);
-    document.getElementById('cd-m').textContent=Math.floor(t%3600000/60000);
-    document.getElementById('cd-s').textContent=Math.floor(t%60000/1000);
+  const d=now.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const timeTxt=now.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true});
+  document.getElementById('clock').textContent=`${d} · ${timeTxt} PT`;
+  const countdownMs=new Date('2028-07-14T20:00:00-07:00')-now;
+  if(countdownMs>0){
+    document.getElementById('cd-d').textContent=Math.floor(countdownMs/86400000);
+    document.getElementById('cd-h').textContent=Math.floor(countdownMs%86400000/3600000);
+    document.getElementById('cd-m').textContent=Math.floor(countdownMs%3600000/60000);
+    document.getElementById('cd-s').textContent=Math.floor(countdownMs%60000/1000);
   }
 }
 setInterval(tick,1000);tick();
 
-async function fetchBuildVersion(){
-  const el=document.getElementById('build-pill');
-  if(!el)return;
-  try{
-    const r=await fetch('/api/version',{cache:'no-store'});
-    if(!r.ok)throw new Error('version_http_'+r.status);
-    const j=await r.json();
-    const b=(j&&j.build)||{};
-    const sha=String(b.sha_short||b.sha||'unknown');
-    const branch=b.branch?String(b.branch):'';
-    el.textContent='build '+(branch?branch+' · ':'')+sha;
-    el.title='source: '+String(b.source||'unknown')+(j&&j.served_at?(' | served: '+String(j.served_at)):'');
-  }catch(e){
-    el.textContent='build unavailable';
-    el.title=String(e&&e.message||e||'version unavailable');
-  }
-}
-
 // ── PAGE NAV ─────────────────────────────────────────────────────────────────
 let mapBuilt=false;
+function applyPageVisibility(activeId){
+  document.querySelectorAll('.page').forEach(p=>{
+    const on=p.id===`page-${activeId}`;
+    if(on){
+      p.setAttribute('data-active','true');
+      p.removeAttribute('hidden');
+      p.style.setProperty('display','flex','important');
+      p.style.setProperty('visibility','visible');
+      p.style.removeProperty('pointer-events');
+    }else{
+      p.removeAttribute('data-active');
+      p.setAttribute('hidden','hidden');
+      p.style.setProperty('display','none','important');
+      p.style.setProperty('visibility','hidden');
+      p.style.setProperty('pointer-events','none');
+    }
+  });
+}
 function go(id,btn){
-  document.querySelectorAll('.page').forEach(p=>p.removeAttribute('data-active'));
+  applyPageVisibility(id);
   document.querySelectorAll('.nav-tab').forEach(b=>b.classList.remove('on'));
   const pg=document.getElementById('page-'+id);
   if(!pg)return;
-  pg.setAttribute('data-active','true');
   (btn||document.querySelector(`.nav-tab[data-page="${id}"]`))?.classList.add('on');
+  // Keep tab switches deterministic: jump to top so shorter pages do not look blank.
+  window.scrollTo(0,0);
   if(id==='map'){
     setTimeout(()=>{
       try{
-        if(!mapBuilt){
-          buildMap();
-          mapBuilt=true;
-        }else{
-          updateMap(curLayer);
-        }
+        ensureStreetMap();
+        fitToTerritory();
       }catch(e){
         console.error('[dashboard] map render failed',e);
       }
-    },50);
+    },70);
   }
 }
 
@@ -525,12 +702,220 @@ const f$=v=>v&&Number(v)>0?'$'+Number(v).toLocaleString():'—';
 const fPct=v=>v?v+'%':'—';
 function fPhone(p){if(!p)return'—';const d=p.replace(/\D/g,'').slice(-10);return d.length===10?`(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`:p;}
 function fAgo(ts){if(!ts)return'';const m=Math.floor((Date.now()-new Date(ts))/60000);if(m<60)return m+'m';if(m<1440)return Math.floor(m/60)+'h';return Math.floor(m/1440)+'d';}
-function fCents(c){return c&&Number(c)>0?f$(Math.round(Number(c)/100)):'—';}
-function esc(s){return String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');}
+let MAP_LEAD_PINS=[];
+let MAP_VISIBLE_PINS=[];
+let PIN_BY_PHONE=new Map();
+let CURRENT_LEADS=[];
+let leadFlowFilter='all';
+function flowBucketFromState(state){
+  const u=String(state||'').toUpperCase();
+  if(u==='NEW')return 'new';
+  if(u.includes('MEDIA')||u.includes('HAZMAT')||u.includes('ADDRESS')||u.includes('ACCESS')||u.includes('LOAD'))return 'media';
+  if(u.includes('QUOTE'))return 'quoted';
+  if(u.includes('DEPOSIT')||u.includes('BOOKING'))return 'deposit';
+  if(u.includes('DAY')||u.includes('WINDOW'))return 'booked';
+  return 'other';
+}
+function leadFlowBucket(lead){
+  return flowBucketFromState(lead?.state||lead?.conv_state||lead?.quote_status||'');
+}
+function pinFlowBucket(pin){
+  return flowBucketFromState(pin?.conv_state||pin?.quote_status||'');
+}
+function getVisiblePins(){
+  const pins=Array.isArray(MAP_LEAD_PINS)?MAP_LEAD_PINS:[];
+  const byStage=leadFilter==='all'?pins:pins.filter(p=>p.stage===leadFilter);
+  if(leadFlowFilter==='all')return byStage;
+  return byStage.filter(p=>pinFlowBucket(p)===leadFlowFilter);
+}
+function updateLeadFilterCount(){
+  const el=document.getElementById('map-filter-count');
+  if(!el)return;
+  const total=(Array.isArray(MAP_LEAD_PINS)?MAP_LEAD_PINS.length:0);
+  const shown=getVisiblePins().length;
+  el.textContent=`Showing: ${shown} / ${total} leads`;
+}
+function haversineMilesClient(lat1,lng1,lat2,lng2){
+  const toRad=d=>d*Math.PI/180;
+  const R=3958.7613;
+  const dLat=toRad(lat2-lat1);
+  const dLng=toRad(lng2-lng1);
+  const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
+function getPtNowParts(now=new Date()){
+  const parts=new Intl.DateTimeFormat('en-US',{
+    timeZone:'America/Los_Angeles',
+    weekday:'short',hour:'2-digit',minute:'2-digit',hour12:false
+  }).formatToParts(now);
+  const map={};parts.forEach(p=>{if(p.type!=='literal')map[p.type]=p.value;});
+  const dayMap={Sun:0,Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6};
+  const day=dayMap[String(map.weekday||'Sun')]??0;
+  const mins=(Number(map.hour||0)*60)+Number(map.minute||0);
+  return {day,mins};
+}
+function fmtClock(mins){
+  const m=((mins%1440)+1440)%1440;
+  const h24=Math.floor(m/60);
+  const mm=String(m%60).padStart(2,'0');
+  const h12=((h24+11)%12)+1;
+  const ap=h24>=12?'PM':'AM';
+  return `${h12}:${mm} ${ap}`;
+}
+function nextOpenWindow(site,pt){
+  const sched=site&&site.schedule?site.schedule:{};
+  for(let i=0;i<7;i++){
+    const d=(pt.day+i)%7;
+    const wins=Array.isArray(sched[d])?sched[d]:[];
+    if(!wins.length)continue;
+    if(i===0){
+      const future=wins.find(w=>pt.mins<Number(w[0]));
+      if(future)return {day:d,start:Number(future[0])};
+      continue;
+    }
+    return {day:d,start:Number(wins[0][0])};
+  }
+  return null;
+}
+function dumpSiteAvailability(site,now=new Date()){
+  if(site&&site.availability&&site.availability.state){
+    return site.availability;
+  }
+  const st=String(site?.status||'').toLowerCase();
+  if(st==='closed')return {state:'closed',label:'Closed'};
+  if(st==='restricted')return {state:'restricted',label:'Restricted'};
+  if(st==='call')return {state:'call',label:'Call ahead'};
+  const sched=site&&site.schedule?site.schedule:{};
+  const pt=getPtNowParts(now);
+  const windows=Array.isArray(sched[pt.day])?sched[pt.day]:[];
+  for(const w of windows){
+    const s=Number(w[0]),e=Number(w[1]);
+    if(pt.mins>=s&&pt.mins<e)return {state:'open',label:`Open now · until ${fmtClock(e)}`};
+  }
+  const next=nextOpenWindow(site,pt);
+  if(next){
+    const dayLbl=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][next.day];
+    return {state:'closed_now',label:`Closed · opens ${dayLbl} ${fmtClock(next.start)}`};
+  }
+  return {state:'unknown',label:'Hours unavailable'};
+}
+function dumpSiteColor(site,availability){
+  const st=String(availability?.state||site?.status||'');
+  if(st==='closed'||st==='restricted')return '#ef4444';
+  const tier=String(site?.tier||'regional');
+  if(tier==='primary')return '#10b981';
+  if(tier==='nearby')return '#3b82f6';
+  if(tier==='regional')return '#f59e0b';
+  return '#8b5cf6';
+}
+function dumpSiteClass(availability){
+  const st=String(availability?.state||'');
+  if(st==='open')return 'g';
+  if(st==='closed'||st==='restricted')return 'r';
+  if(st==='closed_now')return 'a';
+  return 'b';
+}
+function getVisibleDumpSites(now=new Date()){
+  if(!showDumpSites)return [];
+  let sites=[...(Array.isArray(DUMP_SITES)?DUMP_SITES:[])];
+  if(dumpSiteFilter==='msw')sites=sites.filter(s=>!!s.msw&&String(s.status)!=='closed'&&String(s.status)!=='restricted');
+  if(dumpSiteFilter==='open')sites=sites.filter(s=>dumpSiteAvailability(s,now).state==='open');
+  sites.sort((a,b)=>{
+    const ta=DUMP_TIER_RANK[a.tier]??9,tb=DUMP_TIER_RANK[b.tier]??9;
+    if(ta!==tb)return ta-tb;
+    const da=haversineMilesClient(BASE_COORD.lat,BASE_COORD.lng,Number(a.lat),Number(a.lng));
+    const db=haversineMilesClient(BASE_COORD.lat,BASE_COORD.lng,Number(b.lat),Number(b.lng));
+    return da-db;
+  });
+  return sites;
+}
+function rankDumpSitesForPoint(lat,lng,opts={}){
+  const requireMsw=opts.requireMsw!==false;
+  const includeClosed=!!opts.includeClosed;
+  const allowRestricted=!!opts.allowRestricted;
+  const now=opts.now||new Date();
+  const sites=(Array.isArray(DUMP_SITES)?DUMP_SITES:[]).filter(s=>{
+    if(requireMsw&&!s.msw)return false;
+    if(!includeClosed&&String(s.status)==='closed')return false;
+    if(!allowRestricted&&String(s.status)==='restricted')return false;
+    return true;
+  });
+  return sites.map(s=>{
+    const av=dumpSiteAvailability(s,now);
+    const dist=haversineMilesClient(lat,lng,Number(s.lat),Number(s.lng));
+    const tierPenalty={primary:0,nearby:6,regional:12,far:20,restricted:40,closed:60}[String(s.tier||'regional')]??10;
+    const statePenalty={open:0,closed_now:2.5,call:4,unknown:5,restricted:10,closed:50}[av.state]??5;
+    const score=dist+tierPenalty+statePenalty;
+    return {site:s,availability:av,distance_mi:dist,score};
+  }).sort((a,b)=>a.score-b.score);
+}
+function recommendDumpSites(route){
+  let ref={lat:BASE_COORD.lat,lng:BASE_COORD.lng,label:'base'};
+  const first=Array.isArray(route)&&route[0]?route[0]:null;
+  if(first&&first.phone){
+    const p=(MAP_LEAD_PINS||[]).find(x=>String(x.phone||'')===String(first.phone||''));
+    if(p&&Number.isFinite(Number(p.lat))&&Number.isFinite(Number(p.lng))){
+      ref={lat:Number(p.lat),lng:Number(p.lng),label:String(first.phone||'lead')};
+    }
+  }
+  return rankDumpSitesForPoint(ref.lat,ref.lng,{requireMsw:true}).slice(0,2);
+}
+function getVisibleVenues(){
+  const venues=Array.isArray(KEY_VENUES)?KEY_VENUES:[];
+  if(!showVenues)return[];
+  if(venueFilter==='whales')return venues.filter(v=>v.group==='whales');
+  if(venueFilter==='partners')return venues.filter(v=>v.group==='partners');
+  return venues;
+}
+function renderDumpSiteList(){
+  const el=document.getElementById('map-dumpsite-list');
+  if(!el)return;
+  const rows=getVisibleDumpSites().slice(0,8);
+  if(!rows.length){
+    el.innerHTML='<div class="dr"><span class="dl">No dumpsites selected</span><span class="dv">—</span></div>';
+    return;
+  }
+  el.innerHTML=rows.map(site=>{
+    const av=dumpSiteAvailability(site);
+    const dist=Number.isFinite(Number(site.distance_to_base_mi))
+      ? Number(site.distance_to_base_mi)
+      : haversineMilesClient(BASE_COORD.lat,BASE_COORD.lng,Number(site.lat),Number(site.lng));
+    const icon=site.kind==='landfill'?'⛰️':'🗑️';
+    return `<div class="dr"><span class="dl">${icon} ${site.name}</span><span class="dv ${dumpSiteClass(av)}">${av.label} · ${dist.toFixed(1)} mi</span></div>`;
+  }).join('');
+}
+function renderVenueList(){
+  const el=document.getElementById('map-venue-list');
+  if(!el)return;
+  const rows=getVisibleVenues().slice(0,8);
+  if(!rows.length){
+    el.innerHTML='<div class="dr"><span class="dl">No venues selected</span><span class="dv">—</span></div>';
+    return;
+  }
+  el.innerHTML=rows.map(v=>`<div class="dr"><span class="dl">${v.group==='whales'?'⭐':'🤝'} ${v.name}</span><span class="dv ${v.group==='whales'?'a':'b'}">${v.note||''}</span></div>`).join('');
+}
+function renderMapSourceTable(meta){
+  const body=document.getElementById('map-source-body');
+  if(!body)return;
+  const leadCt=Number(meta?.pins||0);
+  const permitCt=Number(signalData?.permits?.length||0);
+  const housingCt=Number(signalData?.housing?.length||0);
+  const transitCt=Number(signalData?.transit?.length||0)+Number(signalData?.corridors?.length||0);
+  const dumpTotal=(Array.isArray(DUMP_SITES)?DUMP_SITES.length:0);
+  const dumpOpen=(Array.isArray(DUMP_SITES)?DUMP_SITES.filter(s=>dumpSiteAvailability(s).state==='open').length:0);
+  const dumpOverrides=Number(dumpSitesMeta.override_count||0);
+  const dumpStatus=dumpSitesMeta.source==='api'?'Live':'Fallback';
+  const dumpStatusCls=dumpSitesMeta.source==='api'?'sig-live':'sig-plan';
+  body.innerHTML=`
+    <tr><td>Live Leads</td><td class="sig-live">Live</td><td>${leadCt}</td><td>Pipeline + SLA risk</td></tr>
+    <tr><td>ACS Demographics</td><td class="sig-live">Live</td><td>${Object.keys(CD||{}).length}</td><td>Neighborhood context</td></tr>
+    <tr><td>City Opportunities API</td><td class="${(permitCt+housingCt+transitCt)>0?'sig-live':'sig-plan'}">${(permitCt+housingCt+transitCt)>0?'Live':'Pending'}</td><td>${permitCt+housingCt+transitCt}</td><td>Permits/housing/transit</td></tr>
+    <tr><td>Dumpsite Layer (MSW)</td><td class="${dumpStatusCls}">${dumpStatus}</td><td>${dumpOpen}/${dumpTotal} open now · ${dumpOverrides} overrides</td><td>Ops drop timing + route optimization</td></tr>
+    <tr><td>Probate / Death / Obituaries</td><td class="sig-plan">Planned</td><td>—</td><td>Household transition triggers</td></tr>
+    <tr><td>Partner Directory Imports</td><td class="sig-private">Planned</td><td>${KEY_VENUES.filter(v=>v.group==='partners').length}</td><td>Attorneys, mortuaries, move managers, realtors</td></tr>`;
+}
 
 // ── LEADS ─────────────────────────────────────────────────────────────────────
-let LEAD_INTEL={};
-let WORLDVIEW_LEADS=[];
 function stateCls(s){
   const u=(s||'').toUpperCase();
   if(u==='NEW')return'sn';
@@ -541,129 +926,44 @@ function stateCls(s){
   return'sn';
 }
 function stateLabel(s){return(s||'?').replace('AWAITING_','').replace(/_/g,' ');}
+function nextBestAction(lead,pin,inactivityMin){
+  const s=String(lead.state||lead.conv_state||'').toUpperCase();
+  const stage=pin&&pin.stage?pin.stage:'red';
+  if(stage==='green')return 'Review/referral';
+  if(stage==='yellow')return 'Confirm window';
+  if(s.includes('AWAITING_MEDIA'))return 'Get photos';
+  if(s.includes('AWAITING_ADDRESS'))return 'Get address';
+  if(s.includes('QUOTE_READY')||s.includes('QUOTE'))return 'Close deposit';
+  if(inactivityMin>=60)return 'SLA nudge';
+  return 'Next step';
+}
+function slaMeta(inactivityMin){
+  if(inactivityMin>=60)return {label:`${inactivityMin}m SLA`,color:'var(--red)'};
+  if(inactivityMin>=30)return {label:`${inactivityMin}m SLA`,color:'var(--amber)'};
+  return {label:`${inactivityMin}m active`,color:'var(--green)'};
+}
 function leadHtml(l){
   const init=(l.phone||'??').replace(/\D/g,'').slice(-4,-2);
-  const amt=l.quote_total_cents?fCents(l.quote_total_cents):(l.load_bucket||'—');
-  const phone=esc(l.phone||'');
-  return`<div class="lead" data-phone="${phone}" onmouseenter="showLeadHover(event,this)" onmousemove="moveLeadHover(event)" onmouseleave="hideLeadHover()">
+  const amt=l.quote_amount?f$(l.quote_amount):(l.load_bucket||'—');
+  const sla=l.sla||{label:'—',color:'var(--tx3)'};
+  return`<div class="lead">
     <div class="av">${init}</div>
     <div><div style="font-size:11px;color:var(--tx)">${fPhone(l.phone)}</div>
-    <div style="font-size:9px;color:var(--tx3)">${fAgo(l.created_at||l.createdAt)} · ${l.address||'No address'}</div></div>
+    <div style="font-size:9px;color:var(--tx3)">${fAgo(l.created_at||l.createdAt)} · ${l.address||'No address'}</div>
+    <div style="font-size:8px;color:var(--tx2);margin-top:2px">${l.next_action||'—'} · <span style="color:${sla.color}">${sla.label}</span></div></div>
     <span class="sb ${stateCls(l.state)}">${stateLabel(l.state)}</span>
     <div style="font-size:11px;color:var(--tx)">${amt}</div>
   </div>`;
 }
-function leadHoverHtml(phone){
-  const intel=LEAD_INTEL[phone];
-  if(!intel)return'';
-  const items=intel.items||{};
-  const value=intel.value||{};
-  const ops=intel.ops||{};
-  const journey=intel.journey||{};
-  const top=Array.isArray(items.top)?items.top.filter(Boolean).slice(0,3):[];
-  const progress=Number(journey.progress||0);
-  return `
-    <h4>${fPhone(phone)}</h4>
-    <div class="intel-grid">
-      <div class="intel-label">Stage</div><div class="intel-value">${esc(stateLabel(intel.state||'NEW'))}</div>
-      <div class="intel-label">Journey</div><div class="intel-value">${progress}/6 complete</div>
-      <div class="intel-label">Quote Given</div><div class="intel-value">${fCents(intel.quote_total_cents)}</div>
-      <div class="intel-label">Payment</div><div class="intel-value">${esc(intel.payment_status||'—')}</div>
-      <div class="intel-label">Resale</div><div class="intel-value">${items.resell||0}</div>
-      <div class="intel-label">Scrap</div><div class="intel-value">${items.scrap||0}</div>
-      <div class="intel-label">Donate</div><div class="intel-value">${items.donate||0}</div>
-      <div class="intel-label">Dump</div><div class="intel-value">${items.dump||0}</div>
-      <div class="intel-label">Resale Value</div><div class="intel-value">${fCents(value.resale_low_cents)} - ${fCents(value.resale_high_cents)}</div>
-      <div class="intel-label">Next Action</div><div class="intel-value">${esc(ops.next_action||'Review lead')}</div>
-      <div class="intel-label">Calendar</div><div class="intel-value">${esc(ops.calendar_sync_status||'PENDING')}</div>
-    </div>
-    ${top.length?`<div class="intel-top">Top items: ${top.map(esc).join(' · ')}</div>`:''}
-  `;
+function getFlowFilteredLeads(leads){
+  const arr=Array.isArray(leads)?leads:[];
+  if(leadFlowFilter==='all')return arr;
+  return arr.filter(l=>leadFlowBucket(l)===leadFlowFilter);
 }
-function leadMapTooltipHtml(lead){
-  const phone=String(lead?.phone||'');
-  const intel=LEAD_INTEL[phone]||lead?.hover||{};
-  const progress=Number((intel.journey||{}).progress||0);
-  return `
-    <h4>${fPhone(phone)}</h4>
-    <div><span class="th">Stage</span> <span class="tv">${esc(stateLabel(intel.state||lead?.state||'NEW'))}</span></div>
-    <div><span class="th">Journey</span> <span class="tv">${progress}/6 complete</span></div>
-    <div><span class="th">Quote</span> <span class="tv">${fCents(intel.quote_total_cents||lead?.quote_total_cents)}</span></div>
-    <div><span class="th">Payment</span> <span class="tv">${esc(intel.payment_status||'—')}</span></div>
-    <div><span class="th">Calendar</span> <span class="tv">${esc(((intel.ops||{}).calendar_sync_status)||'PENDING')}</span></div>
-    <div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--bd)">
-      <span class="th">Next</span> <span class="tg">${esc((intel.ops||{}).next_action||'Review lead')}</span>
-    </div>
-  `;
-}
-function leadMapDetailHtml(lead){
-  const phone=String(lead?.phone||'');
-  const intel=LEAD_INTEL[phone]||lead?.hover||{};
-  const items=intel.items||{};
-  const value=intel.value||{};
-  const ops=intel.ops||{};
-  const journey=intel.journey||{};
-  const top=Array.isArray(items.top)?items.top.filter(Boolean).slice(0,3):[];
-  const steps=Array.isArray(journey.steps)?journey.steps:[];
-  const stepLine=steps.length
-    ? steps.map(s=>`${s.done?'✓':'○'} ${s.label}`).join(' · ')
-    : '○ Contacted · ○ Media · ○ Quoted · ○ Paid · ○ Scheduled · ○ Removed';
-  const recent=Array.isArray(journey.recent)?journey.recent.slice(0,3):[];
-  return `<div class="ttl">Lead Detail</div>
-    <div class="ph">${fPhone(phone)}</div>
-    <div class="rows">
-      <div class="k">Stage</div><div class="v">${esc(stateLabel(intel.state||lead?.state||'NEW'))}</div>
-      <div class="k">Journey</div><div class="v">${Number(journey.progress||0)}/6</div>
-      <div class="k">Address</div><div class="v">${esc(lead?.address||'No address')}</div>
-      <div class="k">ZIP</div><div class="v">${esc(lead?.zip||'—')}</div>
-      <div class="k">Quote Given</div><div class="v">${fCents(intel.quote_total_cents||lead?.quote_total_cents)}</div>
-      <div class="k">Upfront</div><div class="v">${fCents(intel.upfront_total_cents)}</div>
-      <div class="k">Payment</div><div class="v">${esc(intel.payment_status||'—')}</div>
-      <div class="k">Confirmation #</div><div class="v">${esc(intel.confirmation_id||'—')}</div>
-      <div class="k">Resell / Scrap / Donate / Dump</div><div class="v">${items.resell||0} / ${items.scrap||0} / ${items.donate||0} / ${items.dump||0}</div>
-      <div class="k">Resale Value</div><div class="v">${fCents(value.resale_low_cents)} - ${fCents(value.resale_high_cents)}</div>
-      <div class="k">Next Action</div><div class="v">${esc(ops.next_action||'Review lead')}</div>
-      <div class="k">Calendar Sync</div><div class="v">${esc(ops.calendar_sync_status||'PENDING')}</div>
-      <div class="k">Calendar Link</div><div class="v">${ops.calendar_event_url?`<a href="${esc(ops.calendar_event_url)}" target="_blank" rel="noopener">Open event</a>`:'—'}</div>
-    </div>
-    <div class="intel-top">Journey: ${esc(stepLine)}</div>
-    ${recent.length?`<div class="intel-top">Recent: ${recent.map(r=>esc(r.label||r.type||'')).join(' · ')}</div>`:''}
-    ${top.length?`<div class="intel-top">Top items: ${top.map(esc).join(' · ')}</div>`:''}`;
-}
-function renderMapLeadPanel(){
-  const panel=document.getElementById('map-lead-detail');
-  if(!panel)return;
-  const lead=mapSelectedLeadPhone?getLeadByPhone(mapSelectedLeadPhone):null;
-  if(!lead){
-    panel.innerHTML=`<div class="ttl">Lead Detail (click a client dot)</div>
-      <div style="font-size:10px;color:var(--tx2);line-height:1.5">Hover dots for quick preview. Click a dot to load full lead intelligence here.</div>`;
-    return;
-  }
-  panel.innerHTML=leadMapDetailHtml(lead);
-}
-function showLeadHover(ev,row){
-  const phone=row?.dataset?.phone||'';
-  if(!phone||!LEAD_INTEL[phone])return;
-  const box=document.getElementById('lead-hover');
-  if(!box)return;
-  box.innerHTML=leadHoverHtml(phone);
-  box.style.display='block';
-  moveLeadHover(ev);
-}
-function moveLeadHover(ev){
-  const box=document.getElementById('lead-hover');
-  if(!box||box.style.display==='none')return;
-  const pad=14;
-  let x=(ev?.clientX||0)+14;
-  let y=(ev?.clientY||0)+14;
-  if(x+box.offsetWidth+pad>window.innerWidth)x=window.innerWidth-box.offsetWidth-pad;
-  if(y+box.offsetHeight+pad>window.innerHeight)y=window.innerHeight-box.offsetHeight-pad;
-  box.style.left=Math.max(8,x)+'px';
-  box.style.top=Math.max(8,y)+'px';
-}
-function hideLeadHover(){
-  const box=document.getElementById('lead-hover');
-  if(box)box.style.display='none';
+function renderLeadPanels(leads){
+  const filtered=getFlowFilteredLeads(leads);
+  document.getElementById('leads-mini').innerHTML=filtered.slice(0,5).map(leadHtml).join('')||'<div style="padding:8px;font-size:10px;color:var(--tx3)">No leads for this filter.</div>';
+  document.getElementById('leads-full').innerHTML=filtered.map(leadHtml).join('')||'<div style="padding:8px;font-size:10px;color:var(--tx3)">No leads for this filter.</div>';
 }
 function setPipe(leads){
   const t=leads.length||1,c={n:0,m:0,q:0,d:0,b:0};
@@ -683,39 +983,127 @@ function setPipe(leads){
     <div class="ps pb" style="width:${c.b/t*100}%"></div>`;
 }
 
+function renderOpsIntel(raw){
+  const m=(raw&&raw.meta)||{};
+  const rc=m.risk_counts||{high:0,medium:0,low:0};
+  const avgEta=Number.isFinite(Number(m.avg_eta_min))?Number(m.avg_eta_min):0;
+  const etaMode=String(m.eta_mode||'').toUpperCase();
+  const setTxt=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=String(v);};
+  setTxt('ops-risk-high',rc.high||0);
+  setTxt('ops-risk-med',rc.medium||0);
+  setTxt('ops-risk-low',rc.low||0);
+  setTxt('ops-eta-avg',avgEta?avgEta:'—');
+  const route=Array.isArray(raw&&raw.route_suggestion)?raw.route_suggestion:[];
+  const routeEl=document.getElementById('ops-route');
+  if(!routeEl)return;
+  if(!route.length){
+    const recs=recommendDumpSites([]);
+    const recTxt=recs.length?`<div style="font-size:8px;color:var(--tx3);margin-top:4px">MSW dump cue: ${recs[0].site.name} · ${recs[0].availability.label}</div>`:'';
+    routeEl.innerHTML='<div style="font-size:9px;color:var(--tx3)">No active route suggestions.</div>'+recTxt;
+    return;
+  }
+  const recs=recommendDumpSites(route);
+  routeEl.innerHTML=route.slice(0,6).map(r=>{
+    const c=pinColor(r.stage);
+    return `<div class="ops-r">
+      <div class="ops-rl"><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${c};margin-right:6px"></span>#${r.stop} ${fPhone(r.phone)}<div style="color:var(--tx3)">${r.address||'—'}</div></div>
+      <div class="ops-rr">${r.eta_minutes_est||'—'} min<br><span style="color:var(--tx3)">${r.leg_miles||'—'} mi</span></div>
+    </div>`;
+  }).join('')+`<div style="font-size:8px;color:var(--tx3);margin-top:4px">ETA mode: ${etaMode||'HEURISTIC'}</div>`+
+  (recs.length?`<div style="font-size:8px;color:var(--tx3);margin-top:3px">MSW dump cue: ${recs[0].site.name} (${recs[0].distance_mi.toFixed(1)} mi) · ${recs[0].availability.label}</div>`:'')+
+  (recs[1]?`<div style="font-size:8px;color:var(--tx3);margin-top:2px">Backup: ${recs[1].site.name} (${recs[1].distance_mi.toFixed(1)} mi)</div>`:'');
+}
+
 async function fetchLeads(){
   try{
-    const r=await fetch('/api/worldview/leads');
+    const r=await fetch('/api/dashboard/leads',{headers:{'Accept':'application/json'}});
     if(!r.ok)throw new Error(r.status);
     const raw=await r.json();
     const leads=Array.isArray(raw)?raw:(raw.leads||raw.data||[]);
-    WORLDVIEW_LEADS=leads;
-    LEAD_INTEL={};
-    leads.forEach(l=>{if(l&&l.phone&&l.hover)LEAD_INTEL[l.phone]=l.hover;});
+    MAP_LEAD_PINS=Array.isArray(raw.pins)?raw.pins:[];
+    PIN_BY_PHONE=new Map(MAP_LEAD_PINS.map(p=>[String(p.phone||''),p]));
+    const leadsEnriched=leads.map(l=>{
+      const phone=String(l.phone||l.from_phone||'');
+      const pin=PIN_BY_PHONE.get(phone)||null;
+      const lastSeenTs=l.last_seen_at||l.created_at||l.createdAt||Date.now();
+      const inactivityMin=pin&&Number.isFinite(Number(pin.inactivity_minutes))
+        ? Number(pin.inactivity_minutes)
+        : Math.max(0,Math.floor((Date.now()-new Date(lastSeenTs).getTime())/60000));
+      return {
+        ...l,
+        phone:phone||l.phone,
+        next_action:nextBestAction(l,pin,inactivityMin),
+        sla:slaMeta(inactivityMin)
+      };
+    });
+    CURRENT_LEADS=leadsEnriched;
+    updateLeadFilterCount();
+    renderOpsIntel(raw);
     const today=new Date().toDateString();
-    const todayCt=leads.filter(l=>new Date(l.created_at||l.createdAt||0).toDateString()===today).length;
-    const quoted=leads.filter(l=>(l.state||'').toUpperCase().includes('QUOTE')).length;
-    const booked=leads.filter(l=>{const s=(l.state||'').toUpperCase();return s.includes('DAY')||s.includes('WINDOW')||s.includes('BOOKING');}).length;
-    document.getElementById('kpi-tot').textContent=leads.length;
+    const todayCt=leadsEnriched.filter(l=>new Date(l.created_at||l.createdAt||0).toDateString()===today).length;
+    const quoted=leadsEnriched.filter(l=>(l.state||'').toUpperCase().includes('QUOTE')).length;
+    const booked=leadsEnriched.filter(l=>{const s=(l.state||'').toUpperCase();return s.includes('DAY')||s.includes('WINDOW')||s.includes('BOOKING');}).length;
+    const bookedToday=Number(raw?.meta?.booked_today||0);
+    const depositRate=Math.round(Number(raw?.meta?.deposit_rate||0));
+    const avgRev=Number(raw?.meta?.avg_revenue_job||0);
+    const avgMargin=Number(raw?.meta?.avg_margin_job||0);
+    const truthJobs=Number(raw?.meta?.margin_truth_jobs||0);
+    const slaRed=Number(raw?.meta?.sla_red_count||0);
+    const autoActions=Number(raw?.meta?.next_actions_sent_total||0);
+    const avgEta=Number(raw?.meta?.avg_eta_min||0);
+    const squareConnected=Boolean(raw?.meta?.square_connected);
+    document.getElementById('kpi-tot').textContent=leadsEnriched.length;
     document.getElementById('kpi-q').textContent=quoted;
     document.getElementById('kpi-bk').textContent=booked;
-    document.getElementById('kpi-rev').textContent=f$(booked*450);
+    const modeledRev=avgRev>0?Math.round(avgRev*Math.max(booked,1)):booked*45000;
+    document.getElementById('kpi-rev').textContent=f$(modeledRev);
     document.getElementById('kpi-today').textContent=todayCt+' today';
-    document.getElementById('kpi-conv').textContent=leads.length?Math.round(booked/leads.length*100)+'% close':'';
-    document.getElementById('kpi-avg').textContent='$450 avg ticket';
-    setPipe(leads);
-    document.getElementById('leads-mini').innerHTML=leads.slice(0,5).map(leadHtml).join('');
-    document.getElementById('leads-full').innerHTML=leads.map(leadHtml).join('')||'<div style="padding:8px;font-size:10px;color:var(--tx3)">No leads yet.</div>';
-    if(mapBuilt)renderMap(curLayer);
-    renderMapLeadPanel();
+    document.getElementById('kpi-conv').textContent=leadsEnriched.length?Math.round(booked/leadsEnriched.length*100)+'% close':'';
+    document.getElementById('kpi-avg').textContent=avgRev>0?`${f$(avgRev)} avg`:'model avg';
+    document.getElementById('ns-booked-day').textContent=String(bookedToday);
+    document.getElementById('ns-deposit-rate').textContent=Number.isFinite(depositRate)?`${depositRate}%`:'—';
+    document.getElementById('ns-avg-rev').textContent=avgRev>0?f$(avgRev):'—';
+    document.getElementById('ns-margin-job').textContent=Number.isFinite(avgMargin)?f$(avgMargin):'—';
+    const setTxt=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=String(v);};
+    setTxt('gv-eta',avgEta?`${avgEta}m`:'—');
+    setTxt('gv-sla-red',slaRed);
+    setTxt('gv-actions',autoActions);
+    setTxt('gv-truth',truthJobs);
+    document.getElementById('ns-note').textContent=squareConnected
+      ? 'Square settled + cost truth live'
+      : 'Square token missing';
+    setPipe(leadsEnriched);
+    renderLeadPanels(leadsEnriched);
+    renderMapSourceTable(raw?.meta||{});
+    if(streetMap){
+      renderStreetLeads();
+      renderStreetVenues();
+      renderStreetDumpSites();
+      renderStreetSignals();
+    }
+    renderVenueList();
+    renderDumpSiteList();
   }catch(e){
-    LEAD_INTEL={};
-    WORLDVIEW_LEADS=[];
+    MAP_LEAD_PINS=[];
+    PIN_BY_PHONE=new Map();
+    CURRENT_LEADS=[];
+    updateLeadFilterCount();
+    renderOpsIntel(null);
     ['kpi-tot','kpi-q','kpi-bk','kpi-rev'].forEach(id=>document.getElementById(id).textContent='—');
-    const fb=`<div style="padding:14px;background:var(--bg3);border-radius:5px;text-align:center;font-size:10px;color:var(--tx3)">Lead feed unavailable right now.</div>`;
+    ['ns-booked-day','ns-deposit-rate','ns-avg-rev','ns-margin-job'].forEach(id=>document.getElementById(id).textContent='—');
+    ['gv-eta','gv-sla-red','gv-actions','gv-truth'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent='—';});
+    const nsNote=document.getElementById('ns-note');if(nsNote)nsNote.textContent='North-star KPIs unavailable right now.';
+    const fb=`<div style="padding:14px;background:var(--bg3);border-radius:5px;text-align:center;font-size:10px;color:var(--tx3)">Live leads unavailable right now.</div>`;
     ['leads-mini','leads-full'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML=fb;});
-    if(mapBuilt)renderMap(curLayer);
-    renderMapLeadPanel();
+    renderMapSourceTable({});
+    if(streetMap){
+      renderStreetLeads();
+      renderStreetVenues();
+      renderStreetDumpSites();
+      renderStreetSignals();
+    }
+    renderVenueList();
+    renderDumpSiteList();
   }
 }
 
@@ -723,10 +1111,20 @@ async function fetchLeads(){
 let CD=null; // census data keyed by zip
 
 async function fetchCensus(){
-  const ZIPS=['90008','90043','90016','90056'];
-  const NAMES={'90008':'Baldwin Hills','90043':'View Park','90016':'West Adams','90056':'Ladera Heights'};
+  const ZIPS=['90008','90043','90016','90056','90301','90302','90047','90044'];
+  const NAMES={
+    '90008':'Baldwin Hills',
+    '90043':'View Park',
+    '90016':'West Adams',
+    '90056':'Ladera Heights',
+    '90301':'Inglewood',
+    '90302':'North Inglewood',
+    '90047':'Vermont Knolls',
+    '90044':'South LA'
+  };
   const VARS='B19013_001E,B25077_001E,B25003_002E,B25003_001E,B11001_001E,B01002_001E,B01001_020E,B01001_021E,B01001_022E,B01001_023E,B01001_024E,B01001_025E,B01001_044E,B01001_045E,B01001_046E,B01001_047E,B01001_048E,B01001_049E,B01003_001E';
-  const url=`https://api.census.gov/data/2023/acs/acs5?get=NAME,${VARS}&for=zip+code+tabulation+area:${ZIPS.join(',')}&in=state:06`;
+  // ZCTA queries do not accept `in=state:*`; include ZIP list only.
+  const url=`https://api.census.gov/data/2023/acs/acs5?get=NAME,${VARS}&for=zip+code+tabulation+area:${ZIPS.join(',')}`;
   try{
     const r=await fetch(url);if(!r.ok)throw new Error();
     const rows=await r.json(),hdr=rows[0];
@@ -746,32 +1144,35 @@ async function fetchCensus(){
         ownerPct:Math.round(ow/tH*100),
         households:hh,totalPop:tP,
         medianAge:Number(row[gi('B01002_001E')])||0,
-        pop65:p65,pct65:tP>0?Math.round(p65/tP*100):0,
-        estRevenue:Math.round(hh*.10*385),
+        pop65:p65,pct65:tP>0?Math.round(p65/tP*100):0
       };
     });
     renderCensusCharts();
-    if(mapBuilt)updateMap(curLayer);
+    if(streetMap)renderStreetZips();
   }catch(e){
     // Verified fallback
     CD={
-      '90008':{zip:'90008',name:'Baldwin Hills',   income:61846, homeValue:802000, ownerPct:38,households:6200,pct65:14,estRevenue:238700,totalPop:18200,medianAge:37},
-      '90043':{zip:'90043',name:'View Park',         income:64792, homeValue:982000, ownerPct:58,households:9800,pct65:18,estRevenue:377300,totalPop:28400,medianAge:41},
-      '90016':{zip:'90016',name:'West Adams',         income:73516, homeValue:718000, ownerPct:34,households:11200,pct65:12,estRevenue:431200,totalPop:34100,medianAge:34},
-      '90056':{zip:'90056',name:'Ladera Heights',     income:133048,homeValue:1120000,ownerPct:71,households:3900,pct65:22,estRevenue:150150,totalPop:9800,medianAge:48},
+      '90008':{zip:'90008',name:'Baldwin Hills',income:61846,homeValue:802000,ownerPct:38,households:6200,pct65:14,totalPop:18200,medianAge:37},
+      '90043':{zip:'90043',name:'View Park',income:64792,homeValue:982000,ownerPct:58,households:9800,pct65:18,totalPop:28400,medianAge:41},
+      '90016':{zip:'90016',name:'West Adams',income:73516,homeValue:718000,ownerPct:34,households:11200,pct65:12,totalPop:34100,medianAge:34},
+      '90056':{zip:'90056',name:'Ladera Heights',income:133048,homeValue:1120000,ownerPct:71,households:3900,pct65:22,totalPop:9800,medianAge:48},
+      '90301':{zip:'90301',name:'Inglewood',income:71200,homeValue:742000,ownerPct:36,households:13200,pct65:11,totalPop:35600,medianAge:34},
+      '90302':{zip:'90302',name:'North Inglewood',income:76900,homeValue:786000,ownerPct:39,households:8700,pct65:10,totalPop:24800,medianAge:33},
+      '90047':{zip:'90047',name:'Vermont Knolls',income:64100,homeValue:690000,ownerPct:41,households:14900,pct65:13,totalPop:46800,medianAge:35},
+      '90044':{zip:'90044',name:'South LA',income:56200,homeValue:615000,ownerPct:28,households:21700,pct65:9,totalPop:59600,medianAge:31}
     };
     document.getElementById('cens-tag').textContent='ACS 2023 · static fallback';
     renderCensusCharts();
-    if(mapBuilt)updateMap(curLayer);
+    if(streetMap)renderStreetZips();
   }
 }
 
 function renderCensusCharts(){
   if(!CD)return;
-  const zips=['90008','90043','90016','90056'];
+  const zips=Object.keys(CD);
+  if(!zips.length)return;
   const maxInc=Math.max(...zips.map(z=>CD[z].income));
   const maxHV =Math.max(...zips.map(z=>CD[z].homeValue));
-  const maxRev=Math.max(...zips.map(z=>CD[z].estRevenue));
   const max65 =Math.max(...zips.map(z=>CD[z].pct65));
 
   const bc=(label,val,max,cls,fmt)=>`
@@ -829,6 +1230,8 @@ function project(lng,lat){
   return[x,y];
 }
 function pts(coords){return coords.map(([ln,la])=>project(ln,la).join(',')).join(' ');}
+function linePts(coords){return coords.map(([ln,la])=>project(ln,la).join(',')).join(' ');}
+function midCoord(coords){return coords[Math.floor(coords.length/2)]||coords[0];}
 
 // Real approximate boundary coords for each ZCTA from TIGERweb reference
 const ZONES={
@@ -848,15 +1251,266 @@ const ZONES={
     [-118.410,33.997],[-118.387,33.997],[-118.387,33.975],[-118.375,33.970],[-118.357,33.970],
     [-118.357,33.955],[-118.375,33.951],[-118.400,33.951],[-118.410,33.960],[-118.410,33.997]
   ]},
+  '90301':{name:'Inglewood Core',coords:[
+    [-118.376,33.973],[-118.356,33.973],[-118.341,33.970],[-118.341,33.952],[-118.356,33.950],
+    [-118.376,33.952],[-118.376,33.973]
+  ]},
+  '90302':{name:'North Inglewood',coords:[
+    [-118.376,33.992],[-118.356,33.992],[-118.341,33.989],[-118.341,33.970],[-118.356,33.973],
+    [-118.376,33.973],[-118.376,33.992]
+  ]},
+  '90047':{name:'Vermont Knolls',coords:[
+    [-118.340,33.984],[-118.317,33.984],[-118.305,33.979],[-118.305,33.955],[-118.317,33.951],
+    [-118.340,33.952],[-118.340,33.984]
+  ]},
+  '90044':{name:'South LA',coords:[
+    [-118.330,34.000],[-118.305,34.000],[-118.293,33.993],[-118.293,33.965],[-118.305,33.955],
+    [-118.330,33.958],[-118.330,34.000]
+  ]},
 };
 
-// Venue dots [lng, lat, label, note]
-const VENUES=[
-  [-118.3391,33.9535,'🏟','SoFi · 2.1mi'],
-  [-118.3367,33.9597,'🏀','Intuit · 2.4mi'],
-  [-118.3338,33.9872,'🚇','K-Line · 0.8mi'],
-  [-118.4081,33.9425,'✈','LAX · 4.2mi'],
+const KEY_VENUES=[
+  {name:"SoFi Stadium",group:"whales",kind:"iconic",lat:33.9535,lng:-118.3391,note:"Big whale"},
+  {name:"Intuit Dome",group:"whales",kind:"iconic",lat:33.9597,lng:-118.3367,note:"Big whale"},
+  {name:"Kia Forum",group:"whales",kind:"iconic",lat:33.9581,lng:-118.3417,note:"High-volume event venue"},
+  {name:"Randy's Donuts",group:"whales",kind:"iconic",lat:33.9590,lng:-118.3539,note:"Iconic traffic anchor"},
+  {name:"Staples Center District",group:"whales",kind:"iconic",lat:34.0430,lng:-118.2673,note:"Downtown anchor"},
+  {name:"Baldwin Hills Crenshaw Plaza",group:"whales",kind:"iconic",lat:34.0088,lng:-118.3352,note:"Regional retail node"},
+  {name:"Westfield Culver City",group:"whales",kind:"iconic",lat:33.9849,lng:-118.3931,note:"Retail whale"},
+  {name:"LAX Terminal District",group:"whales",kind:"iconic",lat:33.9416,lng:-118.4085,note:"Ops anchor"},
+  {name:"Probate / Estate Attorney Cluster",group:"partners",kind:"professional",lat:34.0232,lng:-118.3210,note:"Estate + probate referrals"},
+  {name:"Trust Officer / Estate Planner Cluster",group:"partners",kind:"professional",lat:34.0105,lng:-118.3475,note:"Trust transitions"},
+  {name:"Senior Move Manager Cluster",group:"partners",kind:"professional",lat:34.0001,lng:-118.3624,note:"Downsizing referrals"},
+  {name:"Assisted Living / Memory Care Cluster",group:"partners",kind:"facility",lat:33.9807,lng:-118.3565,note:"Move-out triggers"},
+  {name:"Funeral Home / Mortuary Cluster",group:"partners",kind:"facility",lat:33.9716,lng:-118.3358,note:"Family transition timing"},
+  {name:"Property Managers / HOA Cluster",group:"partners",kind:"property",lat:34.0175,lng:-118.3652,note:"Turnover cleanouts"},
+  {name:"Restoration + Insurance Adjuster Cluster",group:"partners",kind:"ops",lat:33.9887,lng:-118.3791,note:"Water/fire/mold referrals"},
+  {name:"Realtor / Stager Cluster",group:"partners",kind:"property",lat:34.0071,lng:-118.3548,note:"Pre-listing cleanouts"},
+  {name:"Professional Organizer / Therapist Cluster",group:"partners",kind:"service",lat:33.9992,lng:-118.3342,note:"Hoarding/life-transition support"}
 ];
+
+const BASE_COORD={lat:33.9776848,lng:-118.3523303};
+const DUMP_TIER_RANK={primary:0,nearby:1,regional:2,far:3,restricted:4,closed:5};
+const DUMP_SITES_FALLBACK=[
+  {
+    id:'south_gate_lacsd',name:'South Gate Transfer Station (LACSD)',kind:'transfer',tier:'primary',status:'open',
+    address:'9530 S Garfield Ave, South Gate, CA 90280',phone:'(562) 927-0146',
+    lat:33.9441529,lng:-118.1663537,msw:true,accepts:'MSW, inert waste',
+    hours_text:'Mon-Sat 6:00 AM-4:30 PM · Sun closed',
+    schedule:{1:[[360,990]],2:[[360,990]],3:[[360,990]],4:[[360,990]],5:[[360,990]],6:[[360,990]]},
+    notes:'ICL default site. Hard unload cutoff around 4:50 PM. Tarp loads to avoid surcharges.'
+  },
+  {
+    id:'compton_republic',name:'Republic Compton Transfer',kind:'transfer',tier:'primary',status:'open',
+    address:'2509 W Rosecrans Ave, Compton, CA 90059',phone:'(310) 327-8461',
+    lat:33.9033397,lng:-118.2443543,msw:true,accepts:'MSW, recyclables',
+    hours_text:'Mon-Fri 6:00 AM-5:30 PM · Sat/Sun closed',
+    schedule:{1:[[360,1050]],2:[[360,1050]],3:[[360,1050]],4:[[360,1050]],5:[[360,1050]]},
+    notes:'Weekday-only primary backup near ICL territory.'
+  },
+  {
+    id:'waste_resources_gardena',name:'Waste Resources Recovery',kind:'transfer',tier:'primary',status:'call',
+    address:'357 W Compton Blvd, Gardena, CA 90247',phone:'(310) 366-7600',
+    lat:33.8961185,lng:-118.1966994,msw:true,accepts:'MSW, recyclables',
+    hours_text:'Call to confirm current commercial hours',schedule:{},
+    notes:'Very close. Call ahead for commercial access/rates.'
+  },
+  {
+    id:'american_waste_gardena',name:'American Waste Transfer (Republic)',kind:'transfer',tier:'nearby',status:'open',
+    address:'1449 W Rosecrans Ave, Gardena, CA 90249',phone:'(310) 527-6980',
+    lat:33.9020035,lng:-118.3017220,msw:true,accepts:'MSW, recyclables',
+    hours_text:'Mon 5:00 AM-5:30 PM · Sat 5:00 AM-4:00 PM · Tue-Fri/Sun closed',
+    schedule:{1:[[300,1050]],6:[[300,960]]},
+    notes:'Limited schedule. No tires, paint, or HHW.'
+  },
+  {
+    id:'culver_city_transfer',name:'Culver City Transfer & Recycling',kind:'transfer',tier:'nearby',status:'call',
+    address:'9255 W Jefferson Blvd, Culver City, CA 90232',phone:'(310) 253-5635',
+    lat:33.9836,lng:-118.3907,msw:true,accepts:'MSW, recyclables, e-waste (Sat)',
+    hours_text:'Call to confirm commercial access and current hours',schedule:{},
+    notes:'City-operated. Jurisdiction/access rules may apply.'
+  },
+  {
+    id:'dart_downey',name:'DART / Athens Downey Transfer',kind:'transfer',tier:'nearby',status:'open',
+    address:'9770 Washburn Rd, Downey, CA 90241',phone:'(562) 622-3503',
+    lat:33.9242550,lng:-118.1132480,msw:true,accepts:'MSW, recyclables',
+    hours_text:'Mon-Fri 6:00 AM-5:30 PM · Sat 6:00 AM-1:30 PM · Sun closed',
+    schedule:{1:[[360,1050]],2:[[360,1050]],3:[[360,1050]],4:[[360,1050]],5:[[360,1050]],6:[[360,810]]},
+    notes:'Nearby secondary option. Confirm Athens commercial policy.'
+  },
+  {
+    id:'carson_wm',name:'WM Carson Transfer & MRF',kind:'transfer',tier:'nearby',status:'call',
+    address:'321 W Francisco St, Carson, CA 90745',phone:'(310) 217-6300',
+    lat:33.8503778,lng:-118.2824760,msw:true,accepts:'MSW, recyclables',
+    hours_text:'Call to confirm',schedule:{},
+    notes:'WM facility; verify rates and access before first run.'
+  },
+  {
+    id:'puente_hills_mrf',name:'Puente Hills MRF (LACSD)',kind:'transfer',tier:'regional',status:'open',
+    address:'13130 Crossroads Pkwy S, City of Industry, CA 91746',phone:'(562) 908-4288 ext. 6074',
+    lat:34.0310902,lng:-118.0114286,msw:true,accepts:'MSW, food/green waste, recyclables',
+    hours_text:'Mon-Sat 4:00 AM-5:00 PM · Sun closed',
+    schedule:{1:[[240,1020]],2:[[240,1020]],3:[[240,1020]],4:[[240,1020]],5:[[240,1020]],6:[[240,1020]]},
+    notes:'Best pre-dawn run option. Safety vest required.'
+  },
+  {
+    id:'wm_south_gate',name:'WM South Gate Transfer',kind:'transfer',tier:'regional',status:'open',
+    address:'4489 Ardine St, South Gate, CA 90280',phone:'(323) 560-8488',
+    lat:33.9577384,lng:-118.1904151,msw:true,accepts:'MSW, recyclables',
+    hours_text:'Mon-Sat 8:00 AM-5:00 PM',
+    schedule:{1:[[480,1020]],2:[[480,1020]],3:[[480,1020]],4:[[480,1020]],5:[[480,1020]],6:[[480,1020]]},
+    notes:'Secondary South Gate option with later start time.'
+  },
+  {
+    id:'sunshine_canyon',name:'Sunshine Canyon Landfill',kind:'landfill',tier:'regional',status:'open',
+    address:'14747 San Fernando Rd, Sylmar, CA 91342',phone:'(818) 362-2124',
+    lat:34.3032234,lng:-118.4644237,msw:true,accepts:'MSW, C&D, green waste, tires, dirt',
+    hours_text:'Mon-Fri 6:00 AM-6:00 PM · Sat 7:00 AM-12:00 PM · Sun closed',
+    schedule:{1:[[360,1080]],2:[[360,1080]],3:[[360,1080]],4:[[360,1080]],5:[[360,1080]],6:[[420,720]]},
+    notes:'Large open-access landfill. Hand-unload cutoffs apply.'
+  },
+  {
+    id:'calabasas_landfill',name:'Calabasas Landfill',kind:'landfill',tier:'regional',status:'open',
+    address:'5300 Lost Hills Rd, Agoura Hills, CA 91301',phone:'(818) 889-0363',
+    lat:34.1455,lng:-118.7052,msw:true,accepts:'MSW, inert, green waste, manifested tires',
+    hours_text:'Mon-Fri 8:00 AM-5:00 PM · Sat 8:00 AM-2:30 PM · Sun closed',
+    schedule:{1:[[480,1020]],2:[[480,1020]],3:[[480,1020]],4:[[480,1020]],5:[[480,1020]],6:[[480,870]]},
+    notes:'Use for west-of-405 jobs where wasteshed qualifies.'
+  },
+  {
+    id:'scholl_canyon',name:'Scholl Canyon Landfill',kind:'landfill',tier:'restricted',status:'restricted',
+    address:'3001 Scholl Canyon Rd, Glendale, CA 91206',phone:'(818) 243-9779',
+    lat:34.1491881,lng:-118.1901798,msw:true,accepts:'MSW',
+    hours_text:'Mon-Fri 8:00 AM-5:00 PM · Sat 8:00 AM-3:30 PM · Sun closed',
+    schedule:{1:[[480,1020]],2:[[480,1020]],3:[[480,1020]],4:[[480,1020]],5:[[480,1020]],6:[[480,930]]},
+    notes:'Wasteshed-restricted to Glendale/Pasadena area. Do NOT use for standard ICL jobs.'
+  },
+  {
+    id:'chiquita_canyon',name:'Chiquita Canyon Landfill',kind:'landfill',tier:'closed',status:'closed',
+    address:'29201 Henry Mayo Dr, Castaic, CA 91384',phone:'—',
+    lat:34.4320,lng:-118.6460,msw:true,accepts:'N/A',
+    hours_text:'Permanently closed (Jan 1, 2025)',schedule:{},
+    notes:'Remove from routing tools and dispatch playbooks.'
+  }
+];
+let DUMP_SITES=[...DUMP_SITES_FALLBACK];
+let dumpSitesMeta={source:'fallback',generated_at:null,override_count:0};
+
+// Stylized basemap context so the choropleth isn't floating on a blank background.
+const BASEMAP_AREAS=[
+  {name:'Inglewood',coords:[[-118.414,33.966],[-118.386,33.966],[-118.386,33.946],[-118.414,33.946]],fill:'rgba(20,44,79,.40)'},
+  {name:'Baldwin Hills',coords:[[-118.368,34.026],[-118.334,34.026],[-118.334,34.004],[-118.368,34.004]],fill:'rgba(16,36,67,.35)'},
+  {name:'Ladera Heights',coords:[[-118.410,33.980],[-118.376,33.980],[-118.376,33.953],[-118.410,33.953]],fill:'rgba(22,48,86,.32)'},
+];
+const BASEMAP_ROADS=[
+  {name:'I-405',coords:[[-118.409,33.942],[-118.402,33.957],[-118.398,33.972],[-118.393,33.989],[-118.389,34.006],[-118.386,34.023]],major:true},
+  {name:'La Cienega Blvd',coords:[[-118.377,33.944],[-118.374,33.959],[-118.372,33.974],[-118.370,33.989],[-118.367,34.006],[-118.364,34.024]],major:false},
+  {name:'Crenshaw Blvd',coords:[[-118.341,33.946],[-118.340,33.962],[-118.339,33.976],[-118.337,33.991],[-118.335,34.008],[-118.334,34.022]],major:false},
+  {name:'Slauson Ave',coords:[[-118.410,33.989],[-118.391,33.989],[-118.372,33.989],[-118.353,33.989],[-118.334,33.989],[-118.318,33.989]],major:false},
+  {name:'MLK Jr Blvd',coords:[[-118.404,34.008],[-118.385,34.008],[-118.366,34.008],[-118.347,34.008],[-118.329,34.008]],major:false},
+];
+const BASEMAP_LABELS=[
+  {name:'Inglewood',lng:-118.401,lat:33.956},
+  {name:'Leimert Park',lng:-118.334,lat:33.986},
+  {name:'View Park',lng:-118.366,lat:33.979},
+  {name:'West Adams',lng:-118.346,lat:34.019},
+];
+// Operator-defined territory boundary (clockwise), tuned to match the shared map sketch.
+const TERRITORY_WAYPOINTS=[
+  [-118.3542,34.0268], // north tip
+  [-118.3560,34.0220],
+  [-118.3562,34.0155],
+  [-118.3572,34.0060],
+  [-118.3578,33.9972],
+  [-118.3579,33.9739], // top-left connector
+  [-118.3729,33.9739], // west elbow
+  [-118.3730,33.9665],
+  [-118.3700,33.9619], // southwest corner
+  [-118.3578,33.9612],
+  [-118.3488,33.9614], // southeast corner
+  [-118.3489,33.9672], // lower notch rise
+  [-118.3385,33.9718],
+  [-118.3277,33.9780], // east lower bend
+  [-118.3295,33.9945],
+  [-118.3333,34.0085],
+  [-118.3422,34.0138],
+  [-118.3494,34.0180],
+];
+let showTerritoryEdge=true;
+let showNeighborhoods=true;
+let showMapLegend=true;
+let showVenues=true;
+let showSignals=true;
+let showDumpSites=true;
+let venueFilter='all';
+let dumpSiteFilter='msw';
+let leadFilter='all';
+let signalData={permits:[],housing:[],corridors:[],transit:[],meta:{}};
+
+function segsCross(a,b,c,d){
+  const ccw=(p1,p2,p3)=>((p3[1]-p1[1])*(p2[0]-p1[0])>(p2[1]-p1[1])*(p3[0]-p1[0]));
+  return ccw(a,c,d)!==ccw(b,c,d)&&ccw(a,b,c)!==ccw(a,b,d);
+}
+function buildSimpleTerritoryPolygon(points){
+  const uniq=[];const seen=new Set();
+  points.forEach(p=>{const k=`${p[0].toFixed(6)},${p[1].toFixed(6)}`;if(!seen.has(k)){seen.add(k);uniq.push(p);}});
+  const cx=uniq.reduce((s,p)=>s+p[0],0)/uniq.length;
+  const cy=uniq.reduce((s,p)=>s+p[1],0)/uniq.length;
+  const poly=[...uniq].sort((a,b)=>Math.atan2(a[1]-cy,a[0]-cx)-Math.atan2(b[1]-cy,b[0]-cx));
+  let changed=true,guard=0;
+  while(changed&&guard<80){
+    changed=false;guard++;
+    for(let i=0;i<poly.length;i++){
+      const i2=(i+1)%poly.length;
+      for(let j=i+2;j<poly.length;j++){
+        const j2=(j+1)%poly.length;
+        if(i===j2||(i2===j))continue;
+        if(segsCross(poly[i],poly[i2],poly[j],poly[j2])){
+          const mid=poly.slice(i2,j+1).reverse();
+          poly.splice(i2,j-i, ...mid);
+          changed=true;
+        }
+      }
+    }
+  }
+  return [...poly,poly[0]];
+}
+const TERRITORY_EDGE=[...TERRITORY_WAYPOINTS,TERRITORY_WAYPOINTS[0]];
+
+function basemapHtml(){
+  let out='<g id="basemap-layer">';
+  BASEMAP_AREAS.forEach(a=>{
+    out+=`<polygon points="${pts(a.coords)}" fill="${a.fill}" stroke="rgba(77,121,178,.30)" stroke-width="1"/>`;
+  });
+  BASEMAP_ROADS.forEach(r=>{
+    out+=`<polyline points="${linePts(r.coords)}" fill="none" stroke="${r.major?'rgba(91,153,255,.50)':'rgba(77,121,178,.38)'}" stroke-width="${r.major?2.4:1.4}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    const [lng,lat]=midCoord(r.coords);
+    const [rx,ry]=project(lng,lat);
+    out+=`<text x="${rx+4}" y="${ry-4}" fill="rgba(131,162,209,.7)" font-size="7.8" font-family="DM Mono,monospace">${r.name}</text>`;
+  });
+  BASEMAP_LABELS.forEach(l=>{
+    const [x,y]=project(l.lng,l.lat);
+    out+=`<text x="${x}" y="${y}" fill="rgba(131,162,209,.55)" font-size="8.2" font-family="DM Mono,monospace" text-anchor="middle">${l.name}</text>`;
+  });
+  out+='</g>';
+  return out;
+}
+function territoryEdgeHtml(){
+  if(!showTerritoryEdge)return'';
+  const p=linePts(TERRITORY_EDGE);
+  let out=`<g id="territory-edge-layer">
+    <polygon points="${p}" fill="rgba(59,130,246,.05)" stroke="none"/>
+    <polyline points="${p}" fill="none" stroke="rgba(147,197,253,.95)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="${p}" fill="none" stroke="rgba(30,64,175,.9)" stroke-width="1.1" stroke-dasharray="5 4" stroke-linecap="round"/>
+  `;
+  TERRITORY_EDGE.slice(0,-1).forEach(([lng,lat],i)=>{
+    const [x,y]=project(lng,lat);
+    out+=`<circle cx="${x}" cy="${y}" r="3.2" fill="rgba(191,219,254,.95)" stroke="rgba(30,64,175,.9)" stroke-width="1"/>`;
+    if(i%2===0)out+=`<text x="${x+6}" y="${y-6}" fill="rgba(191,219,254,.75)" font-size="7.5" font-family="DM Mono,monospace">${i+1}</text>`;
+  });
+  out+='</g>';
+  return out;
+}
 
 const SCALES={
   income:   {label:'Median HH Income',  fmt:f$,    colors:['#1e3a5f','#1d4ed8','#3b82f6','#60a5fa','#93c5fd'],
@@ -867,144 +1521,538 @@ const SCALES={
              breaks:[0,30,45,60,70]},
   seniors:  {label:'65+ Population %',  fmt:fPct,  colors:['#451a03','#92400e','#d97706','#f59e0b','#fcd34d'],
              breaks:[0,10,14,18,22]},
-  revenue:  {label:'Est. ICL Rev / yr', fmt:f$,    colors:['#0c1a2e','#1e3a5f','#1d4ed8','#3b82f6','#93c5fd'],
-             breaks:[0,150000,280000,380000,430000]},
 };
 
 function getZipVal(zip,metric){
-  if(metric==='none')return 0;
   if(!CD||!CD[zip])return 0;
-  return {income:CD[zip].income,homevalue:CD[zip].homeValue,owner:CD[zip].ownerPct,seniors:CD[zip].pct65,revenue:CD[zip].estRevenue}[metric]||0;
+  return {income:CD[zip].income,homevalue:CD[zip].homeValue,owner:CD[zip].ownerPct,seniors:CD[zip].pct65}[metric]||0;
 }
 function getColor(val,metric){
-  if(metric==='none') return '#1b2a44';
   const sc=SCALES[metric];
   let c=sc.colors[0];
   for(let i=0;i<sc.breaks.length;i++){if(val>=sc.breaks[i])c=sc.colors[i];}
   return c;
 }
 
-let curLayer='none';
-let hoveredZip=null;
-let mapSelectedLeadPhone=null;
-let mapLeadStageFilter='all';
-let mapLeadValueFilter='all';
-let mapShowVenues=false;
-
-function getLeadByPhone(phone){
-  return (WORLDVIEW_LEADS||[]).find(l=>String(l.phone||'')===String(phone||''))||null;
+const PIN_COLORS={red:'#ef4444',yellow:'#f59e0b',green:'#10b981'};
+function clamp(v,min,max){return Math.min(max,Math.max(min,v));}
+function pinColor(stage){return PIN_COLORS[stage]||PIN_COLORS.red;}
+const MAP_VB_DEFAULT={x:0,y:0,w:800,h:520};
+const STREET_DEFAULT_VIEW={lat:33.9925,lng:-118.3535,zoom:12};
+let mapView={...MAP_VB_DEFAULT};
+let mapDrag=null;
+let mapInteractionsBound=false;
+function clampMapView(){
+  const minX=MAP_VB_DEFAULT.x+MAP_VB_DEFAULT.w-mapView.w;
+  const maxX=MAP_VB_DEFAULT.x;
+  const minY=MAP_VB_DEFAULT.y+MAP_VB_DEFAULT.h-mapView.h;
+  const maxY=MAP_VB_DEFAULT.y;
+  mapView.x=clamp(mapView.x,minX,maxX);
+  mapView.y=clamp(mapView.y,minY,maxY);
 }
-function leadStateGroup(state){
-  const u=String(state||'').toUpperCase();
-  if(u==='NEW') return 'new';
-  if(u.includes('MEDIA')||u.includes('HAZMAT')||u.includes('ADDRESS')||u.includes('ACCESS')||u.includes('LOAD')) return 'media';
-  if(u.includes('QUOTE')) return 'quoted';
-  if(u.includes('DEPOSIT')) return 'deposit';
-  if(u.includes('DAY')||u.includes('WINDOW')||u.includes('BOOKING')||u.includes('COMPLETED')) return 'booked';
-  return 'other';
+function applyMapView(){
+  const svg=document.getElementById('map-svg');
+  if(!svg)return;
+  svg.setAttribute('viewBox',`${mapView.x} ${mapView.y} ${mapView.w} ${mapView.h}`);
 }
-function stateDotColor(state){
-  const u=String(state||'').toUpperCase();
-  if(u.includes('DAY')||u.includes('WINDOW')||u.includes('BOOKING')||u.includes('DEPOSIT_PAID')) return '#10b981';
-  if(u.includes('QUOTE')||u.includes('DEPOSIT')) return '#f59e0b';
-  if(u.includes('ESCALATED')) return '#ef4444';
-  if(u.includes('MEDIA')||u.includes('ADDRESS')||u.includes('ACCESS')||u.includes('LOAD')) return '#3b82f6';
-  return '#94a3b8';
+function svgPointFromEvent(evt){
+  const svg=document.getElementById('map-svg');
+  if(!svg)return{x:mapView.x+mapView.w/2,y:mapView.y+mapView.h/2};
+  const rect=svg.getBoundingClientRect();
+  if(!rect.width||!rect.height)return{x:mapView.x+mapView.w/2,y:mapView.y+mapView.h/2};
+  const px=(evt.clientX-rect.left)/rect.width;
+  const py=(evt.clientY-rect.top)/rect.height;
+  return{x:mapView.x+px*mapView.w,y:mapView.y+py*mapView.h};
 }
-function hashPhone(v){
-  const s=String(v||'');
-  let h=0;
-  for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;
-  return h;
+function zoomAt(sx,sy,factor){
+  const nextW=clamp(mapView.w*factor,180,1400);
+  const nextH=nextW*(MAP_VB_DEFAULT.h/MAP_VB_DEFAULT.w);
+  const relX=(sx-mapView.x)/mapView.w;
+  const relY=(sy-mapView.y)/mapView.h;
+  mapView.w=nextW;mapView.h=nextH;
+  mapView.x=sx-relX*mapView.w;
+  mapView.y=sy-relY*mapView.h;
+  clampMapView();
+  applyMapView();
 }
-function zoneCenter(zip){
-  const z=ZONES[String(zip||'')];
-  if(!z)return null;
-  const cx=z.coords.reduce((s,[ln])=>s+ln,0)/z.coords.length;
-  const cy=z.coords.reduce((s,[,la])=>s+la,0)/z.coords.length;
-  return project(cx,cy);
+function mapZoomIn(){
+  if(streetMap){streetMap.zoomIn();return;}
+  zoomAt(mapView.x+mapView.w/2,mapView.y+mapView.h/2,0.82);
 }
-function leadMapPoint(lead){
-  const zip=String(lead?.zip||'').trim();
-  const base=zoneCenter(zip)||zoneCenter('90043')||[400,260];
-  const h=hashPhone(lead?.phone||'x');
-  const ang=((h%360)*Math.PI)/180;
-  const rad=4+((h>>3)%16);
-  return [base[0]+Math.cos(ang)*rad,base[1]+Math.sin(ang)*rad];
+function mapZoomOut(){
+  if(streetMap){streetMap.zoomOut();return;}
+  zoomAt(mapView.x+mapView.w/2,mapView.y+mapView.h/2,1.22);
 }
-function leadQuoteCents(lead){
-  return Number((lead?.hover||{}).quote_total_cents||lead?.quote_total_cents||0)||0;
-}
-function leadResaleHighCents(lead){
-  return Number((((lead?.hover||{}).value||{}).resale_high_cents)||0)||0;
-}
-function leadPaymentStatus(lead){
-  return String(((lead?.hover||{}).payment_status)||'').toUpperCase();
-}
-function leadDotRadius(lead){
-  const q=leadQuoteCents(lead);
-  if(q>=100000) return 8.1;
-  if(q>=70000) return 7.3;
-  if(q>=40000) return 6.5;
-  if(q>=20000) return 5.7;
-  return 4.9;
-}
-function leadRingColor(lead){
-  const p=leadPaymentStatus(lead);
-  if(p.includes('PAID')) return '#10b981';
-  if(p.includes('AWAITING')||p.includes('QUOTE SENT')) return '#f59e0b';
-  if(p.includes('PENDING')) return '#64748b';
-  return '#475569';
-}
-function leadPassesFilters(lead){
-  const stage=leadStateGroup(lead?.state);
-  if(mapLeadStageFilter!=='all'&&stage!==mapLeadStageFilter) return false;
-  if(mapLeadValueFilter==='high_quote'&&leadQuoteCents(lead)<60000) return false;
-  if(mapLeadValueFilter==='resale'&&leadResaleHighCents(lead)<=0) return false;
-  return true;
-}
-function setLeadStageFilter(kind,btn){
-  mapLeadStageFilter=String(kind||'all');
-  document.querySelectorAll('.mc-stage').forEach(b=>b.classList.remove('on'));
-  if(btn)btn.classList.add('on');
-  if(mapBuilt)renderMap(curLayer);
-}
-function setLeadValueFilter(kind,btn){
-  mapLeadValueFilter=String(kind||'all');
-  document.querySelectorAll('.mc-value').forEach(b=>b.classList.remove('on'));
-  if(btn)btn.classList.add('on');
-  if(mapBuilt)renderMap(curLayer);
-}
-function toggleVenues(btn){
-  mapShowVenues=!mapShowVenues;
-  if(btn){
-    if(mapShowVenues)btn.classList.add('on');
-    else btn.classList.remove('on');
+function mapResetView(){
+  if(streetMap){
+    streetMap.setView([STREET_DEFAULT_VIEW.lat,STREET_DEFAULT_VIEW.lng],STREET_DEFAULT_VIEW.zoom,{animate:false});
+    return;
   }
-  const panel=document.getElementById('map-venues-panel');
-  if(panel)panel.style.display=mapShowVenues?'block':'none';
-  if(mapBuilt)renderMap(curLayer);
+  mapView={...MAP_VB_DEFAULT};
+  applyMapView();
 }
-function renderLeadFilterStats(visible,total){
-  const el=document.getElementById('map-lead-filter-stats');
-  if(!el)return;
-  el.textContent=`Clients: ${visible}/${total}`;
+function fitChoroplethToTerritory(){
+  const pts=TERRITORY_EDGE.map(([lng,lat])=>project(lng,lat));
+  const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);
+  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+  const pad=42;
+  const needW=(maxX-minX)+pad*2;
+  const needH=(maxY-minY)+pad*2;
+  const w=clamp(Math.max(needW,needH*(MAP_VB_DEFAULT.w/MAP_VB_DEFAULT.h)),180,MAP_VB_DEFAULT.w);
+  const h=w*(MAP_VB_DEFAULT.h/MAP_VB_DEFAULT.w);
+  const cx=(minX+maxX)/2,cy=(minY+maxY)/2;
+  mapView.w=w;mapView.h=h;mapView.x=cx-w/2;mapView.y=cy-h/2;
+  clampMapView();
+  applyMapView();
 }
-function renderLeadDensityLegend(){
-  const el=document.getElementById('map-lead-legend');
+function fitToTerritory(){
+  ensureStreetMap();
+  if(streetMap)fitStreetToTerritory();
+}
+function bindMapInteractions(){
+  if(mapInteractionsBound)return;
+  const svg=document.getElementById('map-svg');
+  if(!svg)return;
+  mapInteractionsBound=true;
+  svg.addEventListener('wheel',e=>{
+    e.preventDefault();
+    const p=svgPointFromEvent(e);
+    zoomAt(p.x,p.y,e.deltaY<0?0.88:1.14);
+  },{passive:false});
+  svg.addEventListener('dblclick',e=>{
+    const p=svgPointFromEvent(e);
+    zoomAt(p.x,p.y,0.75);
+  });
+  svg.addEventListener('mousedown',e=>{
+    if(e.button!==0)return;
+    mapDrag={x:e.clientX,y:e.clientY,startX:mapView.x,startY:mapView.y};
+    svg.style.cursor='grabbing';
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove',e=>{
+    if(!mapDrag)return;
+    const s=document.getElementById('map-svg');
+    if(!s)return;
+    const rect=s.getBoundingClientRect();
+    if(!rect.width||!rect.height)return;
+    const dx=(e.clientX-mapDrag.x)/rect.width*mapView.w;
+    const dy=(e.clientY-mapDrag.y)/rect.height*mapView.h;
+    mapView.x=mapDrag.startX-dx;
+    mapView.y=mapDrag.startY-dy;
+    clampMapView();
+    applyMapView();
+  });
+  window.addEventListener('mouseup',()=>{
+    if(!mapDrag)return;
+    mapDrag=null;
+    const s=document.getElementById('map-svg');
+    if(s)s.style.cursor='crosshair';
+  });
+}
+function jitterFromPhone(phone){
+  const s=String(phone||'');
+  let h=0;
+  for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))%9973;
+  return {dx:(h%9)-4,dy:(Math.floor(h/9)%9)-4};
+}
+function renderLeadPinsHtml(){
+  const visible=getVisiblePins();
+  MAP_VISIBLE_PINS=visible;
+  if(visible.length===0)return'';
+  let out='';
+  visible.forEach((p,idx)=>{
+    const lng=Number(p.lng),lat=Number(p.lat);
+    if(!Number.isFinite(lng)||!Number.isFinite(lat))return;
+    const [x0,y0]=project(clamp(lng,VB.minLng,VB.maxLng),clamp(lat,VB.minLat,VB.maxLat));
+    const j=jitterFromPhone(p.phone);
+    const x=Math.round(x0+j.dx),y=Math.round(y0+j.dy);
+    const c=pinColor(p.stage);
+    out+=`<g class="lead-pin" data-pin-idx="${idx}" style="cursor:pointer">
+      <circle class="lead-pin-ring" cx="${x}" cy="${y}" r="7.5" stroke="${c}"/>
+      <circle class="lead-pin-dot" cx="${x}" cy="${y}" r="4.7" fill="${c}"/>
+    </g>`;
+  });
+  return out;
+}
+function appendLeadPinsDom(svg){
+  const visible=getVisiblePins();
+  MAP_VISIBLE_PINS=visible;
+  if(visible.length===0)return;
+  visible.forEach((p,idx)=>{
+    const lng=Number(p.lng),lat=Number(p.lat);
+    if(!Number.isFinite(lng)||!Number.isFinite(lat))return;
+    const [x0,y0]=project(clamp(lng,VB.minLng,VB.maxLng),clamp(lat,VB.minLat,VB.maxLat));
+    const j=jitterFromPhone(p.phone);
+    const x=Math.round(x0+j.dx),y=Math.round(y0+j.dy);
+    const c=pinColor(p.stage);
+    const g=svgEl('g',{'class':'lead-pin','data-pin-idx':idx,style:'cursor:pointer'});
+    g.appendChild(svgEl('circle',{cx:x,cy:y,r:'7.5','class':'lead-pin-ring',stroke:c}));
+    g.appendChild(svgEl('circle',{cx:x,cy:y,r:'4.7','class':'lead-pin-dot',fill:c}));
+    svg.appendChild(g);
+  });
+}
+
+let curLayer='income';
+let hoveredZip=null;
+let mapMode='street';
+let streetMap=null;
+let streetLayers={territory:null,zips:null,leads:null,venues:null,dumpsites:null,signals:null};
+let selectedStreetLatLng=null;
+
+function toLatLng(coords){return coords.map(([lng,lat])=>[lat,lng]);}
+function fitStreetToTerritory(){
+  if(!streetMap||typeof L==='undefined')return;
+  const pts=toLatLng(TERRITORY_EDGE).filter(pt=>Number.isFinite(pt[0])&&Number.isFinite(pt[1]));
+  if(pts.length<2)return;
+  const b=L.latLngBounds(pts);
+  if(!b.isValid())return;
+  try{streetMap.invalidateSize(false);}catch(e){}
+  streetMap.fitBounds(b.pad(0.14),{animate:false,maxZoom:14});
+  setTimeout(()=>{
+    try{
+      streetMap.invalidateSize(false);
+      streetMap.fitBounds(b.pad(0.14),{animate:false,maxZoom:14});
+    }catch(e){}
+  },130);
+}
+function ensureStreetMap(){
+  if(typeof L==='undefined')return;
+  const el=document.getElementById('street-map');
   if(!el)return;
-  el.innerHTML=`
-    <div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:7px">Lead Density Encoding</div>
-    <div class="leg-item"><div class="leg-sw" style="background:#3b82f6"></div>Fill color = lead stage</div>
-    <div class="leg-item"><div class="leg-sw" style="background:#0b1020;border:2px solid #10b981"></div>Outer ring = payment status</div>
-    <div class="leg-item"><div class="leg-sw" style="background:#94a3b8"></div>Dot size = quote amount</div>
-  `;
+  if(!streetMap){
+    streetMap=L.map(el,{zoomControl:false,attributionControl:true});
+    L.control.zoom({position:'topright'}).addTo(streetMap);
+    const detailed=L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{
+      maxZoom:20,
+      attribution:'&copy; OpenStreetMap, &copy; CARTO'
+    }).addTo(streetMap);
+    const osm=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+      maxZoom:20,
+      attribution:'&copy; OpenStreetMap'
+    });
+    L.control.layers({'Detailed Streets':detailed,'OpenStreetMap':osm},null,{position:'bottomright',collapsed:true}).addTo(streetMap);
+    fitStreetToTerritory();
+  }
+  renderStreetTerritory();
+  renderStreetZips();
+  renderStreetLeads();
+  renderStreetVenues();
+  renderStreetDumpSites();
+  renderStreetSignals();
+  renderVenueList();
+  renderDumpSiteList();
+  renderLegend(curLayer);
+  setTimeout(()=>{try{streetMap.invalidateSize();fitStreetToTerritory();}catch(e){}},70);
+}
+function renderStreetTerritory(){
+  if(!streetMap||typeof L==='undefined')return;
+  if(streetLayers.territory){streetMap.removeLayer(streetLayers.territory);}
+  if(!showTerritoryEdge){streetLayers.territory=null;return;}
+  const grp=L.layerGroup();
+  const path=toLatLng(TERRITORY_EDGE);
+  L.polygon(path,{color:'#93c5fd',weight:4,fillColor:'#38bdf8',fillOpacity:.08,opacity:.95}).addTo(grp);
+  L.polyline(path,{color:'#fff',weight:2,dashArray:'8 6',opacity:.95}).addTo(grp);
+  path.slice(0,-1).forEach((pt,idx)=>{
+    L.circleMarker(pt,{radius:4,color:'#1d4ed8',weight:1.2,fillColor:'#dbeafe',fillOpacity:.95}).addTo(grp);
+    if(idx%2===0)L.marker(pt,{interactive:false,icon:L.divIcon({className:'',html:`<div style="font:700 10px DM Mono,monospace;color:#dbeafe;text-shadow:0 1px 2px #000">${idx+1}</div>`})}).addTo(grp);
+  });
+  grp.addTo(streetMap);
+  streetLayers.territory=grp;
+}
+function renderStreetZips(){
+  if(!streetMap||typeof L==='undefined')return;
+  if(streetLayers.zips){streetMap.removeLayer(streetLayers.zips);}
+  if(!showNeighborhoods){streetLayers.zips=null;return;}
+  const grp=L.layerGroup();
+  Object.entries(ZONES).forEach(([zip,zone])=>{
+    const val=getZipVal(zip,curLayer);
+    const col=getColor(val,curLayer);
+    const poly=L.polygon(toLatLng(zone.coords),{
+      color:'#2563eb',
+      weight:1.5,
+      fillColor:col,
+      fillOpacity:.22
+    });
+    poly.bindTooltip(`${zip} · ${zone.name}<br>${SCALES[curLayer].label}: ${SCALES[curLayer].fmt(val)}`,{sticky:true,direction:'top'});
+    poly.addTo(grp);
+  });
+  grp.addTo(streetMap);
+  streetLayers.zips=grp;
+}
+function renderStreetLeads(){
+  if(!streetMap||typeof L==='undefined')return;
+  if(streetLayers.leads){streetMap.removeLayer(streetLayers.leads);}
+  const visible=getVisiblePins();
+  MAP_VISIBLE_PINS=visible;
+  const grp=(typeof L.markerClusterGroup==='function')
+    ? L.markerClusterGroup({showCoverageOnHover:false,spiderfyOnMaxZoom:true,maxClusterRadius:42})
+    : L.layerGroup();
+  visible.forEach(lead=>{
+    const lat=Number(lead.lat),lng=Number(lead.lng);
+    if(!Number.isFinite(lat)||!Number.isFinite(lng))return;
+    const c=pinColor(lead.stage);
+    const marker=L.marker([lat,lng],{
+      icon:L.divIcon({
+        className:'',
+        html:`<div class="lead-dot" style="background:${c}"></div>`,
+        iconSize:[14,14],
+        iconAnchor:[7,7]
+      })
+    });
+    marker.bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px;line-height:1.45">
+      <div style="font-weight:700;color:${c};margin-bottom:4px">${lead.stage_label||'Lead'}</div>
+      <div>${fPhone(lead.phone)}</div>
+      <div style="opacity:.8">${lead.address||'No address'}</div>
+      <div style="opacity:.75">${stateLabel(lead.conv_state||lead.quote_status||'NEW')}</div>
+    </div>`);
+    marker.on('click',()=>{selectedStreetLatLng={lat,lng};});
+    marker.addTo(grp);
+  });
+  grp.addTo(streetMap);
+  streetLayers.leads=grp;
+}
+function renderStreetVenues(){
+  if(!streetMap||typeof L==='undefined')return;
+  if(streetLayers.venues){streetMap.removeLayer(streetLayers.venues);}
+  const vis=getVisibleVenues();
+  if(!vis.length){streetLayers.venues=null;return;}
+  const grp=L.layerGroup();
+  vis.forEach(v=>{
+    const lat=Number(v.lat),lng=Number(v.lng);
+    if(!Number.isFinite(lat)||!Number.isFinite(lng))return;
+    const c=v.group==='whales'?'#f59e0b':'#3b82f6';
+    const mk=L.circleMarker([lat,lng],{
+      radius:v.group==='whales'?6:4.8,
+      color:c,weight:1.2,fillColor:c,fillOpacity:.85
+    });
+    mk.bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px;line-height:1.5"><strong>${v.name}</strong><br>${v.note||''}<br><span style="opacity:.7">${v.group==='whales'?'Whale venue':'ICL partner signal'}</span></div>`);
+    mk.addTo(grp);
+  });
+  grp.addTo(streetMap);
+  streetLayers.venues=grp;
+}
+function renderStreetDumpSites(){
+  if(!streetMap||typeof L==='undefined')return;
+  if(streetLayers.dumpsites){streetMap.removeLayer(streetLayers.dumpsites);}
+  const vis=getVisibleDumpSites();
+  if(!vis.length){streetLayers.dumpsites=null;return;}
+  const grp=L.layerGroup();
+  vis.forEach(site=>{
+    const lat=Number(site.lat),lng=Number(site.lng);
+    if(!Number.isFinite(lat)||!Number.isFinite(lng))return;
+    const av=dumpSiteAvailability(site);
+    const color=dumpSiteColor(site,av);
+    const marker=L.circleMarker([lat,lng],{
+      radius:site.kind==='landfill'?6.3:5.2,
+      color,
+      weight:1.3,
+      fillColor:color,
+      fillOpacity:av.state==='open'?0.9:0.55
+    });
+    marker.bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px;line-height:1.5">
+      <strong>${site.name}</strong><br>
+      <span style="color:${color}">${av.label}</span><br>
+      ${site.kind==='landfill'?'Landfill':'Transfer'} · ${site.tier}<br>
+      ${site.accepts||''}<br>
+      ${site.hours_text||''}<br>
+      ${site.address||''}<br>
+      ${site.phone||''}<br>
+      <span style="opacity:.75">${site.notes||''}</span>
+    </div>`);
+    marker.addTo(grp);
+  });
+  grp.addTo(streetMap);
+  streetLayers.dumpsites=grp;
+}
+function renderStreetSignals(){
+  if(!streetMap||typeof L==='undefined')return;
+  if(streetLayers.signals){streetMap.removeLayer(streetLayers.signals);}
+  if(!showSignals){streetLayers.signals=null;return;}
+  const grp=L.layerGroup();
+  (signalData.permits||[]).forEach(p=>{
+    if(!Number.isFinite(Number(p.lat))||!Number.isFinite(Number(p.lng)))return;
+    L.circleMarker([Number(p.lat),Number(p.lng)],{radius:3.8,color:'#8b5cf6',weight:1,fillColor:'#8b5cf6',fillOpacity:.8})
+      .bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px"><strong>${p.title||'Permit'}</strong><br>${p.subtitle||''}</div>`)
+      .addTo(grp);
+  });
+  (signalData.housing||[]).forEach(p=>{
+    if(!Number.isFinite(Number(p.lat))||!Number.isFinite(Number(p.lng)))return;
+    L.circleMarker([Number(p.lat),Number(p.lng)],{radius:4.3,color:'#10b981',weight:1,fillColor:'#10b981',fillOpacity:.8})
+      .bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px"><strong>${p.title||'Housing'}</strong><br>${p.subtitle||''}</div>`)
+      .addTo(grp);
+  });
+  (signalData.transit||[]).forEach(t=>{
+    const path=(t.path||[]).map(pt=>[Number(pt.lat),Number(pt.lng)]).filter(pt=>Number.isFinite(pt[0])&&Number.isFinite(pt[1]));
+    if(path.length<2)return;
+    L.polyline(path,{color:'#ef4444',weight:2,opacity:.7,dashArray:'6 5'})
+      .bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px"><strong>${t.title||'Transit project'}</strong><br>${t.subtitle||''}</div>`)
+      .addTo(grp);
+  });
+  (signalData.corridors||[]).forEach(c=>{
+    const path=(c.path||[]).map(pt=>[Number(pt.lat),Number(pt.lng)]).filter(pt=>Number.isFinite(pt[0])&&Number.isFinite(pt[1]));
+    if(path.length<2)return;
+    L.polyline(path,{color:'#f59e0b',weight:2,opacity:.7})
+      .bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px"><strong>${c.title||'City corridor'}</strong><br>${c.subtitle||''}</div>`)
+      .addTo(grp);
+  });
+  grp.addTo(streetMap);
+  streetLayers.signals=grp;
+}
+async function fetchMapSignals(){
+  try{
+    const r=await fetch('/api/dashboard/opportunities',{headers:{'Accept':'application/json'}});
+    if(!r.ok)throw new Error(r.status);
+    const raw=await r.json();
+    signalData={
+      permits:Array.isArray(raw.permits)?raw.permits:[],
+      housing:Array.isArray(raw.housing)?raw.housing:[],
+      corridors:Array.isArray(raw.corridors)?raw.corridors:[],
+      transit:Array.isArray(raw.transit)?raw.transit:[],
+      meta:raw.meta||{}
+    };
+  }catch(e){
+    signalData={permits:[],housing:[],corridors:[],transit:[],meta:{}};
+  }
+  renderStreetSignals();
+  renderMapSourceTable({pins:getVisiblePins().length});
+}
+async function fetchDumpSites(){
+  try{
+    const r=await fetch('/api/dashboard/dumpsites?filter=all',{headers:{'Accept':'application/json'}});
+    if(!r.ok)throw new Error(r.status);
+    const raw=await r.json();
+    const sites=Array.isArray(raw?.sites)?raw.sites:[];
+    if(!sites.length)throw new Error('no_sites');
+    DUMP_SITES=sites;
+    dumpSitesMeta={
+      source:'api',
+      generated_at:raw?.meta?.generated_at||new Date().toISOString(),
+      override_count:Number(raw?.meta?.override_count||0)
+    };
+  }catch(e){
+    DUMP_SITES=[...DUMP_SITES_FALLBACK];
+    dumpSitesMeta={source:'fallback',generated_at:null,override_count:0};
+  }
+  if(streetMap)renderStreetDumpSites();
+  renderDumpSiteList();
+  renderMapSourceTable({pins:getVisiblePins().length});
+}
+function openStreetView(){
+  let lat=null,lng=null;
+  if(selectedStreetLatLng){lat=selectedStreetLatLng.lat;lng=selectedStreetLatLng.lng;}
+  else if(MAP_LEAD_PINS&&MAP_LEAD_PINS[0]){lat=Number(MAP_LEAD_PINS[0].lat);lng=Number(MAP_LEAD_PINS[0].lng);}
+  else if(streetMap){const c=streetMap.getCenter();lat=c.lat;lng=c.lng;}
+  if(!Number.isFinite(lat)||!Number.isFinite(lng))return;
+  const u=`https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lng}`;
+  window.open(u,'_blank','noopener');
+}
+function syncMapFullscreenUi(){
+  const card=document.getElementById('map-card');
+  const on=!!(card&&document.fullscreenElement===card);
+  if(card)card.classList.toggle('map-fullscreen',on);
+  document.querySelectorAll('.map-fullscreen-toggle').forEach((btn,idx)=>{
+    btn.textContent=on?'Exit Fullscreen':(idx===0?'⛶ Fullscreen':'Fullscreen');
+    btn.classList.toggle('on',on);
+  });
+  setTimeout(()=>{try{if(streetMap){streetMap.invalidateSize(false);fitStreetToTerritory();}}catch(e){}},80);
+}
+async function toggleMapFullscreen(){
+  const card=document.getElementById('map-card');
+  if(!card||!card.requestFullscreen)return;
+  try{
+    if(document.fullscreenElement===card)await document.exitFullscreen();
+    else await card.requestFullscreen();
+  }catch(e){}
 }
 
 function buildMap(){
   mapBuilt=true;
   renderMap(curLayer);
-  renderMapLeadPanel();
+}
+
+function svgEl(tag,attrs){
+  const el=document.createElementNS('http://www.w3.org/2000/svg',tag);
+  Object.entries(attrs||{}).forEach(([k,v])=>el.setAttribute(k,String(v)));
+  return el;
+}
+
+function renderMapDomFallback(metric){
+  const svg=document.getElementById('map-svg');
+  if(!svg)return;
+  while(svg.firstChild)svg.removeChild(svg.firstChild);
+  svg.appendChild(svgEl('rect',{width:800,height:520,fill:'#0d1422'}));
+  for(let i=1;i<5;i++){
+    const y=i*520/5;
+    svg.appendChild(svgEl('line',{x1:0,y1:y,x2:800,y2:y,stroke:'#1a2840','stroke-width':'.5'}));
+  }
+  for(let i=1;i<8;i++){
+    const x=i*800/8;
+    svg.appendChild(svgEl('line',{x1:x,y1:0,x2:x,y2:520,stroke:'#1a2840','stroke-width':'.5'}));
+  }
+  BASEMAP_AREAS.forEach(a=>{
+    svg.appendChild(svgEl('polygon',{points:pts(a.coords),fill:a.fill,stroke:'rgba(77,121,178,.30)','stroke-width':'1'}));
+  });
+  BASEMAP_ROADS.forEach(r=>{
+    svg.appendChild(svgEl('polyline',{
+      points:linePts(r.coords),fill:'none',
+      stroke:r.major?'rgba(91,153,255,.50)':'rgba(77,121,178,.38)',
+      'stroke-width':r.major?'2.4':'1.4','stroke-linecap':'round','stroke-linejoin':'round'
+    }));
+  });
+  BASEMAP_LABELS.forEach(l=>{
+    const [x,y]=project(l.lng,l.lat);
+    svg.appendChild(svgEl('text',{
+      x,y,fill:'rgba(131,162,209,.55)','font-size':'8.2','font-family':'DM Mono,monospace','text-anchor':'middle'
+    })).textContent=l.name;
+  });
+  if(showTerritoryEdge){
+    const p=linePts(TERRITORY_EDGE);
+    svg.appendChild(svgEl('polygon',{points:p,fill:'rgba(59,130,246,.05)',stroke:'none'}));
+    svg.appendChild(svgEl('polyline',{
+      points:p,fill:'none',stroke:'rgba(147,197,253,.95)','stroke-width':'2.4','stroke-linecap':'round','stroke-linejoin':'round'
+    }));
+    svg.appendChild(svgEl('polyline',{
+      points:p,fill:'none',stroke:'rgba(30,64,175,.9)','stroke-width':'1.1','stroke-dasharray':'5 4','stroke-linecap':'round'
+    }));
+    TERRITORY_EDGE.slice(0,-1).forEach(([lng,lat],i)=>{
+      const [x,y]=project(lng,lat);
+      svg.appendChild(svgEl('circle',{cx:x,cy:y,r:'3.2',fill:'rgba(191,219,254,.95)',stroke:'rgba(30,64,175,.9)','stroke-width':'1'}));
+      if(i%2===0)svg.appendChild(svgEl('text',{x:x+6,y:y-6,fill:'rgba(191,219,254,.75)','font-size':'7.5','font-family':'DM Mono,monospace'})).textContent=String(i+1);
+    });
+  }
+  if(showNeighborhoods){
+    Object.entries(ZONES).forEach(([zip,zone])=>{
+      const val=getZipVal(zip,metric);
+      const col=getColor(val,metric);
+      const poly=svgEl('polygon',{
+        'data-zip':zip,
+        points:pts(zone.coords),
+        fill:col,
+        'fill-opacity':'0.9',
+        stroke:'#93c5fd',
+        'stroke-width':'2.2',
+        style:'cursor:pointer'
+      });
+      svg.appendChild(poly);
+      const cx=zone.coords.reduce((s,[ln])=>s+ln,0)/zone.coords.length;
+      const cy=zone.coords.reduce((s,[,la])=>s+la,0)/zone.coords.length;
+      const [px,py]=project(cx,cy);
+      svg.appendChild(svgEl('text',{
+        x:px,y:py,'text-anchor':'middle',
+        fill:'rgba(255,255,255,0.95)',
+        'font-size':'11',
+        'font-family':'DM Mono,monospace',
+        'font-weight':'700'
+      })).textContent=zip;
+    });
+  }
+  appendLeadPinsDom(svg);
+  VENUES.forEach(([lng,lat])=>{
+    const [vx,vy]=project(lng,lat);
+    svg.appendChild(svgEl('circle',{cx:vx,cy:vy,r:'6.6',fill:'#f59e0b','fill-opacity':'.9',stroke:'#fcd34d','stroke-width':'1.4'}));
+  });
+  applyMapView();
+  bindMapInteractions();
 }
 
 function renderMap(metric){
@@ -1012,93 +2060,71 @@ function renderMap(metric){
   const svg=document.getElementById('map-svg');
 
   // Background
-  let html=`<rect id="map-bg" width="800" height="520" fill="#0d1422"/>`;
+  let html=`<rect width="800" height="520" fill="#0d1422"/>`;
 
   // Grid lines
   for(let i=1;i<5;i++){
     const y=i*520/5;
-    html+=`<line x1="0" y1="${y}" x2="800" y2="${y}" stroke="#1a2840" stroke-width=".5"/>`;
+    html+=`<line x1="0" y1="${y}" x2="800" y2="${y}" stroke="#24375a" stroke-width=".6"/>`;
   }
   for(let i=1;i<8;i++){
     const x=i*800/8;
-    html+=`<line x1="${x}" y1="0" x2="${x}" y2="520" stroke="#1a2840" stroke-width=".5"/>`;
+    html+=`<line x1="${x}" y1="0" x2="${x}" y2="520" stroke="#24375a" stroke-width=".6"/>`;
   }
+  html+=basemapHtml();
+  html+=territoryEdgeHtml();
 
   // Zone polygons
-  Object.entries(ZONES).forEach(([zip,zone])=>{
-    const val=getZipVal(zip,metric);
-    const col=getColor(val,metric); // always returns a valid color (breaks[0] color as default)
-    const isHov=hoveredZip===zip;
-    const noMetric = metric === 'none';
-    const polygon=`<polygon
-      data-zip="${zip}"
-      points="${pts(zone.coords)}"
-      fill="${col}"
-      fill-opacity="${noMetric?(isHov?0.26:0.12):(isHov?0.95:0.78)}"
-      stroke="${isHov?'#fff':'#3b82f6'}"
-      stroke-width="${isHov?2.5:1.5}"
-      style="cursor:pointer;transition:fill-opacity .15s"
-    />`;
-    html+=polygon;
-
-    // Zip label
-    const cx=zone.coords.reduce((s,[ln])=>s+ln,0)/zone.coords.length;
-    const cy=zone.coords.reduce((s,[,la])=>s+la,0)/zone.coords.length;
-    const [px,py]=project(cx,cy);
-    html+=`<text x="${px}" y="${py-8}" text-anchor="middle" fill="rgba(255,255,255,0.9)" font-size="11" font-family="DM Mono,monospace" font-weight="500">${zip}</text>`;
-    html+=`<text x="${px}" y="${py+8}" text-anchor="middle" fill="rgba(255,255,255,0.55)" font-size="8.5" font-family="DM Mono,monospace">${zone.name}</text>`;
-    if(!noMetric&&CD&&CD[zip]){
+  if(showNeighborhoods){
+    Object.entries(ZONES).forEach(([zip,zone])=>{
       const val=getZipVal(zip,metric);
-      html+=`<text x="${px}" y="${py+22}" text-anchor="middle" fill="rgba(255,255,255,0.85)" font-size="9" font-family="DM Mono,monospace" font-weight="500">${SCALES[metric].fmt(val)}</text>`;
-    }
-  });
+      const col=getColor(val,metric); // always returns a valid color (breaks[0] color as default)
+      const isHov=hoveredZip===zip;
+      const polygon=`<polygon
+        data-zip="${zip}"
+        points="${pts(zone.coords)}"
+        fill="${col}"
+        fill-opacity="${isHov?0.95:0.78}"
+        stroke="${isHov?'#fff':'#3b82f6'}"
+        stroke-width="${isHov?2.5:1.5}"
+        style="cursor:pointer;transition:fill-opacity .15s"
+      />`;
+      html+=polygon;
 
-  // Venue markers
-  if(mapShowVenues){
-    VENUES.forEach(([lng,lat,emoji,note])=>{
-      const [vx,vy]=project(lng,lat);
-      html+=`<circle cx="${vx}" cy="${vy}" r="7" fill="#f59e0b" fill-opacity=".9" stroke="#fcd34d" stroke-width="1.5"/>`;
-      html+=`<text x="${vx}" y="${vy+4}" text-anchor="middle" font-size="8">${emoji}</text>`;
-      html+=`<text x="${vx+11}" y="${vy+4}" fill="#f59e0b" font-size="8" font-family="DM Mono,monospace">${note}</text>`;
+      // Zip label
+      const cx=zone.coords.reduce((s,[ln])=>s+ln,0)/zone.coords.length;
+      const cy=zone.coords.reduce((s,[,la])=>s+la,0)/zone.coords.length;
+      const [px,py]=project(cx,cy);
+      html+=`<text x="${px}" y="${py-8}" text-anchor="middle" fill="rgba(255,255,255,0.9)" font-size="11" font-family="DM Mono,monospace" font-weight="500">${zip}</text>`;
+      html+=`<text x="${px}" y="${py+8}" text-anchor="middle" fill="rgba(255,255,255,0.55)" font-size="8.5" font-family="DM Mono,monospace">${zone.name}</text>`;
+      if(CD&&CD[zip]){
+        const val=getZipVal(zip,metric);
+        html+=`<text x="${px}" y="${py+22}" text-anchor="middle" fill="rgba(255,255,255,0.85)" font-size="9" font-family="DM Mono,monospace" font-weight="500">${SCALES[metric].fmt(val)}</text>`;
+      }
     });
   }
+  html+=renderLeadPinsHtml();
 
-  const allLeads=(WORLDVIEW_LEADS||[]);
-  const visibleLeads=allLeads.filter(leadPassesFilters).slice(0,220);
-  if(mapSelectedLeadPhone){
-    const selectedVisible=visibleLeads.some(l=>String(l.phone||'')===String(mapSelectedLeadPhone));
-    if(!selectedVisible)mapSelectedLeadPhone=null;
-  }
-
-  // Lead markers (click/hover for client intelligence)
-  visibleLeads.forEach((lead)=>{
-    if(!lead||!lead.phone)return;
-    const [lx,ly]=leadMapPoint(lead);
-    const fill=stateDotColor(lead?.state);
-    const ring=leadRingColor(lead);
-    const baseR=leadDotRadius(lead);
-    const selected=String(mapSelectedLeadPhone||'')===String(lead.phone||'');
-    const coreR = selected ? baseR + 0.9 : baseR;
-    const ringR = coreR + 1.45;
-    html+=`<g
-      data-lead-phone="${esc(lead.phone)}"
-      data-base-r="${baseR}"
-      data-selected="${selected?'1':'0'}"
-      style="cursor:pointer"
-    >
-      <circle data-role="ring" cx="${Math.round(lx*10)/10}" cy="${Math.round(ly*10)/10}" r="${Math.round(ringR*10)/10}" fill="none" stroke="${ring}" stroke-opacity="0.95" stroke-width="${selected?'1.9':'1.35'}"/>
-      <circle data-role="core" cx="${Math.round(lx*10)/10}" cy="${Math.round(ly*10)/10}" r="${Math.round(coreR*10)/10}" fill="${fill}" fill-opacity="0.94" stroke="${selected?'#ffffff':'#0b1020'}" stroke-width="${selected?'1.9':'1.1'}"/>
-    </g>`;
+  // Venue markers
+  VENUES.forEach(([lng,lat,emoji,note])=>{
+    const [vx,vy]=project(lng,lat);
+    html+=`<circle cx="${vx}" cy="${vy}" r="7" fill="#f59e0b" fill-opacity=".9" stroke="#fcd34d" stroke-width="1.5"/>`;
+    html+=`<text x="${vx}" y="${vy+4}" text-anchor="middle" font-size="8">${emoji}</text>`;
+    html+=`<text x="${vx+11}" y="${vy+4}" fill="#f59e0b" font-size="8" font-family="DM Mono,monospace">${note}</text>`;
   });
 
   svg.innerHTML=html;
+  // Browser-safe fallback: some engines can be flaky with SVG innerHTML.
+  if(!svg.querySelector('polygon[data-zip]')){
+    renderMapDomFallback(metric);
+  }
 
   // Hover events on polygons
   svg.querySelectorAll('polygon[data-zip]').forEach(poly=>{
     poly.addEventListener('mouseenter',e=>{
       hoveredZip=poly.dataset.zip;
       showTooltip(e,poly.dataset.zip);
-      poly.setAttribute('fill-opacity',metric==='none'?'0.26':'0.95');
+      poly.setAttribute('fill-opacity','0.95');
       poly.setAttribute('stroke','#fff');
       poly.setAttribute('stroke-width','2.5');
     });
@@ -1106,93 +2132,49 @@ function renderMap(metric){
     poly.addEventListener('mouseleave',()=>{
       hoveredZip=null;
       hideTooltip();
-      poly.setAttribute('fill-opacity',metric==='none'?'0.12':'0.78');
+      poly.setAttribute('fill-opacity','0.78');
       poly.setAttribute('stroke','#3b82f6');
       poly.setAttribute('stroke-width','1.5');
     });
   });
-
-  // Hover/click events on lead markers
-  svg.querySelectorAll('g[data-lead-phone]').forEach(marker=>{
-    const phone=marker.dataset.leadPhone;
-    const core=marker.querySelector('circle[data-role="core"]');
-    const ring=marker.querySelector('circle[data-role="ring"]');
-    const base=Number(marker.dataset.baseR||4.9);
-    const selected=marker.dataset.selected==='1';
-    marker.addEventListener('mouseenter',e=>{
-      showLeadMapHoverTooltip(e,phone);
-      if(!selected&&core&&ring){
-        core.setAttribute('r',String(Math.round((base+0.8)*10)/10));
-        core.setAttribute('stroke','#ffffff');
-        core.setAttribute('stroke-width','1.5');
-        ring.setAttribute('r',String(Math.round((base+2.2)*10)/10));
-      }
+  svg.querySelectorAll('g.lead-pin').forEach(pin=>{
+    pin.addEventListener('mouseenter',e=>{
+      const idx=Number(pin.dataset.pinIdx);
+      const lead=MAP_VISIBLE_PINS[idx];
+      if(lead)showLeadTooltip(e,lead);
+      pin.querySelector('.lead-pin-ring')?.setAttribute('opacity','1');
     });
-    marker.addEventListener('mousemove',e=>moveTooltip(e));
-    marker.addEventListener('mouseleave',()=>{
-      if(!selected&&core&&ring){
-        core.setAttribute('r',String(Math.round(base*10)/10));
-        core.setAttribute('stroke','#0b1020');
-        core.setAttribute('stroke-width','1.1');
-        ring.setAttribute('r',String(Math.round((base+1.45)*10)/10));
-      }
+    pin.addEventListener('mousemove',e=>moveTooltip(e));
+    pin.addEventListener('mouseleave',()=>{
       hideTooltip();
-    });
-    marker.addEventListener('click',e=>{
-      e.preventDefault();
-      e.stopPropagation();
-      mapSelectedLeadPhone = mapSelectedLeadPhone===phone ? null : phone;
-      renderMapLeadPanel();
-      renderMap(curLayer);
-      hideTooltip();
+      pin.querySelector('.lead-pin-ring')?.setAttribute('opacity','.65');
     });
   });
 
-  // Click map background to clear selected lead
-  svg.onclick=(e)=>{
-    const phone=e?.target?.dataset?.leadPhone||e?.target?.parentNode?.dataset?.leadPhone;
-    if(phone)return;
-    mapSelectedLeadPhone=null;
-    renderMapLeadPanel();
-    renderMap(curLayer);
-    hideTooltip();
-  };
-
   renderLegend(metric);
-  renderMapLeadPanel();
-  renderLeadFilterStats(visibleLeads.length,allLeads.length);
-  renderLeadDensityLegend();
+  applyMapView();
+  bindMapInteractions();
 }
 
 function showTooltip(e,zip){
   const tt=document.getElementById('map-tt');
   const d=CD&&CD[zip]?CD[zip]:{name:zip};
-  if(curLayer==='none'){
-    tt.innerHTML=`<h4>${zip} · ${d.name||''}</h4>
-      <div><span class="th">Mode</span> <span class="tv">Territory + Leads only</span></div>
-      <div><span class="th">Households</span> <span class="tv">${d.households?Number(d.households).toLocaleString():'—'}</span></div>
-      <div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--bd)">
-        <span class="th">Tip</span> <span class="tg">Use “Color by” to opt into demographics.</span>
-      </div>`;
-  } else {
-    tt.innerHTML=`<h4>${zip} · ${d.name||''}</h4>
-      <div><span class="th">Median Income</span> <span class="tv">${f$(d.income)}</span></div>
-      <div><span class="th">Home Value</span> <span class="tv">${f$(d.homeValue)}</span></div>
-      <div><span class="th">Owner-Occ.</span> <span class="tv">${fPct(d.ownerPct)}</span></div>
-      <div><span class="th">65+ Pop.</span> <span class="tv">${fPct(d.pct65)}</span></div>
-      <div><span class="th">Households</span> <span class="tv">${d.households?Number(d.households).toLocaleString():'—'}</span></div>
-      <div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--bd)">
-        <span class="th">Est. ICL Rev / yr</span> <span class="tg">${f$(d.estRevenue)}</span>
-      </div>`;
-  }
+  tt.innerHTML=`<h4>${zip} · ${d.name||''}</h4>
+    <div><span class="th">Median Income</span> <span class="tv">${f$(d.income)}</span></div>
+    <div><span class="th">Home Value</span> <span class="tv">${f$(d.homeValue)}</span></div>
+    <div><span class="th">Owner-Occ.</span> <span class="tv">${fPct(d.ownerPct)}</span></div>
+    <div><span class="th">65+ Pop.</span> <span class="tv">${fPct(d.pct65)}</span></div>
+    <div><span class="th">Households</span> <span class="tv">${d.households?Number(d.households).toLocaleString():'—'}</span></div>`;
   tt.style.display='block';
   moveTooltip(e);
 }
-function showLeadMapHoverTooltip(e,phone){
-  const lead=getLeadByPhone(phone);
-  if(!lead)return;
+function showLeadTooltip(e,lead){
   const tt=document.getElementById('map-tt');
-  tt.innerHTML=leadMapTooltipHtml(lead); // hover = quick summary
+  const color=pinColor(lead.stage);
+  tt.innerHTML=`<h4>${fPhone(lead.phone)} · <span style="color:${color}">${lead.stage_label||'Lead'}</span></h4>
+    <div><span class="th">Address</span> <span class="tv">${lead.address||'—'}</span></div>
+    <div><span class="th">State</span> <span class="tv">${stateLabel(lead.conv_state||lead.quote_status||'NEW')}</span></div>
+    <div><span class="th">Status</span> <span class="tv">${lead.quote_status||'—'}</span></div>`;
   tt.style.display='block';
   moveTooltip(e);
 }
@@ -1201,10 +2183,8 @@ function moveTooltip(e){
   const rect=wrap.getBoundingClientRect();
   const tt=document.getElementById('map-tt');
   let x=e.clientX-rect.left+12, y=e.clientY-rect.top+12;
-  const tw=tt.offsetWidth||220;
-  const th=tt.offsetHeight||220;
-  if(x+tw+12>rect.width)x=rect.width-tw-12;
-  if(y+th+12>rect.height)y=rect.height-th-12;
+  if(x+220>rect.width)x-=240;
+  if(y+220>rect.height)y-=230;
   tt.style.left=x+'px';tt.style.top=y+'px';
 }
 function hideTooltip(){document.getElementById('map-tt').style.display='none';}
@@ -1214,30 +2194,122 @@ function updateMap(metric){
   if(mapBuilt)renderMap(metric);
 }
 function setLayer(metric,btn){
-  document.querySelectorAll('.mc-metric').forEach(b=>b.classList.remove('on'));
+  document.querySelectorAll('.mc-layer').forEach(b=>b.classList.remove('on'));
   btn.classList.add('on');
   curLayer=metric;
-  if(mapBuilt)renderMap(metric);
+  if(streetMap)renderStreetZips();
+  renderLegend(metric);
+}
+function setLeadFilter(filter,btn){
+  leadFilter=filter;
+  document.querySelectorAll('.mc-lead-filter').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  updateLeadFilterCount();
+  if(streetMap)renderStreetLeads();
+  renderLeadPanels(CURRENT_LEADS);
+  renderMapSourceTable({pins:getVisiblePins().length});
+  renderLegend(curLayer);
+}
+function setLeadFlowFilter(filter,btn){
+  leadFlowFilter=filter;
+  document.querySelectorAll('.mc-flow-filter').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  updateLeadFilterCount();
+  if(streetMap)renderStreetLeads();
+  renderLeadPanels(CURRENT_LEADS);
+  renderMapSourceTable({pins:getVisiblePins().length});
+  renderLegend(curLayer);
+}
+function toggleNeighborhoods(btn){
+  showNeighborhoods=!showNeighborhoods;
+  btn.classList.toggle('on',showNeighborhoods);
+  if(streetMap)renderStreetZips();
+}
+function toggleTerritoryEdge(btn){
+  showTerritoryEdge=!showTerritoryEdge;
+  btn.classList.toggle('on',showTerritoryEdge);
+  if(streetMap)renderStreetTerritory();
+}
+function toggleMapLegend(btn){
+  showMapLegend=!showMapLegend;
+  btn.classList.toggle('on',showMapLegend);
+  renderLegend(curLayer);
+}
+function toggleVenues(btn){
+  showVenues=!showVenues;
+  btn.classList.toggle('on',showVenues);
+  if(streetMap)renderStreetVenues();
+  renderVenueList();
+}
+function setVenueFilter(filter,btn){
+  venueFilter=filter;
+  document.querySelectorAll('.mc-venue-filter').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  if(streetMap)renderStreetVenues();
+  renderVenueList();
+}
+function toggleDumpSites(btn){
+  showDumpSites=!showDumpSites;
+  btn.classList.toggle('on',showDumpSites);
+  if(streetMap)renderStreetDumpSites();
+  renderDumpSiteList();
+  renderMapSourceTable({pins:getVisiblePins().length});
+}
+function setDumpSiteFilter(filter,btn){
+  dumpSiteFilter=filter;
+  document.querySelectorAll('.mc-dump-filter').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  if(streetMap)renderStreetDumpSites();
+  renderDumpSiteList();
+  renderMapSourceTable({pins:getVisiblePins().length});
+}
+function toggleSignals(btn){
+  showSignals=!showSignals;
+  btn.classList.toggle('on',showSignals);
+  if(streetMap)renderStreetSignals();
+}
+
+function ensureMapRendered(){
+  try{
+    const svg=document.getElementById('map-svg');
+    if(!svg)return;
+    if(svg.getBoundingClientRect().height===0)svg.style.height='520px';
+    if(svg.querySelector('polygon[data-zip]'))return;
+    buildMap();
+    if(!svg.querySelector('polygon[data-zip]'))renderMapDomFallback(curLayer);
+  }catch(e){
+    console.error('[dashboard] ensureMapRendered failed',e);
+  }
 }
 
 function renderLegend(metric){
-  const root=document.getElementById('map-legend');
-  if(!root)return;
-  if(metric==='none'){
-    root.innerHTML=`
-      <div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:7px">Territory View</div>
-      <div class="leg-item"><div class="leg-sw" style="background:#1b2a44;border:1px solid #3b82f6"></div>Territory boundaries only</div>
-      <div class="leg-item"><div class="leg-sw" style="background:#0d1422;border:1px solid #1e2d47"></div>Demographic shading off (opt-in)</div>
-    `;
-    return;
-  }
   const sc=SCALES[metric];
-  root.innerHTML=
-    `<div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:7px">${sc.label}</div>`+
+  const legendEl=document.getElementById('map-legend');
+  if(!legendEl)return;
+  legendEl.style.display=showMapLegend?'flex':'none';
+  if(!showMapLegend)return;
+  const pinCounts=(MAP_LEAD_PINS||[]).reduce((a,p)=>{const k=p.stage||'red';a[k]=(a[k]||0)+1;return a;},{red:0,yellow:0,green:0});
+  legendEl.innerHTML=
+    `<div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:7px">Legend · ${sc.label}</div>`+
     [...sc.colors].reverse().map((c,i)=>{
       const idx=sc.colors.length-1-i;
       return`<div class="leg-item"><div class="leg-sw" style="background:${c}"></div>${sc.fmt(sc.breaks[idx])}+</div>`;
-    }).join('');
+    }).join('')+
+    `<div style="height:1px;background:var(--bd);margin:8px 0"></div>
+    <div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px">Lead Lifecycle Pins</div>
+    <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.red};border-radius:99px"></div>Lead (${pinCounts.red||0})</div>
+    <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.yellow};border-radius:99px"></div>Deposit paid (${pinCounts.yellow||0})</div>
+    <div class="leg-item"><div class="leg-sw" style="background:${PIN_COLORS.green};border-radius:99px"></div>Completed / review (${pinCounts.green||0})</div>
+    <div style="height:1px;background:var(--bd);margin:8px 0"></div>
+    <div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px">Opportunity Anchors</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#f59e0b;border-radius:99px"></div>Whales / iconic venues</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#3b82f6;border-radius:99px"></div>ICL partner classes</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#10b981;border-radius:99px"></div>Primary MSW dumpsites</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#f59e0b;border-radius:99px"></div>Regional dump options</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#ef4444;border-radius:99px"></div>Closed/restricted sites</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#8b5cf6;border-radius:99px"></div>Permit signals</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#10b981;border-radius:99px"></div>Housing signals</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#ef4444;border-radius:99px"></div>Transit/project lines</div>`;
 }
 
 // ── REFERRALS ─────────────────────────────────────────────────────────────────
@@ -1273,26 +2345,33 @@ function buildRefs(){
 
 const DEFAULT={
   critical:[
-    {id:'k1',tag:'sys',title:'Register A2P 10DLC',note:'Twilio Console → Regulatory. 323-307-7855 filtered.'},
-    {id:'k2',tag:'sys',title:'Fix ops webhook — get Twilio ops number',note:'213-880-6318 = personal cell. DONE/DIVERT/SOLD broken.'},
-    {id:'k3',tag:'dat',title:'Deploy /api/permits proxy to Railway',note:'Add railway-api-routes.js to server.js → commit → push.'},
+    {id:'bo2',tag:'sys',title:'Build 2/5 - Route optimizer v2 (lead + dump + window)',note:'Optimize lead stops with valid MSW dump site, traffic, close times, and truck capacity.'},
+    {id:'k1',tag:'dat',title:'Event timeline + replay spine',note:'Unify lead, outreach, payment, and ops events into one scrub-able sequence.'},
+    {id:'k2',tag:'dat',title:'Signal provenance + confidence',note:'Every layer shows source, freshness, and confidence score before actioning.'},
+    {id:'k3',tag:'sys',title:'Progressive map loading budget',note:'Load anchor layers first, then secondary layers to avoid UI stalls/crashes.'},
+    {id:'k15',tag:'biz',title:'Operator camera presets',note:'One-click jump to key zones, partners, and active incidents for faster decisions.'},
   ],
   inprogress:[
-    {id:'k4',tag:'sys',title:'Test Google Calendar integration',note:'Committed, untested. Verify booking flow end-to-end.'},
-    {id:'k5',tag:'sys',title:'Add Vision LOW confidence guard',note:'Currently quotes even when load_confidence=LOW.'},
+    {id:'bo1',tag:'dat',title:'Build 1/5 - Live dumpsite availability feed',note:'MVP shipped: API feed + open/closed windows + manual overrides. Next: add facility outage auto-ingest.'},
+    {id:'bo3',tag:'sys',title:'Build 3/5 - Best Dump Plan per job card',note:'Show primary + backup dumpsite, ETA, open window, restrictions, and estimated tip cost per job.'},
+    {id:'k4',tag:'dat',title:'Correlation cards (cause + effect)',note:'Surface top shifts: SLA red → quote lag, venue proximity → close lift, etc.'},
+    {id:'k5',tag:'sys',title:'SLA auto-action tuning',note:'Tune cooldown windows + message variants by conversion lift.'},
   ],
   upcoming:[
-    {id:'k6',tag:'biz',title:'Outreach: 2 probate attorneys 90043/90056',note:'lasuperiorcourt.org → active filings → call.'},
-    {id:'k7',tag:'biz',title:'Identify 2 estate realtors in T-001',note:'Zillow/Redfin: "trust sale" 90043, 90056.'},
-    {id:'k8',tag:'dat',title:'Add zip_code + referral_source to DB',note:'Parse from address on AWAITING_ADDRESS state.'},
-    {id:'k9',tag:'sys',title:'Add quiet-hours guard to drop-off SMS',note:'Currently can fire at 1am. Add 8am–8pm check.'},
-    {id:'k10',tag:'sys',title:'Add day options timestamp on presentation',note:'Prevents midnight rollover corrupting day mapping.'},
+    {id:'bo4',tag:'sys',title:'Build 4/5 - Driver mode + scale ticket OCR loop',note:'Mobile flow for dump check-in/out and ticket OCR to auto-write disposal costs.'},
+    {id:'bo5',tag:'sys',title:'Build 5/5 - Ops guardrails engine',note:'Pre-dispatch warnings for closing gates, HHW risk, uncovered load surcharges, and wasteshed mismatches.'},
+    {id:'k6',tag:'sys',title:'Hypothesis mode (80/20)',note:'AI proposes top 3 high-impact tests weekly with expected uplift and risk.'},
+    {id:'k7',tag:'dat',title:'Ground-truth annotation loop',note:'Screenshot/comment workflow to fix map placement and model classification quickly.'},
+    {id:'k8',tag:'sys',title:'Automation prompt library',note:'Versioned prompts by role: sales rep, dispatcher, owner, partner manager.'},
+    {id:'k9',tag:'grow',title:'Partner campaign overlays',note:'Show mortuaries/realtors/probate clusters with conversion and response overlays.'},
+    {id:'k10',tag:'dat',title:'Multi-model research copilot',note:'Use search-grounded model ensemble for market scans, then summarize with citations.'},
+    {id:'k16',tag:'biz',title:'After-action review generator',note:'Auto-generate incident timeline + what changed + next decision recommendations.'},
   ],
   done:[
-    {id:'k11',tag:'sys',title:'SMS state machine (11 states)',note:'conversation.js — fully operational.'},
-    {id:'k12',tag:'sys',title:'Square payment link integration',note:'quote_worker.js — fires on QUOTE_READY.'},
-    {id:'k13',tag:'sys',title:'Vision AI photo analysis',note:'claude-opus via vision_analyzer.js.'},
-    {id:'k14',tag:'sys',title:'Crew brief automation',note:'crew_brief.js — SMS on payment.completed.'},
+    {id:'k11',tag:'sys',title:'Auto Next Best Action engine',note:'SLA-red leads now auto-trigger customer + ops SMS reminders.'},
+    {id:'k12',tag:'dat',title:'Square settled revenue ingestion',note:'payment.completed now writes settled_revenue_cents into lead records.'},
+    {id:'k13',tag:'dat',title:'True margin fields in pipeline',note:'Labor/disposal/fuel/other costs + computed margin_cents live.'},
+    {id:'k14',tag:'sys',title:'Map controls simplification',note:'Removed unstable corridor layer to keep map reliable.'},
   ],
 };
 
@@ -1306,18 +2385,260 @@ const COLS=[
 const TAG={sys:'sys',biz:'biz',dat:'dat',grow:'grow'};
 const TAG_LABEL={sys:'System',biz:'Business',dat:'Data',grow:'Growth'};
 const TAG_CLS={sys:'tag-sys',biz:'tag-biz',dat:'tag-dat',grow:'tag-grow'};
+const ROADMAP_COLS=[
+  {id:'now',label:'Now',stripe:'ksr'},
+  {id:'next',label:'Next',stripe:'ksa'},
+  {id:'later',label:'Later',stripe:'ksb'},
+  {id:'released',label:'Released',stripe:'ksg'},
+];
 
 let KS={};
 let dragging=null; // {id, fromCol}
 let dropTarget=null; // {toCol, insertBeforeId|null}
 
-// In-memory store (localStorage blocked in claude.ai artifact sandbox)
 let _memStore = null;
+let _saveTimer = null;
+let _planningUpdatedAt = null;
+
+function h(v){
+  return String(v??'')
+    .replaceAll('&','&amp;')
+    .replaceAll('<','&lt;')
+    .replaceAll('>','&gt;')
+    .replaceAll('"','&quot;')
+    .replaceAll("'","&#39;");
+}
+function cloneState(v){return JSON.parse(JSON.stringify(v));}
+function normalizeState(raw){
+  const out={critical:[],inprogress:[],upcoming:[],done:[]};
+  ['critical','inprogress','upcoming','done'].forEach(col=>{
+    const cards=Array.isArray(raw?.[col])?raw[col]:[];
+    out[col]=cards
+      .filter(c=>c&&String(c.title||'').trim())
+      .map(c=>({
+        id:String(c.id||('k'+Date.now()+Math.floor(Math.random()*1000))),
+        tag:TAG[String(c.tag||'').trim()]?String(c.tag).trim():'sys',
+        title:String(c.title||'').trim().slice(0,180),
+        note:String(c.note||'').trim().slice(0,360)
+      }));
+  });
+  return out;
+}
+function fmtSync(ts){
+  if(!ts)return 'Sync: local';
+  const d=new Date(ts);
+  if(Number.isNaN(d.getTime()))return 'Sync: local';
+  const t=d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true});
+  return `Sync: ${t}`;
+}
+function setRoadmapSyncLabel(ts){const el=document.getElementById('roadmap-sync-status');if(el)el.textContent=fmtSync(ts);}
+function setIdeaStatus(msg,isErr=false){
+  const el=document.getElementById('idea-status');
+  if(!el)return;
+  el.textContent=msg||'—';
+  el.style.color=isErr?'var(--red)':'var(--tx3)';
+}
+function setCommandStatus(msg,isErr=false){
+  const el=document.getElementById('command-status');
+  if(!el)return;
+  el.textContent=msg||'—';
+  el.style.color=isErr?'var(--red)':'var(--tx3)';
+}
+function applyPlanningPayload(j){
+  if(!(j&&j.kanban))return false;
+  KS=normalizeState(j.kanban);
+  _memStore=cloneState(KS);
+  _planningUpdatedAt=j.updated_at||new Date().toISOString();
+  setRoadmapSyncLabel(_planningUpdatedAt);
+  renderK();
+  renderRoadmap(j.roadmap||buildRoadmapFromKanban(KS));
+  return true;
+}
+function findCardColumn(cardId){
+  for(const c of COLS){
+    if((KS[c.id]||[]).some(x=>x.id===cardId))return c.id;
+  }
+  return null;
+}
+function buildRoadmapFromKanban(state=KS){
+  const now=[
+    ...((state.critical||[]).map(c=>({...c,source_column:'critical'}))),
+    ...((state.inprogress||[]).map(c=>({...c,source_column:'inprogress'})))
+  ];
+  const upcoming=(state.upcoming||[]);
+  const next=upcoming.slice(0,4).map(c=>({...c,source_column:'upcoming'}));
+  const later=upcoming.slice(4).map(c=>({...c,source_column:'upcoming'}));
+  const released=(state.done||[]).map(c=>({...c,source_column:'done'}));
+  return {now,next,later,released};
+}
+function roadmapAction(sourceCol){
+  if(sourceCol==='inprogress')return {label:'Ship',to:'done'};
+  if(sourceCol==='done')return {label:'Reopen',to:'upcoming'};
+  return {label:'Start',to:'inprogress'};
+}
 function loadK(){
-  KS = _memStore ? JSON.parse(JSON.stringify(_memStore)) : JSON.parse(JSON.stringify(DEFAULT));
+  KS = _memStore ? cloneState(_memStore) : cloneState(DEFAULT);
 }
 function saveK(){
-  _memStore = JSON.parse(JSON.stringify(KS));
+  _memStore = cloneState(KS);
+  renderRoadmap();
+  if(_saveTimer)clearTimeout(_saveTimer);
+  _saveTimer=setTimeout(()=>{persistPlanningState().catch(()=>{});},280);
+}
+async function persistPlanningState(){
+  const snapshot=cloneState(KS);
+  try{
+    const r=await fetch('/api/dashboard/planning',{
+      method:'PUT',
+      headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body:JSON.stringify({kanban:snapshot})
+    });
+    if(!r.ok)throw new Error('save_failed');
+    const j=await r.json();
+    if(j&&j.kanban){
+      KS=normalizeState(j.kanban);
+      _memStore=cloneState(KS);
+      _planningUpdatedAt=j.updated_at||new Date().toISOString();
+      setRoadmapSyncLabel(_planningUpdatedAt);
+      renderRoadmap(j.roadmap||buildRoadmapFromKanban(KS));
+    }
+  }catch(e){
+    setRoadmapSyncLabel(_planningUpdatedAt);
+  }
+}
+async function refreshPlanningState(){
+  try{
+    const r=await fetch('/api/dashboard/planning',{headers:{'Accept':'application/json'}});
+    if(!r.ok)throw new Error('load_failed');
+    const j=await r.json();
+    if(j&&j.kanban){
+      KS=normalizeState(j.kanban);
+      _memStore=cloneState(KS);
+      _planningUpdatedAt=j.updated_at||null;
+      renderK();
+      renderRoadmap(j.roadmap||buildRoadmapFromKanban(KS));
+      setRoadmapSyncLabel(_planningUpdatedAt);
+      return;
+    }
+  }catch(e){}
+  setRoadmapSyncLabel(_planningUpdatedAt);
+}
+function renderRoadmap(roadmap){
+  const root=document.getElementById('roadmap-grid');
+  if(!root)return;
+  const data=roadmap&&typeof roadmap==='object'?roadmap:buildRoadmapFromKanban(KS);
+  root.innerHTML=ROADMAP_COLS.map(col=>{
+    const cards=Array.isArray(data[col.id])?data[col.id]:[];
+    const items=cards.map(card=>{
+      const src=String(card.source_column||findCardColumn(card.id)||'upcoming');
+      const act=roadmapAction(src);
+      return `<div class="ritem">
+        <div class="ktag ${TAG_CLS[card.tag]||'tag-sys'}">${TAG_LABEL[card.tag]||'System'}</div>
+        <div class="rit">${h(card.title)}</div>
+        ${card.note?`<div class="rin">${h(card.note)}</div>`:''}
+        <div class="ract"><button class="rbtn" onclick="moveCardToColumn('${h(card.id)}','${act.to}')">${act.label}</button></div>
+      </div>`;
+    }).join('');
+    return `<div class="rcol">
+      <div class="kcol-stripe ${col.stripe}"></div>
+      <div class="rcol-h"><div class="rtitle">${col.label}</div><span class="kcnt">${cards.length}</span></div>
+      <div class="rzone">${items||'<div class="idea-note">No items.</div>'}</div>
+    </div>`;
+  }).join('');
+}
+function moveCardToColumn(cardId,toCol){
+  if(!['critical','inprogress','upcoming','done'].includes(String(toCol||'')))return;
+  let card=null,fromCol=null;
+  for(const col of COLS){
+    const idx=(KS[col.id]||[]).findIndex(c=>c.id===cardId);
+    if(idx!==-1){
+      card=KS[col.id][idx];
+      KS[col.id].splice(idx,1);
+      fromCol=col.id;
+      break;
+    }
+  }
+  if(!card||!fromCol)return;
+  KS[toCol].unshift(card);
+  saveK();
+  renderK();
+}
+async function pushIdeaFromDashboard(){
+  const titleEl=document.getElementById('idea-title');
+  const noteEl=document.getElementById('idea-note');
+  const tagEl=document.getElementById('idea-tag');
+  const targetEl=document.getElementById('idea-target');
+  const sourceEl=document.getElementById('idea-source');
+  const btn=document.getElementById('idea-push-btn');
+  const title=String(titleEl?.value||'').trim();
+  if(!title){setIdeaStatus('Title required',true);return;}
+  const payload={
+    title,
+    note:String(noteEl?.value||'').trim(),
+    tag:String(tagEl?.value||'sys'),
+    target:String(targetEl?.value||'upcoming'),
+    source:String(sourceEl?.value||'chat').trim()||'chat'
+  };
+  if(btn)btn.disabled=true;
+  setIdeaStatus('Saving…');
+  try{
+    const r=await fetch('/api/dashboard/planning/idea',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body:JSON.stringify(payload)
+    });
+    if(!r.ok)throw new Error('idea_failed');
+    const j=await r.json();
+    if(applyPlanningPayload(j)){
+      if(titleEl)titleEl.value='';
+      if(noteEl)noteEl.value='';
+      setIdeaStatus('Pushed');
+      return;
+    }
+    throw new Error('idea_bad_payload');
+  }catch(e){
+    const target=String(payload.target);
+    if(KS[target]){
+      KS[target].push({id:'k'+Date.now()+Math.floor(Math.random()*1000),tag:payload.tag,title:payload.title,note:payload.note});
+      saveK();
+      renderK();
+      setIdeaStatus('Saved local (API unavailable)',true);
+    }else{
+      setIdeaStatus('Failed to save',true);
+    }
+  }finally{
+    if(btn)btn.disabled=false;
+  }
+}
+async function runPlanningCommand(){
+  const input=document.getElementById('planning-command');
+  const btn=document.getElementById('planning-command-btn');
+  const command=String(input?.value||'').trim();
+  if(!command){setCommandStatus('Command required',true);return;}
+  if(btn)btn.disabled=true;
+  setCommandStatus('Running…');
+  try{
+    const r=await fetch('/api/dashboard/planning/command',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Accept':'application/json'},
+      body:JSON.stringify({command})
+    });
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(String(j?.error||'command_failed'));
+    if(!applyPlanningPayload(j))throw new Error('bad_payload');
+    setCommandStatus(j?.message||'Done');
+    if(input)input.value='';
+  }catch(e){
+    setCommandStatus(String(e?.message||'Command failed'),true);
+  }finally{
+    if(btn)btn.disabled=false;
+  }
+}
+function setPlanningCommand(v){
+  const input=document.getElementById('planning-command');
+  if(!input)return;
+  input.value=String(v||'');
+  input.focus();
 }
 
 function renderK(){
@@ -1412,8 +2733,8 @@ function makeCard(card,colId,idx){
   el.innerHTML=`
     <button class="kdel" onclick="delCard('${card.id}','${colId}')">×</button>
     <div class="ktag ${TAG_CLS[card.tag]||'tag-sys'}">${TAG_LABEL[card.tag]||'System'}</div>
-    <div class="kcard-title">${card.title}</div>
-    ${card.note?`<div class="kcard-note">${card.note}</div>`:''}`;
+    <div class="kcard-title">${h(card.title)}</div>
+    ${card.note?`<div class="kcard-note">${h(card.note)}</div>`:''}`;
 
   el.addEventListener('dragstart',e=>{
     dragging={id:card.id,fromCol:colId};
@@ -1446,7 +2767,7 @@ function addCard(colId){
   if(!t)return;
   const n=document.getElementById(`inp-n-${colId}`).value.trim();
   const tag=document.getElementById(`inp-tag-${colId}`).value;
-  KS[colId].push({id:'k'+Date.now(),tag,title:t,note:n});
+  KS[colId].push({id:'k'+Date.now()+Math.floor(Math.random()*1000),tag,title:t,note:n});
   saveK();closeForm(colId);renderK();
 }
 function delCard(id,colId){
@@ -1456,12 +2777,38 @@ function delCard(id,colId){
 
 // ── INIT ─────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded',()=>{
-  try{fetchBuildVersion();}catch(e){}
+  try{document.addEventListener('fullscreenchange',syncMapFullscreenUi);}catch(e){}
+  try{syncMapFullscreenUi();}catch(e){}
+  try{applyPageVisibility('overview');}catch(e){}
   try{fetchLeads();}catch(e){}
   try{fetchCensus();}catch(e){}
+  try{fetchMapSignals();}catch(e){}
+  try{fetchDumpSites();}catch(e){}
   try{buildRefs();}catch(e){}
-  try{loadK();renderK();}catch(e){KS=JSON.parse(JSON.stringify(DEFAULT));try{renderK();}catch(e2){}}
+  try{
+    loadK();
+    renderK();
+    renderRoadmap();
+    setRoadmapSyncLabel(_planningUpdatedAt);
+    refreshPlanningState().catch(()=>{});
+  }catch(e){
+    KS=cloneState(DEFAULT);
+    try{renderK();renderRoadmap();}catch(e2){}
+  }
+  try{
+    const cmd=document.getElementById('planning-command');
+    if(cmd){
+      cmd.addEventListener('keydown',e=>{
+        if(e.key==='Enter'&&!e.shiftKey){
+          e.preventDefault();
+          runPlanningCommand();
+        }
+      });
+    }
+  }catch(e){}
   setInterval(()=>{try{fetchLeads();}catch(e){}},60000);
+  setInterval(()=>{try{fetchMapSignals();}catch(e){}},300000);
+  setInterval(()=>{try{fetchDumpSites();}catch(e){}},180000);
 });
 </script>
 </body>

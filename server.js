@@ -376,8 +376,66 @@ const LEADS_DIR = path.join(BASE_DIR, "leads");
 fs.mkdirSync(BASE_DIR, { recursive: true });
 fs.mkdirSync(LEADS_DIR, { recursive: true });
 const BOOKING_WINDOWS = ["8-10am", "10-12pm", "12-2pm", "2-4pm", "4-6pm"];
+const KANBAN_COLS = ["critical", "inprogress", "upcoming", "done"];
+const planningState = {
+  kanban: {
+    critical: [],
+    inprogress: [],
+    upcoming: [],
+    done: []
+  },
+  updated_at: null
+};
 
 let baseGeo = null;
+
+function normalizeKanban(input) {
+  const out = { critical: [], inprogress: [], upcoming: [], done: [] };
+  const src = input && typeof input === "object" ? input : {};
+  for (const col of KANBAN_COLS) {
+    const rows = Array.isArray(src[col]) ? src[col] : [];
+    out[col] = rows
+      .map((r, idx) => {
+        const title = String(r?.title || "").trim();
+        if (!title) return null;
+        const id = String(r?.id || `k${Date.now()}${idx}${Math.floor(Math.random() * 1000)}`).trim();
+        const tagRaw = String(r?.tag || "sys").toLowerCase();
+        const tag = ["sys", "biz", "dat", "grow"].includes(tagRaw) ? tagRaw : "sys";
+        return {
+          id,
+          title,
+          note: String(r?.note || "").trim(),
+          tag
+        };
+      })
+      .filter(Boolean);
+  }
+  return out;
+}
+
+function buildRoadmapFromKanban(kanban) {
+  const safe = normalizeKanban(kanban);
+  const now = [...safe.critical, ...safe.inprogress].map((c) => ({ ...c }));
+  const next = safe.upcoming.slice(0, 4).map((c) => ({ ...c }));
+  const later = safe.upcoming.slice(4).map((c) => ({ ...c }));
+  const released = safe.done.map((c) => ({ ...c }));
+  return { now, next, later, released };
+}
+
+function planningPayload(message) {
+  return {
+    ok: true,
+    ...(message ? { message } : {}),
+    kanban: planningState.kanban,
+    roadmap: buildRoadmapFromKanban(planningState.kanban),
+    updated_at: planningState.updated_at
+  };
+}
+
+function applyPlanningMutation(nextKanban) {
+  planningState.kanban = normalizeKanban(nextKanban);
+  planningState.updated_at = new Date().toISOString();
+}
 
 function safeFilenameFromPhone(phone) {
   return String(phone || "unknown").replace(/[^0-9+]/g, "_");
@@ -673,6 +731,119 @@ app.get("/api/dashboard/leads", async (req, res) => {
     });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/dashboard/opportunities", async (_req, res) => {
+  return res.json({
+    ok: true,
+    permits: [],
+    housing: [],
+    corridors: [],
+    transit: [],
+    meta: {
+      generated_at: new Date().toISOString(),
+      source: "fallback_empty"
+    }
+  });
+});
+
+app.get("/api/dashboard/planning", (_req, res) => {
+  return res.json(planningPayload());
+});
+
+app.put("/api/dashboard/planning", (req, res) => {
+  try {
+    applyPlanningMutation(req.body?.kanban || {});
+    return res.json(planningPayload("Saved"));
+  } catch (e) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/dashboard/planning/idea", (req, res) => {
+  try {
+    const title = String(req.body?.title || "").trim();
+    const note = String(req.body?.note || "").trim();
+    const tagRaw = String(req.body?.tag || "sys").toLowerCase();
+    const targetRaw = String(req.body?.target || "upcoming").toLowerCase();
+    const tag = ["sys", "biz", "dat", "grow"].includes(tagRaw) ? tagRaw : "sys";
+    const target = KANBAN_COLS.includes(targetRaw) ? targetRaw : "upcoming";
+    if (!title) return res.status(400).json({ ok: false, error: "title_required" });
+    const id = `k${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    planningState.kanban[target].unshift({ id, title, note, tag });
+    planningState.updated_at = new Date().toISOString();
+    return res.json(planningPayload("Idea added"));
+  } catch (e) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/dashboard/planning/command", (req, res) => {
+  try {
+    const raw = String(req.body?.command || "").trim();
+    if (!raw) return res.status(400).json({ ok: false, error: "command_required" });
+    const m = raw.match(/^\/([a-z_]+)\b/i);
+    const cmd = m ? String(m[1]).toLowerCase() : "";
+    const args = {};
+    for (const part of raw.replace(/^\/[a-z_]+\s*/i, "").match(/(?:[^\s"]+|"[^"]*")+/g) || []) {
+      const kv = part.match(/^([a-z_]+)=(.+)$/i);
+      if (!kv) continue;
+      const k = String(kv[1]).toLowerCase();
+      let v = String(kv[2] || "");
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+      args[k] = v;
+    }
+    const findCard = (id) => {
+      for (const col of KANBAN_COLS) {
+        const idx = planningState.kanban[col].findIndex((c) => c.id === id);
+        if (idx >= 0) return { col, idx, card: planningState.kanban[col][idx] };
+      }
+      return null;
+    };
+    let message = "Done";
+    if (cmd === "list") {
+      message = "Listed";
+    } else if (cmd === "idea") {
+      const title = String(args.title || "").trim();
+      if (!title) return res.status(400).json({ ok: false, error: "title_required" });
+      const target = KANBAN_COLS.includes(String(args.target || "").toLowerCase())
+        ? String(args.target || "").toLowerCase()
+        : "upcoming";
+      const tag = ["sys", "biz", "dat", "grow"].includes(String(args.tag || "").toLowerCase())
+        ? String(args.tag || "").toLowerCase()
+        : "sys";
+      planningState.kanban[target].unshift({
+        id: `k${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        title,
+        note: String(args.note || "").trim(),
+        tag
+      });
+      message = "Idea added";
+    } else if (cmd === "move" || cmd === "start" || cmd === "ship" || cmd === "reopen" || cmd === "delete") {
+      const id = String(args.id || "").trim();
+      if (!id) return res.status(400).json({ ok: false, error: "id_required" });
+      const found = findCard(id);
+      if (!found) return res.status(404).json({ ok: false, error: "card_not_found" });
+      planningState.kanban[found.col].splice(found.idx, 1);
+      if (cmd === "delete") {
+        message = "Deleted";
+      } else {
+        const to =
+          cmd === "start" ? "inprogress" :
+          cmd === "ship" ? "done" :
+          cmd === "reopen" ? "upcoming" :
+          (KANBAN_COLS.includes(String(args.to || "").toLowerCase()) ? String(args.to || "").toLowerCase() : found.col);
+        planningState.kanban[to].unshift(found.card);
+        message = `Moved to ${to}`;
+      }
+    } else {
+      return res.status(400).json({ ok: false, error: "unknown_command" });
+    }
+    planningState.updated_at = new Date().toISOString();
+    return res.json(planningPayload(message));
+  } catch (e) {
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
