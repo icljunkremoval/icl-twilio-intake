@@ -207,6 +207,12 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 .intel-label{color:var(--tx3)}
 .intel-value{color:var(--tx)}
 .intel-top{color:var(--tx2);font-size:9px;line-height:1.4;margin-top:6px}
+.lead-panel{background:var(--bg3);border:1px solid var(--bd);border-radius:6px;padding:10px 12px;min-height:138px}
+.lead-panel .ttl{font-size:9px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px}
+.lead-panel .ph{font-family:'Syne',sans-serif;font-size:13px;color:var(--tx);margin-bottom:6px}
+.lead-panel .rows{display:grid;grid-template-columns:1fr auto;gap:4px 8px}
+.lead-panel .k{color:var(--tx3);font-size:9px}
+.lead-panel .v{color:var(--tx);font-size:9px;text-align:right}
 </style>
 </head>
 <body>
@@ -360,6 +366,12 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
             Boundaries: <a href="https://tigerweb.geo.census.gov" target="_blank">Census TIGERweb 2020 ZCTA</a><br>
             Demographics: <a href="https://api.census.gov" target="_blank">ACS 2023 · api.census.gov</a><br>
             Rendered in SVG — no external tile server
+          </div>
+        </div>
+        <div style="flex:1;min-width:240px">
+          <div id="map-lead-detail" class="lead-panel">
+            <div class="ttl">Lead Detail (click a client dot)</div>
+            <div style="font-size:10px;color:var(--tx2);line-height:1.5">Hover dots for quick preview. Click a dot to load full lead intelligence here.</div>
           </div>
         </div>
       </div>
@@ -517,22 +529,48 @@ function leadHoverHtml(phone){
 function leadMapTooltipHtml(lead){
   const phone=String(lead?.phone||'');
   const intel=LEAD_INTEL[phone]||lead?.hover||{};
+  return `
+    <h4>${fPhone(phone)}</h4>
+    <div><span class="th">Stage</span> <span class="tv">${esc(stateLabel(intel.state||lead?.state||'NEW'))}</span></div>
+    <div><span class="th">Quote</span> <span class="tv">${fCents(intel.quote_total_cents||lead?.quote_total_cents)}</span></div>
+    <div><span class="th">Payment</span> <span class="tv">${esc(intel.payment_status||'—')}</span></div>
+    <div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--bd)">
+      <span class="th">Next</span> <span class="tg">${esc((intel.ops||{}).next_action||'Review lead')}</span>
+    </div>
+  `;
+}
+function leadMapDetailHtml(lead){
+  const phone=String(lead?.phone||'');
+  const intel=LEAD_INTEL[phone]||lead?.hover||{};
   const items=intel.items||{};
   const value=intel.value||{};
   const ops=intel.ops||{};
   const top=Array.isArray(items.top)?items.top.filter(Boolean).slice(0,3):[];
-  return `
-    <h4>${fPhone(phone)} · ${esc(stateLabel(intel.state||lead?.state||'NEW'))}</h4>
-    <div><span class="th">Address</span> <span class="tv">${esc(lead?.address||'No address')}</span></div>
-    <div><span class="th">Quote Given</span> <span class="tv">${fCents(intel.quote_total_cents||lead?.quote_total_cents)}</span></div>
-    <div><span class="th">Payment</span> <span class="tv">${esc(intel.payment_status||'—')}</span></div>
-    <div><span class="th">Buckets</span> <span class="tv">Resell ${items.resell||0} · Scrap ${items.scrap||0} · Donate ${items.donate||0} · Dump ${items.dump||0}</span></div>
-    <div><span class="th">Resale Value</span> <span class="tv">${fCents(value.resale_low_cents)} - ${fCents(value.resale_high_cents)}</span></div>
-    <div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--bd)">
-      <span class="th">Next Action</span> <span class="tg">${esc(ops.next_action||'Review lead')}</span>
+  return `<div class="ttl">Lead Detail</div>
+    <div class="ph">${fPhone(phone)}</div>
+    <div class="rows">
+      <div class="k">Stage</div><div class="v">${esc(stateLabel(intel.state||lead?.state||'NEW'))}</div>
+      <div class="k">Address</div><div class="v">${esc(lead?.address||'No address')}</div>
+      <div class="k">ZIP</div><div class="v">${esc(lead?.zip||'—')}</div>
+      <div class="k">Quote Given</div><div class="v">${fCents(intel.quote_total_cents||lead?.quote_total_cents)}</div>
+      <div class="k">Upfront</div><div class="v">${fCents(intel.upfront_total_cents)}</div>
+      <div class="k">Payment</div><div class="v">${esc(intel.payment_status||'—')}</div>
+      <div class="k">Resell / Scrap / Donate / Dump</div><div class="v">${items.resell||0} / ${items.scrap||0} / ${items.donate||0} / ${items.dump||0}</div>
+      <div class="k">Resale Value</div><div class="v">${fCents(value.resale_low_cents)} - ${fCents(value.resale_high_cents)}</div>
+      <div class="k">Next Action</div><div class="v">${esc(ops.next_action||'Review lead')}</div>
     </div>
-    ${top.length?`<div class="intel-top">Top items: ${top.map(esc).join(' · ')}</div>`:''}
-  `;
+    ${top.length?`<div class="intel-top">Top items: ${top.map(esc).join(' · ')}</div>`:''}`;
+}
+function renderMapLeadPanel(){
+  const panel=document.getElementById('map-lead-detail');
+  if(!panel)return;
+  const lead=mapSelectedLeadPhone?getLeadByPhone(mapSelectedLeadPhone):null;
+  if(!lead){
+    panel.innerHTML=`<div class="ttl">Lead Detail (click a client dot)</div>
+      <div style="font-size:10px;color:var(--tx2);line-height:1.5">Hover dots for quick preview. Click a dot to load full lead intelligence here.</div>`;
+    return;
+  }
+  panel.innerHTML=leadMapDetailHtml(lead);
 }
 function showLeadHover(ev,row){
   const phone=row?.dataset?.phone||'';
@@ -600,6 +638,7 @@ async function fetchLeads(){
     document.getElementById('leads-mini').innerHTML=leads.slice(0,5).map(leadHtml).join('');
     document.getElementById('leads-full').innerHTML=leads.map(leadHtml).join('')||'<div style="padding:8px;font-size:10px;color:var(--tx3)">No leads yet.</div>';
     if(mapBuilt)renderMap(curLayer);
+    renderMapLeadPanel();
   }catch(e){
     LEAD_INTEL={};
     WORLDVIEW_LEADS=[];
@@ -607,6 +646,7 @@ async function fetchLeads(){
     const fb=`<div style="padding:14px;background:var(--bg3);border-radius:5px;text-align:center;font-size:10px;color:var(--tx3)">Lead feed unavailable right now.</div>`;
     ['leads-mini','leads-full'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML=fb;});
     if(mapBuilt)renderMap(curLayer);
+    renderMapLeadPanel();
   }
 }
 
@@ -775,7 +815,7 @@ function getColor(val,metric){
 
 let curLayer='income';
 let hoveredZip=null;
-let mapPinnedLeadPhone=null;
+let mapSelectedLeadPhone=null;
 
 function getLeadByPhone(phone){
   return (WORLDVIEW_LEADS||[]).find(l=>String(l.phone||'')===String(phone||''))||null;
@@ -813,6 +853,7 @@ function leadMapPoint(lead){
 function buildMap(){
   mapBuilt=true;
   renderMap(curLayer);
+  renderMapLeadPanel();
 }
 
 function renderMap(metric){
@@ -873,15 +914,16 @@ function renderMap(metric){
     if(!lead||!lead.phone)return;
     const [lx,ly]=leadMapPoint(lead);
     const fill=stateDotColor(lead.state);
+    const selected=String(mapSelectedLeadPhone||'')===String(lead.phone||'');
     html+=`<circle
       data-lead-phone="${esc(lead.phone)}"
       cx="${Math.round(lx*10)/10}"
       cy="${Math.round(ly*10)/10}"
-      r="4.8"
+      r="${selected?6.6:4.8}"
       fill="${fill}"
       fill-opacity="0.92"
-      stroke="#0b1020"
-      stroke-width="1.1"
+      stroke="${selected?'#ffffff':'#0b1020'}"
+      stroke-width="${selected?'1.9':'1.1'}"
       style="cursor:pointer"
     />`;
   });
@@ -891,16 +933,14 @@ function renderMap(metric){
   // Hover events on polygons
   svg.querySelectorAll('polygon[data-zip]').forEach(poly=>{
     poly.addEventListener('mouseenter',e=>{
-      if(mapPinnedLeadPhone)return;
       hoveredZip=poly.dataset.zip;
       showTooltip(e,poly.dataset.zip);
       poly.setAttribute('fill-opacity','0.95');
       poly.setAttribute('stroke','#fff');
       poly.setAttribute('stroke-width','2.5');
     });
-    poly.addEventListener('mousemove',e=>{if(!mapPinnedLeadPhone)moveTooltip(e);});
+    poly.addEventListener('mousemove',e=>moveTooltip(e));
     poly.addEventListener('mouseleave',()=>{
-      if(mapPinnedLeadPhone)return;
       hoveredZip=null;
       hideTooltip();
       poly.setAttribute('fill-opacity','0.78');
@@ -913,43 +953,47 @@ function renderMap(metric){
   svg.querySelectorAll('circle[data-lead-phone]').forEach(marker=>{
     const phone=marker.dataset.leadPhone;
     marker.addEventListener('mouseenter',e=>{
-      if(mapPinnedLeadPhone&&mapPinnedLeadPhone!==phone)return;
-      showLeadMapTooltip(e,phone);
-      marker.setAttribute('r','6');
-      marker.setAttribute('stroke','#ffffff');
-      marker.setAttribute('stroke-width','1.6');
+      showLeadMapHoverTooltip(e,phone);
+      if(String(mapSelectedLeadPhone||'')!==String(phone)){
+        marker.setAttribute('r','6');
+        marker.setAttribute('stroke','#ffffff');
+        marker.setAttribute('stroke-width','1.6');
+      }
     });
-    marker.addEventListener('mousemove',e=>{
-      if(!mapPinnedLeadPhone||mapPinnedLeadPhone===phone)moveTooltip(e);
-    });
+    marker.addEventListener('mousemove',e=>moveTooltip(e));
     marker.addEventListener('mouseleave',()=>{
-      marker.setAttribute('r','4.8');
-      marker.setAttribute('stroke','#0b1020');
-      marker.setAttribute('stroke-width','1.1');
-      if(!mapPinnedLeadPhone)hideTooltip();
+      if(String(mapSelectedLeadPhone||'')!==String(phone)){
+        marker.setAttribute('r','4.8');
+        marker.setAttribute('stroke','#0b1020');
+        marker.setAttribute('stroke-width','1.1');
+      }
+      hideTooltip();
     });
     marker.addEventListener('click',e=>{
       e.preventDefault();
       e.stopPropagation();
-      mapPinnedLeadPhone = mapPinnedLeadPhone===phone ? null : phone;
-      if(mapPinnedLeadPhone)showLeadMapTooltip(e,phone);
-      else hideTooltip();
+      mapSelectedLeadPhone = mapSelectedLeadPhone===phone ? null : phone;
+      renderMapLeadPanel();
+      renderMap(curLayer);
+      hideTooltip();
     });
   });
 
-  // Click map background to clear pinned lead tooltip
+  // Click map background to clear selected lead
   svg.onclick=(e)=>{
     const phone=e?.target?.dataset?.leadPhone;
     if(phone)return;
-    mapPinnedLeadPhone=null;
+    mapSelectedLeadPhone=null;
+    renderMapLeadPanel();
+    renderMap(curLayer);
     hideTooltip();
   };
 
   renderLegend(metric);
+  renderMapLeadPanel();
 }
 
 function showTooltip(e,zip){
-  if(mapPinnedLeadPhone)return;
   const tt=document.getElementById('map-tt');
   const d=CD&&CD[zip]?CD[zip]:{name:zip};
   tt.innerHTML=`<h4>${zip} · ${d.name||''}</h4>
@@ -964,11 +1008,11 @@ function showTooltip(e,zip){
   tt.style.display='block';
   moveTooltip(e);
 }
-function showLeadMapTooltip(e,phone){
+function showLeadMapHoverTooltip(e,phone){
   const lead=getLeadByPhone(phone);
   if(!lead)return;
   const tt=document.getElementById('map-tt');
-  tt.innerHTML=leadMapTooltipHtml(lead);
+  tt.innerHTML=leadMapTooltipHtml(lead); // hover = quick summary
   tt.style.display='block';
   moveTooltip(e);
 }
