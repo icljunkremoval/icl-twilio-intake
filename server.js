@@ -19,6 +19,73 @@ const { db, pool, upsertLead, insertEvent, getLead } = require("./db");
 const fetch = (...args) => import("node-fetch").then(({default: f}) => f(...args));
 
 const BASE_LOCATION = "506 E Brett St, Inglewood, CA 90301";
+const DASHBOARD_DUMPSITES_FALLBACK = [
+  {
+    id: "south_gate_lacsd",
+    name: "South Gate Transfer Station (LACSD)",
+    kind: "transfer",
+    tier: "primary",
+    status: "open",
+    lat: 33.9441529,
+    lng: -118.1663537,
+    msw: true,
+    accepts: "MSW, inert waste",
+    hours_text: "Mon-Sat 6:00 AM-4:30 PM · Sun closed",
+    notes: "ICL default site"
+  },
+  {
+    id: "compton_republic",
+    name: "Republic Compton Transfer",
+    kind: "transfer",
+    tier: "primary",
+    status: "open",
+    lat: 33.9033397,
+    lng: -118.2443543,
+    msw: true,
+    accepts: "MSW, recyclables",
+    hours_text: "Mon-Fri 6:00 AM-5:30 PM · Sat/Sun closed",
+    notes: "Good backup"
+  },
+  {
+    id: "american_waste_gardena",
+    name: "American Waste Transfer (Republic)",
+    kind: "transfer",
+    tier: "nearby",
+    status: "open",
+    lat: 33.9020035,
+    lng: -118.301722,
+    msw: true,
+    accepts: "MSW, recyclables",
+    hours_text: "Mon 5:00 AM-5:30 PM · Sat 5:00 AM-4:00 PM",
+    notes: "Early open"
+  },
+  {
+    id: "wm_south_gate",
+    name: "WM South Gate Transfer",
+    kind: "transfer",
+    tier: "regional",
+    status: "open",
+    lat: 33.9577384,
+    lng: -118.1904151,
+    msw: true,
+    accepts: "MSW, recyclables",
+    hours_text: "Mon-Sat 8:00 AM-5:00 PM",
+    notes: "Secondary South Gate option"
+  },
+  {
+    id: "sunshine_canyon",
+    name: "Sunshine Canyon Landfill",
+    kind: "landfill",
+    tier: "regional",
+    status: "open",
+    lat: 34.3032234,
+    lng: -118.4644237,
+    msw: true,
+    accepts: "MSW, C&D, green waste, tires, dirt",
+    hours_text: "Mon-Fri 6:00 AM-6:00 PM · Sat 7:00 AM-12:00 PM",
+    notes: "Long haul backup landfill"
+  }
+];
 
 function resolveBuildInfo() {
   const envSha = String(
@@ -76,6 +143,35 @@ async function geocodeOSM(q) {
   const j = await r.json();
   if (!Array.isArray(j) || j.length === 0) return null;
   return { lat: Number(j[0].lat), lon: Number(j[0].lon), display: j[0].display_name };
+}
+
+function isFutureIso(raw) {
+  if (!raw) return true;
+  const dt = new Date(String(raw));
+  const ts = dt.getTime();
+  if (!Number.isFinite(ts)) return true;
+  return ts > Date.now();
+}
+
+function applyDumpSiteOverrides(baseSites, rows) {
+  if (!Array.isArray(baseSites) || !baseSites.length || !Array.isArray(rows) || !rows.length) {
+    return { sites: baseSites || [], overrideCount: 0 };
+  }
+  const byId = new Map(baseSites.map((s) => [String(s.id || ""), { ...s }]));
+  let overrideCount = 0;
+  for (const r of rows) {
+    const id = String(r.site_id || "").trim();
+    if (!id || !byId.has(id)) continue;
+    if (!isFutureIso(r.active_until)) continue;
+    const cur = byId.get(id);
+    if (r.status_override) cur.status = String(r.status_override).toLowerCase();
+    if (r.notes_override) cur.notes = String(r.notes_override);
+    if (r.priority_override != null && Number.isFinite(Number(r.priority_override))) {
+      cur.priority = Number(r.priority_override);
+    }
+    overrideCount += 1;
+  }
+  return { sites: Array.from(byId.values()), overrideCount };
 }
 
 const app = express();
@@ -301,6 +397,55 @@ app.get("/api/worldview/lead/:from", async (req, res) => {
     const lead = leads.find((l) => String(l.phone) === from);
     if (!lead) return res.status(404).json({ ok: false, error: "not_found" });
     return res.json({ ok: true, lead, generated_at: new Date().toISOString() });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/dashboard/dumpsites", async (req, res) => {
+  try {
+    const filter = String(req.query.filter || "all").trim().toLowerCase();
+    let sites = [...DASHBOARD_DUMPSITES_FALLBACK];
+    let overrideCount = 0;
+
+    try {
+      const rows = (
+        await pool.query(
+          `SELECT
+             site_id,
+             status_override,
+             notes_override,
+             active_until,
+             priority_override
+           FROM dumpsite_overrides
+           WHERE COALESCE(active, 1) = 1`
+        )
+      ).rows;
+      const merged = applyDumpSiteOverrides(sites, rows);
+      sites = merged.sites;
+      overrideCount = merged.overrideCount;
+    } catch {
+      // Optional table in older/newer deployments; fallback list remains valid.
+    }
+
+    if (filter === "msw") {
+      sites = sites.filter((s) => !!s.msw && String(s.status || "").toLowerCase() !== "closed");
+    } else if (filter === "open_now" || filter === "open") {
+      sites = sites.filter((s) => {
+        const st = String(s.status || "").toLowerCase();
+        return st === "open" || st === "call";
+      });
+    }
+
+    return res.json({
+      ok: true,
+      sites,
+      meta: {
+        generated_at: new Date().toISOString(),
+        source: "server_fallback",
+        override_count: overrideCount
+      }
+    });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
