@@ -1,5 +1,16 @@
 const { google } = require('googleapis');
 
+let warnedMissingCalendarConfig = false;
+
+function hasCalendarConfig() {
+  return !!(
+    process.env.GOOGLE_CLIENT_ID &&
+    process.env.GOOGLE_CLIENT_SECRET &&
+    process.env.GOOGLE_REFRESH_TOKEN &&
+    process.env.GOOGLE_CALENDAR_ID
+  );
+}
+
 function getCalendarClient() {
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -43,6 +54,13 @@ function parseTimingPref(timing_pref) {
 
 async function createJobEvent(lead) {
   try {
+    if (!hasCalendarConfig()) {
+      if (!warnedMissingCalendarConfig) {
+        warnedMissingCalendarConfig = true;
+        console.log('[calendar] not configured; skipping calendar event creation');
+      }
+      return { ok: false, reason: 'calendar_not_configured' };
+    }
     const calendar = getCalendarClient();
     const calendarId = process.env.GOOGLE_CALENDAR_ID;
     const timing = parseTimingPref(lead.timing_pref);
