@@ -7,6 +7,7 @@ const { recomputeDerived } = require("./recompute");
 const { handleWindowReply } = require("./window_reply");
 const { evaluateQuoteReadyRow } = require("./quote_gate");
 const { handleConversation } = require("./conversation");
+const { listWorldviewLeads } = require("./worldview_intel");
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
@@ -102,6 +103,29 @@ app.post("/twilio/ops-reply", async (req, res) => {
     await handleOpsReply(body);
   } catch(e) {
     console.error("[ops_reply]", e.message);
+  }
+});
+
+app.get("/api/worldview/leads", async (req, res) => {
+  try {
+    const limit = Number(req.query.limit || 80);
+    const leads = await listWorldviewLeads({ limit });
+    return res.json({ ok: true, leads, generated_at: new Date().toISOString() });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/worldview/lead/:from", async (req, res) => {
+  try {
+    const from = String(req.params.from || "");
+    if (!from) return res.status(400).json({ ok: false, error: "missing from" });
+    const leads = await listWorldviewLeads({ limit: 200 });
+    const lead = leads.find((l) => String(l.phone) === from);
+    if (!lead) return res.status(404).json({ ok: false, error: "not_found" });
+    return res.json({ ok: true, lead, generated_at: new Date().toISOString() });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 

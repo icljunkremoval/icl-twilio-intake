@@ -33,9 +33,15 @@ async function initDb() {
       square_payment_link_id TEXT,
       square_payment_link_url TEXT,
       square_order_id TEXT,
+      square_upfront_payment_link_id TEXT,
+      square_upfront_payment_link_url TEXT,
+      square_upfront_order_id TEXT,
       square_payment_id TEXT,
       deposit_paid INTEGER DEFAULT 0,
       deposit_paid_at TEXT,
+      quote_total_cents INTEGER,
+      upfront_total_cents INTEGER,
+      upfront_discount_pct REAL,
       troll_flag INTEGER DEFAULT 0,
       vision_analysis TEXT,
       crew_notes TEXT,
@@ -57,8 +63,50 @@ async function initDb() {
       created_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS job_items (
+      id SERIAL PRIMARY KEY,
+      job_id TEXT,
+      from_phone TEXT,
+      item_name TEXT NOT NULL,
+      bucket TEXT NOT NULL,
+      est_value_low INTEGER,
+      est_value_high INTEGER,
+      confidence REAL,
+      platform TEXT,
+      crew_notes TEXT,
+      status TEXT,
+      source TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS buyers (
+      buyer_id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      phone TEXT NOT NULL,
+      categories TEXT NOT NULL DEFAULT '[]',
+      active INTEGER NOT NULL DEFAULT 1,
+      last_contacted TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS job_financials (
+      id SERIAL PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      from_phone TEXT,
+      removal_fee INTEGER,
+      scrap_revenue INTEGER,
+      resale_revenue INTEGER,
+      donation_count INTEGER,
+      total_yield INTEGER,
+      zip_code TEXT,
+      created_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_events_from_phone ON events(from_phone);
     CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
+    CREATE INDEX IF NOT EXISTS idx_job_items_phone ON job_items(from_phone);
+    CREATE INDEX IF NOT EXISTS idx_job_items_job_id ON job_items(job_id);
+    CREATE INDEX IF NOT EXISTS idx_job_items_bucket ON job_items(bucket);
+    CREATE INDEX IF NOT EXISTS idx_job_financials_phone ON job_financials(from_phone);
   `);
 
   // Run migrations for any missing columns
@@ -83,9 +131,15 @@ async function initDb() {
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS square_payment_link_id TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS square_payment_link_url TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS square_order_id TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS square_upfront_payment_link_id TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS square_upfront_payment_link_url TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS square_upfront_order_id TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS square_payment_id TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS deposit_paid INTEGER DEFAULT 0",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS deposit_paid_at TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS quote_total_cents INTEGER",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS upfront_total_cents INTEGER",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS upfront_discount_pct REAL",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS troll_flag INTEGER DEFAULT 0",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS vision_analysis TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS crew_notes TEXT",

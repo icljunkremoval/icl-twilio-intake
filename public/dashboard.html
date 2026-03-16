@@ -94,8 +94,9 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .pid{width:5px;height:5px;border-radius:50%;flex-shrink:0}
 
 /* ── LEAD ROW ── */
-.lead{display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--bd)}
+.lead{display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--bd);cursor:default;transition:background .12s}
 .lead:last-child{border-bottom:none}
+.lead:hover{background:rgba(59,130,246,.05)}
 .av{width:28px;height:28px;border-radius:50%;background:var(--bg3);border:1px solid var(--bd2);display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--tx2)}
 .sb{font-size:8px;letter-spacing:.4px;padding:2px 7px;border-radius:4px;text-transform:uppercase;white-space:nowrap}
 .sn{background:rgba(74,90,120,.3);color:var(--tx3);border:1px solid var(--tx3)}
@@ -202,6 +203,10 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .note{font-size:8px;color:var(--tx3);margin-top:10px;padding-top:8px;border-top:1px solid var(--bd);line-height:1.6}
 a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--bd2);border-radius:2px}
+.intel-grid{display:grid;grid-template-columns:1fr auto;gap:3px 8px}
+.intel-label{color:var(--tx3)}
+.intel-value{color:var(--tx)}
+.intel-top{color:var(--tx2);font-size:9px;line-height:1.4;margin-top:6px}
 </style>
 </head>
 <body>
@@ -369,6 +374,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
     <div class="cb"><div id="leads-full"><div class="skel" style="width:80%;margin:8px 0"></div><div class="skel" style="width:60%;margin:8px 0"></div><div class="skel" style="width:75%;margin:8px 0"></div></div></div>
   </div>
 </div>
+<div class="map-tooltip" id="lead-hover" style="display:none;min-width:270px;max-width:360px"></div>
 
 <!-- ═══════════════ REFERRALS ═══════════════ -->
 <div class="page" id="page-referrals">
@@ -457,8 +463,11 @@ const f$=v=>v&&Number(v)>0?'$'+Number(v).toLocaleString():'—';
 const fPct=v=>v?v+'%':'—';
 function fPhone(p){if(!p)return'—';const d=p.replace(/\D/g,'').slice(-10);return d.length===10?`(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`:p;}
 function fAgo(ts){if(!ts)return'';const m=Math.floor((Date.now()-new Date(ts))/60000);if(m<60)return m+'m';if(m<1440)return Math.floor(m/60)+'h';return Math.floor(m/1440)+'d';}
+function fCents(c){return c&&Number(c)>0?f$(Math.round(Number(c)/100)):'—';}
+function esc(s){return String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');}
 
 // ── LEADS ─────────────────────────────────────────────────────────────────────
+let LEAD_INTEL={};
 function stateCls(s){
   const u=(s||'').toUpperCase();
   if(u==='NEW')return'sn';
@@ -471,14 +480,62 @@ function stateCls(s){
 function stateLabel(s){return(s||'?').replace('AWAITING_','').replace(/_/g,' ');}
 function leadHtml(l){
   const init=(l.phone||'??').replace(/\D/g,'').slice(-4,-2);
-  const amt=l.quote_amount?f$(l.quote_amount):(l.load_bucket||'—');
-  return`<div class="lead">
+  const amt=l.quote_total_cents?fCents(l.quote_total_cents):(l.load_bucket||'—');
+  const phone=esc(l.phone||'');
+  return`<div class="lead" data-phone="${phone}" onmouseenter="showLeadHover(event,this)" onmousemove="moveLeadHover(event)" onmouseleave="hideLeadHover()">
     <div class="av">${init}</div>
     <div><div style="font-size:11px;color:var(--tx)">${fPhone(l.phone)}</div>
     <div style="font-size:9px;color:var(--tx3)">${fAgo(l.created_at||l.createdAt)} · ${l.address||'No address'}</div></div>
     <span class="sb ${stateCls(l.state)}">${stateLabel(l.state)}</span>
     <div style="font-size:11px;color:var(--tx)">${amt}</div>
   </div>`;
+}
+function leadHoverHtml(phone){
+  const intel=LEAD_INTEL[phone];
+  if(!intel)return'';
+  const items=intel.items||{};
+  const value=intel.value||{};
+  const ops=intel.ops||{};
+  const top=Array.isArray(items.top)?items.top.filter(Boolean).slice(0,3):[];
+  return `
+    <h4>${fPhone(phone)}</h4>
+    <div class="intel-grid">
+      <div class="intel-label">Stage</div><div class="intel-value">${esc(stateLabel(intel.state||'NEW'))}</div>
+      <div class="intel-label">Quote Given</div><div class="intel-value">${fCents(intel.quote_total_cents)}</div>
+      <div class="intel-label">Payment</div><div class="intel-value">${esc(intel.payment_status||'—')}</div>
+      <div class="intel-label">Resale</div><div class="intel-value">${items.resell||0}</div>
+      <div class="intel-label">Scrap</div><div class="intel-value">${items.scrap||0}</div>
+      <div class="intel-label">Donate</div><div class="intel-value">${items.donate||0}</div>
+      <div class="intel-label">Dump</div><div class="intel-value">${items.dump||0}</div>
+      <div class="intel-label">Resale Value</div><div class="intel-value">${fCents(value.resale_low_cents)} - ${fCents(value.resale_high_cents)}</div>
+      <div class="intel-label">Next Action</div><div class="intel-value">${esc(ops.next_action||'Review lead')}</div>
+    </div>
+    ${top.length?`<div class="intel-top">Top items: ${top.map(esc).join(' · ')}</div>`:''}
+  `;
+}
+function showLeadHover(ev,row){
+  const phone=row?.dataset?.phone||'';
+  if(!phone||!LEAD_INTEL[phone])return;
+  const box=document.getElementById('lead-hover');
+  if(!box)return;
+  box.innerHTML=leadHoverHtml(phone);
+  box.style.display='block';
+  moveLeadHover(ev);
+}
+function moveLeadHover(ev){
+  const box=document.getElementById('lead-hover');
+  if(!box||box.style.display==='none')return;
+  const pad=14;
+  let x=(ev?.clientX||0)+14;
+  let y=(ev?.clientY||0)+14;
+  if(x+box.offsetWidth+pad>window.innerWidth)x=window.innerWidth-box.offsetWidth-pad;
+  if(y+box.offsetHeight+pad>window.innerHeight)y=window.innerHeight-box.offsetHeight-pad;
+  box.style.left=Math.max(8,x)+'px';
+  box.style.top=Math.max(8,y)+'px';
+}
+function hideLeadHover(){
+  const box=document.getElementById('lead-hover');
+  if(box)box.style.display='none';
 }
 function setPipe(leads){
   const t=leads.length||1,c={n:0,m:0,q:0,d:0,b:0};
@@ -500,10 +557,12 @@ function setPipe(leads){
 
 async function fetchLeads(){
   try{
-    const r=await fetch('/admin/leads',{headers:{'Accept':'application/json'},credentials:'include'});
+    const r=await fetch('/api/worldview/leads');
     if(!r.ok)throw new Error(r.status);
     const raw=await r.json();
     const leads=Array.isArray(raw)?raw:(raw.leads||raw.data||[]);
+    LEAD_INTEL={};
+    leads.forEach(l=>{if(l&&l.phone&&l.hover)LEAD_INTEL[l.phone]=l.hover;});
     const today=new Date().toDateString();
     const todayCt=leads.filter(l=>new Date(l.created_at||l.createdAt||0).toDateString()===today).length;
     const quoted=leads.filter(l=>(l.state||'').toUpperCase().includes('QUOTE')).length;
@@ -519,8 +578,9 @@ async function fetchLeads(){
     document.getElementById('leads-mini').innerHTML=leads.slice(0,5).map(leadHtml).join('');
     document.getElementById('leads-full').innerHTML=leads.map(leadHtml).join('')||'<div style="padding:8px;font-size:10px;color:var(--tx3)">No leads yet.</div>';
   }catch(e){
+    LEAD_INTEL={};
     ['kpi-tot','kpi-q','kpi-bk','kpi-rev'].forEach(id=>document.getElementById(id).textContent='—');
-    const fb=`<div style="padding:14px;background:var(--bg3);border-radius:5px;text-align:center;font-size:10px;color:var(--tx3)">Auth required · <a href="https://icl-twilio-intake-production.up.railway.app/admin/leads" target="_blank">Open Admin →</a></div>`;
+    const fb=`<div style="padding:14px;background:var(--bg3);border-radius:5px;text-align:center;font-size:10px;color:var(--tx3)">Lead feed unavailable right now.</div>`;
     ['leads-mini','leads-full'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML=fb;});
   }
 }

@@ -3,13 +3,156 @@ const { pool, insertEvent } = require("./db");
 const { sendSms } = require("./twilio_sms");
 
 const OPS_PHONE = "+12138806318";
+const CREW_ITEM_COMMANDS = new Set(["RESELL", "SCRAP", "DONATE", "DUMP", "PLATES"]);
+
+function centsFromMaybeDollars(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n * 100);
+}
+
+function normalizeOpsPhone(raw) {
+  const d = String(raw || "").replace(/\D/g, "");
+  if (d.length < 10) return null;
+  return "+" + d;
+}
+
+function parseCrewItemInput(text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return null;
+  const firstSpace = trimmed.indexOf(" ");
+  const command = (firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace)).trim().toUpperCase();
+  if (!CREW_ITEM_COMMANDS.has(command)) return null;
+
+  let rest = firstSpace === -1 ? "" : trimmed.slice(firstSpace + 1).trim();
+  if (!rest) return { command, phone: null, itemText: "" };
+
+  // Optional explicit lead phone prefix, then item text.
+  const m = rest.match(/^(\+?[\d\-\(\)\s]{10,})\s+(.+)$/);
+  if (m) {
+    const maybePhone = normalizeOpsPhone(m[1]);
+    if (maybePhone) return { command, phone: maybePhone, itemText: m[2].trim() };
+  }
+  return { command, phone: null, itemText: rest };
+}
+
+function mapCommandToBucket(command) {
+  if (command === "PLATES") return "RESELL";
+  return command;
+}
+
+async function resolveLeadForOps(phoneHint) {
+  if (phoneHint) {
+    const exact = await pool.query("SELECT * FROM leads WHERE from_phone = $1 LIMIT 1", [phoneHint]);
+    if (exact.rows[0]) return exact.rows[0];
+
+    const digits = phoneHint.replace(/\D/g, "");
+    if (digits.length >= 10) {
+      const fallback = await pool.query(
+        `SELECT *
+         FROM leads
+         WHERE regexp_replace(from_phone, '\\D', '', 'g') LIKE '%' || $1
+         ORDER BY last_seen_at DESC
+         LIMIT 1`,
+        [digits.slice(-10)]
+      );
+      if (fallback.rows[0]) return fallback.rows[0];
+    }
+  }
+
+  const recent = await pool.query(
+    `SELECT *
+     FROM leads
+     WHERE quote_status IN ('DEPOSIT_PAID','BOOKING_SENT','WINDOW_SELECTED','COMPLETED')
+     ORDER BY COALESCE(deposit_paid_at, last_seen_at) DESC
+     LIMIT 1`
+  );
+  if (recent.rows[0]) return recent.rows[0];
+
+  const any = await pool.query("SELECT * FROM leads ORDER BY last_seen_at DESC LIMIT 1");
+  return any.rows[0] || null;
+}
+
+async function maybeLogCrewItem(body) {
+  const parsed = parseCrewItemInput(body);
+  if (!parsed) return null;
+  if (!parsed.itemText) {
+    await sendSms(
+      OPS_PHONE,
+      "Missing item description. Example: RESELL black metal rack or SCRAP mixed metal pile."
+    );
+    return { type: "crew_item_missing_description" };
+  }
+
+  const lead = await resolveLeadForOps(parsed.phone);
+  if (!lead) {
+    await sendSms(OPS_PHONE, "No lead found to attach this item log. Include customer phone after command.");
+    return { type: "crew_item_no_lead" };
+  }
+
+  const bucket = mapCommandToBucket(parsed.command);
+  const itemName = parsed.itemText.slice(0, 180);
+  const nowIso = new Date().toISOString();
+  const jobId = `${lead.from_phone}:${String(lead.deposit_paid_at || lead.last_seen_at || nowIso).slice(0, 10)}`;
+  let estLow = null;
+  let estHigh = null;
+  let platform = null;
+  if (bucket === "RESELL") {
+    platform = "Facebook Marketplace";
+    if (parsed.command === "PLATES") {
+      estLow = centsFromMaybeDollars(150);
+      estHigh = centsFromMaybeDollars(400);
+    }
+  }
+
+  await pool.query(
+    `INSERT INTO job_items
+      (job_id, from_phone, item_name, bucket, est_value_low, est_value_high, confidence, platform, crew_notes, status, source, created_at)
+     VALUES
+      ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [jobId, lead.from_phone, itemName, bucket, estLow, estHigh, null, platform, null, "LOGGED", "crew_sms", nowIso]
+  );
+
+  insertEvent.run({
+    from_phone: lead.from_phone,
+    event_type: "crew_item_logged",
+    payload_json: JSON.stringify({
+      job_id: jobId,
+      command: parsed.command,
+      bucket,
+      item_name: itemName,
+      source: "crew_sms"
+    }),
+    created_at: nowIso
+  });
+
+  if (bucket === "RESELL") {
+    insertEvent.run({
+      from_phone: lead.from_phone,
+      event_type: "resell_followup_needed",
+      payload_json: JSON.stringify({ item_name: itemName, job_id: jobId }),
+      created_at: nowIso
+    });
+  }
+
+  await sendSms(
+    OPS_PHONE,
+    `✅ Logged ${bucket}: "${itemName}"\nLead: ${lead.from_phone}\nJob: ${jobId}`
+  );
+  return { type: "crew_item_logged", bucket, item: itemName, from_phone: lead.from_phone, job_id: jobId };
+}
 
 async function handleOpsReply(body) {
-  const upper = body.trim().toUpperCase();
+  const raw = String(body || "").trim();
+  if (!raw) return null;
+  const upper = raw.toUpperCase();
+
+  const crewItem = await maybeLogCrewItem(raw);
+  if (crewItem) return crewItem;
 
   // DONE [address or phone] — mark job complete, ask for diversion data
   if (upper.startsWith("DONE")) {
-    const identifier = body.trim().slice(4).trim();
+    const identifier = raw.slice(4).trim();
     await sendSms(OPS_PHONE,
       `✅ Got it! Quick debrief:\n\nReply with:\nDIVERT [donated items] | [scrap items] | [dump lbs] | [junk fee $]\n\nExample:\nDIVERT couch,dresser | washer | 200 | 45\n\nOr DIVERT NONE if everything went to dump.`
     );
@@ -18,7 +161,7 @@ async function handleOpsReply(body) {
 
   // DIVERT [donated] | [scrap] | [dump_lbs] | [fee]
   if (upper.startsWith("DIVERT")) {
-    const data = body.trim().slice(6).trim();
+    const data = raw.slice(6).trim();
 
     if (data.toUpperCase() === "NONE") {
       await sendSms(OPS_PHONE, "📊 Logged. All to dump. We'll track diversion rate over time.");
@@ -78,7 +221,7 @@ async function handleOpsReply(body) {
 
   // SOLD [item] $[price] — log salvage sale
   if (upper.startsWith("SOLD")) {
-    const parts = body.trim().slice(4).trim().split("$");
+    const parts = raw.slice(4).trim().split("$");
     const item = parts[0].trim();
     const price = parseInt(parts[1]) || 0;
 
