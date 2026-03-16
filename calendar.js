@@ -1,13 +1,39 @@
 const { google } = require('googleapis');
 
 let warnedMissingCalendarConfig = false;
+// Default calendar requested for scheduled jobs visibility.
+const DEFAULT_GROUP_CALENDAR_ID =
+  "c_55b6a7c060862d8a44bb038ae4d0b7f1553c35e69ccd37fe2960aebcf661a891@group.calendar.google.com";
+
+function parseCalendarIdFromUrl(urlRaw) {
+  try {
+    const u = new URL(String(urlRaw || "").trim());
+    const cid = String(u.searchParams.get("cid") || "").trim();
+    if (!cid) return null;
+    // cid may already be a full calendar id or a base64url-encoded id.
+    if (cid.includes("@")) return cid;
+    const padded = cid + "=".repeat((4 - (cid.length % 4)) % 4);
+    const decoded = Buffer.from(padded, "base64url").toString("utf8").trim();
+    return decoded.includes("@") ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveCalendarId() {
+  return (
+    String(process.env.GOOGLE_CALENDAR_ID || "").trim() ||
+    parseCalendarIdFromUrl(process.env.GOOGLE_CALENDAR_URL) ||
+    DEFAULT_GROUP_CALENDAR_ID
+  );
+}
 
 function hasCalendarConfig() {
   return !!(
     process.env.GOOGLE_CLIENT_ID &&
     process.env.GOOGLE_CLIENT_SECRET &&
     process.env.GOOGLE_REFRESH_TOKEN &&
-    process.env.GOOGLE_CALENDAR_ID
+    resolveCalendarId()
   );
 }
 
@@ -62,23 +88,24 @@ async function createJobEvent(lead) {
       return { ok: false, reason: 'calendar_not_configured' };
     }
     const calendar = getCalendarClient();
-    const calendarId = process.env.GOOGLE_CALENDAR_ID;
+    const calendarId = resolveCalendarId();
     const timing = parseTimingPref(lead.timing_pref);
     if (!timing) { console.error('[calendar] Could not parse timing_pref:', lead.timing_pref); return null; }
     const items = lead.item_list
       ? lead.item_list.split('\n').map(i => i.trim()).filter(Boolean).join(', ')
       : 'See photos';
+    const quoteDollars = lead.quote_amount || (lead.quote_total_cents ? Math.round(Number(lead.quote_total_cents) / 100) : null);
     const description = [
       `Phone: ${lead.from_phone}`,
-      `Address: ${lead.address || 'TBD'}`,
+      `Address: ${lead.address || lead.address_text || 'TBD'}`,
       `Load: ${lead.load_bucket || 'TBD'}`,
       `Items: ${items}`,
-      `Quote: $${lead.quote_amount || 'TBD'}`,
+      `Quote: $${quoteDollars || 'TBD'}`,
       `Window: ${lead.timing_pref}`,
-      `Job ID: ${lead.id}`
+      `Job ID: ${lead.id || lead.from_phone}`
     ].join('\n');
     const event = {
-      summary: `ICL Job — ${lead.address || lead.from_phone}`,
+      summary: `ICL Job — ${(lead.address || lead.address_text || lead.from_phone)}`,
       description,
       start: { dateTime: timing.start.toISOString(), timeZone: 'America/Los_Angeles' },
       end: { dateTime: timing.end.toISOString(), timeZone: 'America/Los_Angeles' },

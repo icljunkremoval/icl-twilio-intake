@@ -29,7 +29,6 @@ function makeConfirmationId(paymentId, orderId) {
 }
 
 function buildWindowPickerSms({ confirmationId, bookingLink }) {
-  const storiesUrl = String(process.env.CUSTOMER_STORIES_URL || "").trim();
   const lines = [
     "Deposit received ✅ You're officially confirmed.",
     "",
@@ -42,10 +41,6 @@ function buildWindowPickerSms({ confirmationId, bookingLink }) {
     "3) Paid → Scheduled → Removed → Complete",
     ""
   ];
-  if (storiesUrl) {
-    lines.push(`Stories + partners: ${storiesUrl}`);
-    lines.push("");
-  }
   lines.push("Prefer SMS scheduling? Reply with your arrival window:");
   lines.push("1) 8–10am");
   lines.push("2) 10am–12pm");

@@ -213,14 +213,6 @@ app.get("/booking/:token", async (req, res) => {
     const days = bookingDayOptions(7);
     const dayOptions = days.map((d) => `<option value="${escHtml(d.iso)}">${escHtml(d.label)}</option>`).join("");
     const windowOptions = BOOKING_WINDOWS.map((w) => `<option value="${escHtml(w)}">${escHtml(w)}</option>`).join("");
-    const stories = String(process.env.CUSTOMER_STORIES_URL || "").trim();
-    const partners = String(process.env.CUSTOMER_PARTNERS_URL || "").trim();
-    const storiesHtml = stories
-      ? `<p style="margin:10px 0 0;color:#475569">Partners & customer stories: <a href="${escHtml(stories)}" target="_blank">${escHtml(stories)}</a></p>`
-      : "";
-    const partnersHtml = partners
-      ? `<p style="margin:6px 0 0;color:#475569">Trusted partners: <a href="${escHtml(partners)}" target="_blank">${escHtml(partners)}</a></p>`
-      : "";
     const confirmation = paymentMeta?.confirmation_id
       ? `<div class="pill">Confirmation #: <strong>${escHtml(paymentMeta.confirmation_id)}</strong></div>`
       : "";
@@ -290,8 +282,6 @@ app.get("/booking/:token", async (req, res) => {
       </form>
       <div class="foot">
         <p class="small">Need help? Reply HELP to our text and we’ll assist.</p>
-        ${storiesHtml}
-        ${partnersHtml}
       </div>
     </div>
   </div>
