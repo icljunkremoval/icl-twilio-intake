@@ -17,17 +17,29 @@ const RECOVERY_MESSAGES = {
 };
 
 async function checkDropoffs() {
-  const cutoff = new Date(Date.now() - STALL_MINUTES * 60 * 1000).toISOString();
-
   const result = await pool.query(`
     SELECT from_phone, conv_state, address_text, last_seen_at
     FROM leads
-    WHERE last_seen_at < $1
+    WHERE COALESCE(
+            CASE
+              WHEN NULLIF(TRIM(last_seen_at), '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+                THEN NULLIF(TRIM(last_seen_at), '')::timestamptz
+              ELSE NULL
+            END,
+            NOW()
+          ) < NOW() - ($1::int * INTERVAL '1 minute')
       AND conv_state NOT IN ('AWAITING_DEPOSIT', 'DEPOSIT_PAID', 'BOOKING_SENT', 'WINDOW_SELECTED', 'ESCALATED', 'QUOTE_READY')
-      AND dropoff_alerted_at IS NULL
-    ORDER BY last_seen_at DESC
+      AND NULLIF(TRIM(dropoff_alerted_at), '') IS NULL
+    ORDER BY COALESCE(
+              CASE
+                WHEN NULLIF(TRIM(last_seen_at), '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+                  THEN NULLIF(TRIM(last_seen_at), '')::timestamptz
+                ELSE NULL
+              END,
+              NOW()
+            ) DESC
     LIMIT 20
-  `, [cutoff]);
+  `, [STALL_MINUTES]);
 
   const stalled = result.rows;
   if (stalled.length === 0) return;
@@ -35,8 +47,13 @@ async function checkDropoffs() {
   console.log(`[dropoff] ${stalled.length} stalled leads`);
 
   // Alert ops
+  const formatSeenTime = (v) => {
+    const d = new Date(v);
+    if (!Number.isFinite(d.getTime())) return String(v || "unknown");
+    return d.toLocaleTimeString();
+  };
   const summary = stalled.map(l =>
-    `${l.from_phone} — ${l.conv_state} — last seen ${new Date(l.last_seen_at).toLocaleTimeString()}`
+    `${l.from_phone} — ${l.conv_state} — last seen ${formatSeenTime(l.last_seen_at)}`
   ).join("\n");
 
   await sendSms(OPS_PHONE,
