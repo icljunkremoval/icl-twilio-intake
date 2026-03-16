@@ -149,7 +149,9 @@ async function loadJourneyEvents(phones) {
     "calendar_event_created",
     "calendar_event_skipped",
     "calendar_event_failed",
-    "booking_confirmation_sms_sent"
+    "booking_confirmation_sms_sent",
+    "booking_confirmation_sms_failed",
+    "sms_failed_window_picker"
   ];
   const rows = (
     await pool.query(
@@ -177,7 +179,9 @@ async function loadJourneyEvents(phones) {
     calendar_event_created: "Google Calendar synced",
     calendar_event_skipped: "Calendar sync skipped",
     calendar_event_failed: "Calendar sync failed",
-    booking_confirmation_sms_sent: "Booking SMS confirmed"
+    booking_confirmation_sms_sent: "Booking SMS confirmed",
+    booking_confirmation_sms_failed: "Booking SMS failed",
+    sms_failed_window_picker: "Post-pay SMS failed"
   };
 
   for (const r of rows) {

@@ -477,22 +477,37 @@ app.post("/api/booking/confirm", async (req, res) => {
     const paymentMeta = await latestPaymentMetaForPhone(parsed.phone);
     const confId = paymentMeta?.confirmation_id || null;
 
-    sendSms(
-      parsed.phone,
-      `You're booked ✅ ${timingPref}\n` +
-      (confId ? `Confirmation #${confId}\n` : "") +
-      `We'll text before arrival. Reply HELP anytime.`
-    ).catch(() => {});
-    insertEvent.run({
-      from_phone: parsed.phone,
-      event_type: "booking_confirmation_sms_sent",
-      payload_json: JSON.stringify({
-        source: "booking_link",
-        timing_pref: timingPref,
-        confirmation_id: confId
-      }),
-      created_at: new Date().toISOString()
-    });
+    try {
+      const sms = await sendSms(
+        parsed.phone,
+        `You're booked ✅ ${timingPref}\n` +
+        (confId ? `Confirmation #${confId}\n` : "") +
+        `We'll text before arrival. Reply HELP anytime.`
+      );
+      insertEvent.run({
+        from_phone: parsed.phone,
+        event_type: "booking_confirmation_sms_sent",
+        payload_json: JSON.stringify({
+          source: "booking_link",
+          timing_pref: timingPref,
+          confirmation_id: confId,
+          twilio: sms
+        }),
+        created_at: new Date().toISOString()
+      });
+    } catch (smsErr) {
+      insertEvent.run({
+        from_phone: parsed.phone,
+        event_type: "booking_confirmation_sms_failed",
+        payload_json: JSON.stringify({
+          source: "booking_link",
+          timing_pref: timingPref,
+          confirmation_id: confId,
+          error: String(smsErr?.message || smsErr)
+        }),
+        created_at: new Date().toISOString()
+      });
+    }
 
     return res.json({ ok: true, timing_pref: timingPref });
   } catch (e) {
