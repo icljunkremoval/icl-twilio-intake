@@ -43,7 +43,7 @@ function setState(from_phone, state) {
 }
 
 async function triggerQuote(from_phone) {
-  await sendSms(from_phone, "Got it — here's your upfront quote.");
+  await sendSms(from_phone, "Excellent — preparing your quote and checkout options now.");
   try { await recomputeDerived(from_phone); } catch (e) {}
   setTimeout(async () => { try { const r = await maybeCreateQuote(from_phone); if (!r.ok) logEvent(from_phone, "quote_trigger_failed", r); }
     catch (e) { logEvent(from_phone, "quote_trigger_error", { error: String(e.message || e) }); }
@@ -149,14 +149,58 @@ async function handleConversation(payload) {
         try { upsertLead.run({from_phone,to_phone,ts:new Date().toISOString(),last_event:"media_received",last_body:body,num_media:numMedia,media_url0:mediaUrl||null}); } catch(e){}
         logEvent(from_phone,"media_received",{numMedia,mediaUrl});
         setState(from_phone,STATES.AWAITING_HAZMAT);
-        pool.query('UPDATE leads SET has_media=1,last_seen_at=NOW() WHERE from_phone=$1', [from_phone]).catch(()=>{});
+        pool.query(
+          `UPDATE leads
+           SET has_media=1,
+               quote_ready=0,
+               quote_status=NULL,
+               square_payment_link_id=NULL,
+               square_payment_link_url=NULL,
+               square_order_id=NULL,
+               square_upfront_payment_link_id=NULL,
+               square_upfront_payment_link_url=NULL,
+               square_upfront_order_id=NULL,
+               quote_total_cents=NULL,
+               upfront_total_cents=NULL,
+               upfront_discount_pct=NULL,
+               deposit_paid=0,
+               deposit_paid_at=NULL,
+               timing_pref=NULL,
+               conv_state=$1,
+               last_seen_at=NOW()
+           WHERE from_phone=$2`,
+          [STATES.AWAITING_HAZMAT, from_phone]
+        ).catch(()=>{});
         if (allMediaUrls.length>0) runVisionAsync(from_phone, allMediaUrls[0], allMediaUrls);
         await sendSms(from_phone,"Got it — quick safety check: any paint, chemicals, fuel, batteries, asbestos, or medical waste in the mix?\n\nReply YES or NO");
       } else {
         setState(from_phone,STATES.AWAITING_MEDIA);
         backfillLatestMedia({from:from_phone,maxAgeSeconds:120}).then((b)=>{
           if (b&&b.mediaUrl0) {
-            pool.query('UPDATE leads SET has_media=1,num_media=$1,media_url0=$2,last_seen_at=NOW() WHERE from_phone=$3', [b.numMedia,b.mediaUrl0,from_phone]).catch(()=>{});
+            pool.query(
+              `UPDATE leads
+               SET has_media=1,
+                   num_media=$1,
+                   media_url0=$2,
+                   quote_ready=0,
+                   quote_status=NULL,
+                   square_payment_link_id=NULL,
+                   square_payment_link_url=NULL,
+                   square_order_id=NULL,
+                   square_upfront_payment_link_id=NULL,
+                   square_upfront_payment_link_url=NULL,
+                   square_upfront_order_id=NULL,
+                   quote_total_cents=NULL,
+                   upfront_total_cents=NULL,
+                   upfront_discount_pct=NULL,
+                   deposit_paid=0,
+                   deposit_paid_at=NULL,
+                   timing_pref=NULL,
+                   conv_state=$3,
+                   last_seen_at=NOW()
+               WHERE from_phone=$4`,
+              [b.numMedia, b.mediaUrl0, STATES.AWAITING_HAZMAT, from_phone]
+            ).catch(()=>{});
             setState(from_phone,STATES.AWAITING_HAZMAT);
             logEvent(from_phone,"media_backfill_hit",b);
             runVisionAsync(from_phone,b.mediaUrl0,[b.mediaUrl0]);
@@ -225,7 +269,31 @@ async function handleConversation(payload) {
     }
 
     case STATES.AWAITING_DEPOSIT: {
-      await sendSms(from_phone,"Your deposit link is waiting — place the $50 to lock your arrival window. Reply HELP if you need it resent.");
+      const needsResend = bodyUpper.includes("RESEND") || bodyUpper.includes("LINK") || bodyUpper.includes("PAY") || bodyUpper.includes("CHECKOUT");
+      if (needsResend) {
+        const cur = await getLead.get(from_phone);
+        const depositUrl = cur?.square_payment_link_url || null;
+        const upfrontUrl = cur?.square_upfront_payment_link_url || null;
+        const quoteTotal = Number(cur?.quote_total_cents || 0);
+        const upfrontTotal = Number(cur?.upfront_total_cents || 0);
+        const savings = quoteTotal > 0 && upfrontTotal > 0 ? Math.max(0, Math.round((quoteTotal - upfrontTotal) / 100)) : null;
+        const lines = ["Here are your checkout links again:"];
+        if (depositUrl) {
+          lines.push("");
+          lines.push("1) Reserve with $50 deposit:");
+          lines.push(depositUrl);
+        }
+        if (upfrontUrl) {
+          lines.push("");
+          lines.push(`2) Pay upfront and save 10%${savings != null ? ` ($${savings} off)` : ""}:`);
+          lines.push(upfrontUrl);
+        }
+        lines.push("");
+        lines.push("After payment, you'll get confirmation + your scheduling step.");
+        await sendSms(from_phone, lines.join("\n"));
+        break;
+      }
+      await sendSms(from_phone,"Your checkout links are ready. Reply RESEND to get both links again, or pay now to lock your scheduling step.");
       break;
     }
 

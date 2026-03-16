@@ -55,6 +55,35 @@ function buildWindowPickerSms({ confirmationId, bookingLink }) {
   return lines.join("\n");
 }
 
+function buildPostPaymentSms({ confirmationId, bookingLink, paymentKind }) {
+  const base = buildWindowPickerSms({ confirmationId, bookingLink });
+  if (paymentKind === "upfront") {
+    return base.replace(
+      "Deposit received ✅ You're officially confirmed.",
+      "Payment received ✅ You're officially confirmed."
+    );
+  }
+  return base;
+}
+
+async function findLeadByOrder(orderId) {
+  const byOrder = await pool.query(
+    `SELECT *,
+            CASE
+              WHEN square_upfront_order_id = $1 THEN 'upfront'
+              WHEN square_order_id = $1 THEN 'deposit'
+              ELSE 'unknown'
+            END AS payment_kind
+     FROM leads
+     WHERE square_order_id = $1
+        OR square_upfront_order_id = $1
+     ORDER BY last_seen_at DESC
+     LIMIT 1`,
+    [orderId]
+  );
+  return byOrder.rows[0] || null;
+}
+
 async function handleSquareWebhook(req, res) {
   try {
     const signature = req.headers["x-square-hmacsha256-signature"] || "";
@@ -102,12 +131,8 @@ async function handleSquareWebhook(req, res) {
       ""
     );
 
-    // Find lead by square_order_id
-    const result = await pool.query(
-      "SELECT * FROM leads WHERE square_order_id = $1",
-      [orderId]
-    );
-    const lead = result.rows[0];
+    // Find lead by deposit or upfront order id
+    const lead = await findLeadByOrder(orderId);
 
     if (!lead) {
       console.log("[square_webhook] no lead found for order_id:", orderId);
@@ -127,15 +152,17 @@ async function handleSquareWebhook(req, res) {
 
     const bookingLink = buildBookingLink(baseUrlFromReq(req), lead.from_phone);
     const confirmationId = makeConfirmationId(paymentId, orderId);
+    const paymentKind = String(lead.payment_kind || "deposit");
 
     try {
       insertEvent.run({
         from_phone: lead.from_phone,
-        event_type: "deposit_paid",
+        event_type: paymentKind === "upfront" ? "upfront_paid" : "deposit_paid",
         payload_json: JSON.stringify({
           order_id: orderId,
           payment_id: paymentId || null,
           event_type: eventType,
+          payment_kind: paymentKind,
           confirmation_id: confirmationId,
           booking_link: bookingLink
         }),
@@ -146,7 +173,7 @@ async function handleSquareWebhook(req, res) {
     // Send post-payment journey + booking guidance SMS
     const sms = await sendSms(
       lead.from_phone,
-      buildWindowPickerSms({ confirmationId, bookingLink })
+      buildPostPaymentSms({ confirmationId, bookingLink, paymentKind })
     );
     console.log("[square_webhook] window picker sent to:", lead.from_phone);
     sendCrewBrief(lead).catch(()=>{});

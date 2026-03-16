@@ -140,6 +140,33 @@ function bookingDayOptions(days = 7) {
   return out;
 }
 
+async function latestPaymentMetaForPhone(fromPhone) {
+  try {
+    const row = (
+      await pool.query(
+        `SELECT event_type, payload_json, created_at
+         FROM events
+         WHERE from_phone = $1
+           AND event_type IN ('deposit_paid', 'upfront_paid')
+         ORDER BY id DESC
+         LIMIT 1`,
+        [fromPhone]
+      )
+    ).rows[0];
+    if (!row) return null;
+    let payload = {};
+    try { payload = JSON.parse(row.payload_json || "{}"); } catch {}
+    return {
+      event_type: row.event_type,
+      confirmation_id: payload.confirmation_id || null,
+      booking_link: payload.booking_link || null,
+      created_at: row.created_at || null
+    };
+  } catch {
+    return null;
+  }
+}
+
 app.post("/square/webhook", handleSquareWebhook);
 // Ops reply handler — intercepts texts from business number
 app.post("/twilio/ops-reply", async (req, res) => {
@@ -182,12 +209,20 @@ app.get("/booking/:token", async (req, res) => {
     if (!parsed.ok) return res.status(400).send("Booking link expired. Reply to our SMS for a new link.");
     const lead = (await pool.query("SELECT * FROM leads WHERE from_phone = $1 LIMIT 1", [parsed.phone])).rows[0];
     if (!lead) return res.status(404).send("Lead not found.");
+    const paymentMeta = await latestPaymentMetaForPhone(parsed.phone);
     const days = bookingDayOptions(7);
     const dayOptions = days.map((d) => `<option value="${escHtml(d.iso)}">${escHtml(d.label)}</option>`).join("");
     const windowOptions = BOOKING_WINDOWS.map((w) => `<option value="${escHtml(w)}">${escHtml(w)}</option>`).join("");
     const stories = String(process.env.CUSTOMER_STORIES_URL || "").trim();
+    const partners = String(process.env.CUSTOMER_PARTNERS_URL || "").trim();
     const storiesHtml = stories
       ? `<p style="margin:10px 0 0;color:#475569">Partners & customer stories: <a href="${escHtml(stories)}" target="_blank">${escHtml(stories)}</a></p>`
+      : "";
+    const partnersHtml = partners
+      ? `<p style="margin:6px 0 0;color:#475569">Trusted partners: <a href="${escHtml(partners)}" target="_blank">${escHtml(partners)}</a></p>`
+      : "";
+    const confirmation = paymentMeta?.confirmation_id
+      ? `<div class="pill">Confirmation #: <strong>${escHtml(paymentMeta.confirmation_id)}</strong></div>`
       : "";
 
     res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -196,37 +231,69 @@ app.get("/booking/:token", async (req, res) => {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>ICL Scheduling</title>
+  <title>ICL Booking</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f8fafc;margin:0;padding:18px;color:#0f172a}
-    .card{max-width:640px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:20px}
-    h1{margin:0 0 10px;font-size:22px}
+    .card{max-width:720px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;box-shadow:0 8px 26px rgba(2,6,23,.08)}
+    .hero{background:linear-gradient(135deg,#0f766e,#134e4a);padding:18px 20px;color:#f0fdfa}
+    .brand{font-size:13px;opacity:.9;letter-spacing:.4px;text-transform:uppercase}
+    h1{margin:6px 0 4px;font-size:24px;line-height:1.2}
+    .hero p{margin:0;color:#ccfbf1}
+    .body{padding:18px 20px}
     p{margin:8px 0;color:#334155}
-    label{display:block;margin:12px 0 4px;font-size:13px;color:#334155}
-    select,button{width:100%;padding:11px;border-radius:8px;border:1px solid #cbd5e1;font-size:15px}
-    button{background:#0f766e;color:#fff;border:none;font-weight:600;cursor:pointer;margin-top:14px}
+    .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0 12px}
+    .st{font-size:11px;border:1px solid #cbd5e1;border-radius:999px;padding:6px 8px;text-align:center;background:#fff;color:#334155}
+    .st.on{background:#dcfce7;border-color:#16a34a;color:#166534;font-weight:700}
+    .st.next{background:#ecfeff;border-color:#22d3ee;color:#155e75;font-weight:600}
+    .pill{display:inline-block;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:999px;padding:5px 10px;font-size:12px;color:#334155;margin:6px 0}
+    .meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0 2px}
+    .meta .m{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;font-size:13px}
+    label{display:block;margin:12px 0 4px;font-size:13px;color:#334155;font-weight:600}
+    select,button{width:100%;padding:12px;border-radius:10px;border:1px solid #cbd5e1;font-size:15px}
+    button{background:#0f766e;color:#fff;border:none;font-weight:700;cursor:pointer;margin-top:14px}
     button:disabled{opacity:.6;cursor:not-allowed}
-    .ok{margin-top:12px;color:#065f46;font-weight:600}
-    .err{margin-top:12px;color:#b91c1c}
+    .ok{margin-top:12px;color:#065f46;font-weight:700}
+    .err{margin-top:12px;color:#b91c1c;font-weight:600}
+    .small{font-size:12px;color:#64748b}
+    .foot{margin-top:12px;padding-top:10px;border-top:1px solid #e2e8f0}
+    @media(max-width:720px){.steps{grid-template-columns:1fr 1fr}.meta{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>ICL Junk Removal — Pick Your Arrival Window</h1>
-    <p><strong>Phone:</strong> ${escHtml(parsed.phone)}</p>
-    <p><strong>Address:</strong> ${escHtml(lead.address_text || "On file")}</p>
-    <p>You should have your Square receipt now. Next step: choose your day + window below.</p>
-    <form id="book-form">
-      <input type="hidden" name="token" value="${escHtml(req.params.token)}" />
-      <label for="day_iso">Day</label>
-      <select id="day_iso" name="day_iso" required>${dayOptions}</select>
-      <label for="window">Arrival window</label>
-      <select id="window" name="window" required>${windowOptions}</select>
-      <button id="book-btn" type="submit">Confirm appointment</button>
-      <div id="book-msg"></div>
-    </form>
-    <p style="margin:12px 0 0;color:#475569">Journey: <strong>Paid → Scheduled → Removed → Complete</strong></p>
-    ${storiesHtml}
+    <div class="hero">
+      <div class="brand">ICL Junk Removal</div>
+      <h1>Choose Your Arrival Window</h1>
+      <p>You’re confirmed. This is the final step to lock your schedule.</p>
+    </div>
+    <div class="body">
+      ${confirmation}
+      <div class="steps">
+        <div class="st on">Paid</div>
+        <div class="st next">Schedule</div>
+        <div class="st">Removed</div>
+        <div class="st">Complete</div>
+      </div>
+      <div class="meta">
+        <div class="m"><strong>Phone</strong><br>${escHtml(parsed.phone)}</div>
+        <div class="m"><strong>Address</strong><br>${escHtml(lead.address_text || "On file")}</div>
+      </div>
+      <p class="small">You should have received your Square receipt. Pick a day + window below.</p>
+      <form id="book-form">
+        <input type="hidden" name="token" value="${escHtml(req.params.token)}" />
+        <label for="day_iso">Day</label>
+        <select id="day_iso" name="day_iso" required>${dayOptions}</select>
+        <label for="window">Arrival window</label>
+        <select id="window" name="window" required>${windowOptions}</select>
+        <button id="book-btn" type="submit">Confirm my appointment</button>
+        <div id="book-msg"></div>
+      </form>
+      <div class="foot">
+        <p class="small">Need help? Reply HELP to our text and we’ll assist.</p>
+        ${storiesHtml}
+        ${partnersHtml}
+      </div>
+    </div>
   </div>
   <script>
     const form=document.getElementById('book-form');
