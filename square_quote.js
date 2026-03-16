@@ -25,7 +25,6 @@ async function createSquarePaymentLink(lead, totalCents) {
       location_id: locationId
     },
     checkout_options: {
-      redirect_url: "https://icljunkremoval.com/thank-you",
       ask_for_shipping_address: false
     },
     pre_populated_data: {
@@ -33,6 +32,12 @@ async function createSquarePaymentLink(lead, totalCents) {
     },
     note: "Deposit for job. Total: $" + (totalCents / 100).toFixed(2) + " | Phone: " + lead.from_phone
   };
+
+  // Optional redirect. If omitted, Square keeps customer on its receipt/confirmation flow.
+  const redirectUrl = String(process.env.SQUARE_REDIRECT_URL || "").trim();
+  if (redirectUrl) {
+    body.checkout_options.redirect_url = redirectUrl;
+  }
 
   const res = await fetch(SQUARE_API_BASE + "/online-checkout/payment-links", {
     method: "POST",

@@ -4,6 +4,7 @@ const { pool, insertEvent } = require("./db");
 const { sendCrewBrief } = require("./crew_brief");
 const { processSalvage } = require("./salvage_pipeline");
 const { sendSms } = require("./twilio_sms");
+const { buildBookingLink } = require("./booking_link");
 
 const SQUARE_WEBHOOK_SIGNATURE_KEY = process.env.SQUARE_WEBHOOK_SIGNATURE_KEY || "";
 
@@ -15,8 +16,43 @@ function verifySquareSignature(body, signature, url) {
   return expected === signature;
 }
 
-function buildWindowPickerSms() {
-  return "Deposit received ✅ Your spot is locked in!\n\nReply with your arrival window:\n1) 8–10am\n2) 10am–12pm\n3) 12–2pm\n4) 2–4pm\n5) 4–6pm";
+function baseUrlFromReq(req) {
+  const envBase = String(process.env.APP_BASE_URL || "").trim();
+  if (envBase) return envBase.replace(/\/+$/, "");
+  return `https://${req.headers.host}`;
+}
+
+function makeConfirmationId(paymentId, orderId) {
+  const raw = String(paymentId || orderId || "").replace(/[^a-zA-Z0-9]/g, "");
+  const tail = raw.slice(-6) || String(Date.now()).slice(-6);
+  return "ICL-" + tail.toUpperCase();
+}
+
+function buildWindowPickerSms({ confirmationId, bookingLink }) {
+  const storiesUrl = String(process.env.CUSTOMER_STORIES_URL || "").trim();
+  const lines = [
+    "Deposit received ✅ You're officially confirmed.",
+    "",
+    "You should receive your Square receipt right away.",
+    `Confirmation #: ${confirmationId}`,
+    "",
+    "What happens next:",
+    `1) Pick your time here: ${bookingLink}`,
+    "2) We confirm by text",
+    "3) Paid → Scheduled → Removed → Complete",
+    ""
+  ];
+  if (storiesUrl) {
+    lines.push(`Stories + partners: ${storiesUrl}`);
+    lines.push("");
+  }
+  lines.push("Prefer SMS scheduling? Reply with your arrival window:");
+  lines.push("1) 8–10am");
+  lines.push("2) 10am–12pm");
+  lines.push("3) 12–2pm");
+  lines.push("4) 2–4pm");
+  lines.push("5) 4–6pm");
+  return lines.join("\n");
 }
 
 async function handleSquareWebhook(req, res) {
@@ -42,6 +78,7 @@ async function handleSquareWebhook(req, res) {
     // Extract order_id from event
     let orderId = null;
     const obj = event?.data?.object || {};
+    const payment = obj?.payment || obj || {};
     if (obj?.payment?.order_id) {
       orderId = obj.payment.order_id;
     } else if (obj?.order?.id) {
@@ -57,6 +94,13 @@ async function handleSquareWebhook(req, res) {
       console.log("[square_webhook] no order_id found");
       return res.status(200).send("ok");
     }
+
+    const paymentId = String(
+      payment?.id ||
+      obj?.payment_id ||
+      event?.data?.id ||
+      ""
+    );
 
     // Find lead by square_order_id
     const result = await pool.query(
@@ -81,17 +125,29 @@ async function handleSquareWebhook(req, res) {
       [lead.from_phone]
     );
 
+    const bookingLink = buildBookingLink(baseUrlFromReq(req), lead.from_phone);
+    const confirmationId = makeConfirmationId(paymentId, orderId);
+
     try {
       insertEvent.run({
         from_phone: lead.from_phone,
         event_type: "deposit_paid",
-        payload_json: JSON.stringify({ order_id: orderId, event_type: eventType }),
+        payload_json: JSON.stringify({
+          order_id: orderId,
+          payment_id: paymentId || null,
+          event_type: eventType,
+          confirmation_id: confirmationId,
+          booking_link: bookingLink
+        }),
         created_at: new Date().toISOString(),
       });
     } catch {}
 
-    // Send window picker SMS
-    const sms = await sendSms(lead.from_phone, buildWindowPickerSms());
+    // Send post-payment journey + booking guidance SMS
+    const sms = await sendSms(
+      lead.from_phone,
+      buildWindowPickerSms({ confirmationId, bookingLink })
+    );
     console.log("[square_webhook] window picker sent to:", lead.from_phone);
     sendCrewBrief(lead).catch(()=>{});
     processSalvage(lead).catch(()=>{});

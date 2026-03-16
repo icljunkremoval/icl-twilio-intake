@@ -8,6 +8,9 @@ const { handleWindowReply } = require("./window_reply");
 const { evaluateQuoteReadyRow } = require("./quote_gate");
 const { handleConversation } = require("./conversation");
 const { listWorldviewLeads } = require("./worldview_intel");
+const { parseBookingToken } = require("./booking_link");
+const { createJobEvent } = require("./calendar");
+const { sendSms } = require("./twilio_sms");
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
@@ -70,6 +73,7 @@ const BASE_DIR = path.join(process.env.HOME || ".", "secrets", "twilio-intake-lo
 const LEADS_DIR = path.join(BASE_DIR, "leads");
 fs.mkdirSync(BASE_DIR, { recursive: true });
 fs.mkdirSync(LEADS_DIR, { recursive: true });
+const BOOKING_WINDOWS = ["8-10am", "10-12pm", "12-2pm", "2-4pm", "4-6pm"];
 
 let baseGeo = null;
 
@@ -91,6 +95,49 @@ function upsertLeadFile(from, patch) {
   };
   fs.writeFileSync(fp, JSON.stringify(next, null, 2), { mode: 0o600 });
   return fp;
+}
+
+function escHtml(s) {
+  return String(s ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function toIsoDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function dayLabelFromIso(iso) {
+  const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const dt = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  if (!Number.isFinite(dt.getTime())) return null;
+  const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][dt.getUTCDay()];
+  const mon = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][dt.getUTCMonth()];
+  return `${dow} ${mon} ${dt.getUTCDate()}`;
+}
+
+function bookingDayOptions(days = 7) {
+  const now = new Date();
+  const out = [];
+  for (let i = 0; i < days; i++) {
+    const d = new Date(now);
+    d.setDate(now.getDate() + i);
+    const iso = toIsoDate(d);
+    const label = dayLabelFromIso(iso);
+    if (!label) continue;
+    out.push({ iso, label });
+  }
+  return out;
 }
 
 app.post("/square/webhook", handleSquareWebhook);
@@ -124,6 +171,150 @@ app.get("/api/worldview/lead/:from", async (req, res) => {
     const lead = leads.find((l) => String(l.phone) === from);
     if (!lead) return res.status(404).json({ ok: false, error: "not_found" });
     return res.json({ ok: true, lead, generated_at: new Date().toISOString() });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/booking/:token", async (req, res) => {
+  try {
+    const parsed = parseBookingToken(req.params.token, { maxAgeDays: 30 });
+    if (!parsed.ok) return res.status(400).send("Booking link expired. Reply to our SMS for a new link.");
+    const lead = (await pool.query("SELECT * FROM leads WHERE from_phone = $1 LIMIT 1", [parsed.phone])).rows[0];
+    if (!lead) return res.status(404).send("Lead not found.");
+    const days = bookingDayOptions(7);
+    const dayOptions = days.map((d) => `<option value="${escHtml(d.iso)}">${escHtml(d.label)}</option>`).join("");
+    const windowOptions = BOOKING_WINDOWS.map((w) => `<option value="${escHtml(w)}">${escHtml(w)}</option>`).join("");
+    const stories = String(process.env.CUSTOMER_STORIES_URL || "").trim();
+    const storiesHtml = stories
+      ? `<p style="margin:10px 0 0;color:#475569">Partners & customer stories: <a href="${escHtml(stories)}" target="_blank">${escHtml(stories)}</a></p>`
+      : "";
+
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    return res.end(`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ICL Scheduling</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f8fafc;margin:0;padding:18px;color:#0f172a}
+    .card{max-width:640px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:20px}
+    h1{margin:0 0 10px;font-size:22px}
+    p{margin:8px 0;color:#334155}
+    label{display:block;margin:12px 0 4px;font-size:13px;color:#334155}
+    select,button{width:100%;padding:11px;border-radius:8px;border:1px solid #cbd5e1;font-size:15px}
+    button{background:#0f766e;color:#fff;border:none;font-weight:600;cursor:pointer;margin-top:14px}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .ok{margin-top:12px;color:#065f46;font-weight:600}
+    .err{margin-top:12px;color:#b91c1c}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>ICL Junk Removal — Pick Your Arrival Window</h1>
+    <p><strong>Phone:</strong> ${escHtml(parsed.phone)}</p>
+    <p><strong>Address:</strong> ${escHtml(lead.address_text || "On file")}</p>
+    <p>You should have your Square receipt now. Next step: choose your day + window below.</p>
+    <form id="book-form">
+      <input type="hidden" name="token" value="${escHtml(req.params.token)}" />
+      <label for="day_iso">Day</label>
+      <select id="day_iso" name="day_iso" required>${dayOptions}</select>
+      <label for="window">Arrival window</label>
+      <select id="window" name="window" required>${windowOptions}</select>
+      <button id="book-btn" type="submit">Confirm appointment</button>
+      <div id="book-msg"></div>
+    </form>
+    <p style="margin:12px 0 0;color:#475569">Journey: <strong>Paid → Scheduled → Removed → Complete</strong></p>
+    ${storiesHtml}
+  </div>
+  <script>
+    const form=document.getElementById('book-form');
+    const msg=document.getElementById('book-msg');
+    const btn=document.getElementById('book-btn');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      msg.className=''; msg.textContent='';
+      btn.disabled=true;
+      try{
+        const payload={
+          token: form.token.value,
+          day_iso: form.day_iso.value,
+          window: form.window.value
+        };
+        const r=await fetch('/api/booking/confirm',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(payload)
+        });
+        const j=await r.json();
+        if(!j.ok){throw new Error(j.error||'Could not schedule');}
+        msg.className='ok';
+        msg.textContent='Booked! We also sent confirmation by SMS.';
+      }catch(err){
+        msg.className='err';
+        msg.textContent=String(err.message||err);
+      }finally{
+        btn.disabled=false;
+      }
+    });
+  </script>
+</body>
+</html>`);
+  } catch (e) {
+    return res.status(500).send(String(e?.message || e));
+  }
+});
+
+app.post("/api/booking/confirm", async (req, res) => {
+  try {
+    const token = String(req.body?.token || "").trim();
+    const dayIso = String(req.body?.day_iso || "").trim();
+    const window = String(req.body?.window || "").trim();
+    if (!token || !dayIso || !window) return res.status(400).json({ ok: false, error: "missing_fields" });
+    if (!BOOKING_WINDOWS.includes(window)) return res.status(400).json({ ok: false, error: "invalid_window" });
+
+    const parsed = parseBookingToken(token, { maxAgeDays: 30 });
+    if (!parsed.ok) return res.status(400).json({ ok: false, error: "expired_link" });
+
+    const dayLabel = dayLabelFromIso(dayIso);
+    if (!dayLabel) return res.status(400).json({ ok: false, error: "invalid_day" });
+    const timingPref = `${dayLabel}, ${window}`;
+
+    await pool.query(
+      `UPDATE leads
+       SET timing_pref = $1,
+           conv_state = 'WINDOW_SELECTED',
+           quote_status = 'WINDOW_SELECTED',
+           last_seen_at = NOW()
+       WHERE from_phone = $2`,
+      [timingPref, parsed.phone]
+    );
+
+    const lead = (await pool.query("SELECT * FROM leads WHERE from_phone = $1 LIMIT 1", [parsed.phone])).rows[0];
+    if (!lead) return res.status(404).json({ ok: false, error: "lead_not_found" });
+
+    insertEvent.run({
+      from_phone: parsed.phone,
+      event_type: "booking_link_scheduled",
+      payload_json: JSON.stringify({ timing_pref: timingPref, source: "booking_link" }),
+      created_at: new Date().toISOString()
+    });
+
+    // Mirror same appointment into Google Calendar when credentials exist.
+    createJobEvent({
+      ...lead,
+      address: lead.address_text || lead.address || "",
+      quote_amount: lead.quote_total_cents ? Math.round(Number(lead.quote_total_cents) / 100) : null,
+      id: lead.from_phone
+    }).catch(() => {});
+
+    sendSms(
+      parsed.phone,
+      `You're booked ✅ ${timingPref}\nWe'll text before arrival. Reply HELP anytime.`
+    ).catch(() => {});
+
+    return res.json({ ok: true, timing_pref: timingPref });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }

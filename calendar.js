@@ -11,9 +11,21 @@ function getCalendarClient() {
 }
 
 function parseTimingPref(timing_pref) {
-  const match = timing_pref.match(/(\w+ \w+ \d+),\s*(\d+)(am|pm)-(\d+)(am|pm)/i);
+  const match = String(timing_pref || "").match(/(\w+ \w+ \d+),\s*(\d+)(am|pm)?-(\d+)(am|pm)/i);
   if (!match) return null;
-  const [, dateStr, startHour, startAmPm, endHour, endAmPm] = match;
+  const [, dateStr, startHour, startAmPmRaw, endHour, endAmPmRaw] = match;
+  const endAmPm = String(endAmPmRaw || "").toLowerCase();
+  let startAmPm = String(startAmPmRaw || "").toLowerCase();
+  if (!startAmPm) {
+    const sh = parseInt(startHour, 10);
+    const eh = parseInt(endHour, 10);
+    if (endAmPm === "am") {
+      startAmPm = "am";
+    } else {
+      // Handles 10-12pm -> 10am start, while keeping 12-2pm / 2-4pm as PM starts.
+      startAmPm = (sh === 12 || eh !== 12) ? "pm" : "am";
+    }
+  }
   const year = new Date().getFullYear();
   const base = new Date(`${dateStr} ${year}`);
   function toHour24(h, ampm) {
