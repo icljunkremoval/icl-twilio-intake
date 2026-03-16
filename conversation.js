@@ -43,6 +43,31 @@ function setState(from_phone, state) {
   pool.query('UPDATE leads SET conv_state = $1, last_seen_at = NOW() WHERE from_phone = $2', [state, from_phone]).catch(e => console.error('[setState]', e.message));
 }
 
+function safeParseJson(v) {
+  try { return JSON.parse(String(v || "{}")); } catch { return {}; }
+}
+
+async function latestConfirmationId(from_phone) {
+  try {
+    const row = (
+      await pool.query(
+        `SELECT payload_json
+         FROM events
+         WHERE from_phone = $1
+           AND event_type IN ('deposit_paid', 'upfront_paid')
+         ORDER BY id DESC
+         LIMIT 1`,
+        [from_phone]
+      )
+    ).rows[0];
+    if (!row) return null;
+    const payload = safeParseJson(row.payload_json);
+    return payload.confirmation_id || null;
+  } catch {
+    return null;
+  }
+}
+
 async function triggerQuote(from_phone) {
   await sendSms(from_phone, "Excellent — preparing your quote and checkout options now.");
   try { await recomputeDerived(from_phone); } catch (e) {}
@@ -365,11 +390,67 @@ async function handleConversation(payload) {
       }
       const chosenDay = availDays[idx];
       const fullTiming = chosenDay + ", " + savedWindow;
-      await pool.query('UPDATE leads SET timing_pref=$1,conv_state=$2,last_seen_at=NOW() WHERE from_phone=$3', [fullTiming,STATES.WINDOW_SELECTED,from_phone]);
+      await pool.query(
+        'UPDATE leads SET timing_pref=$1,conv_state=$2,quote_status=$2,last_seen_at=NOW() WHERE from_phone=$3',
+        [fullTiming,STATES.WINDOW_SELECTED,from_phone]
+      );
       logEvent(from_phone,"day_selected",{timing_pref:fullTiming});
       const updatedLead = (await pool.query('SELECT * FROM leads WHERE from_phone=$1',[from_phone])).rows[0];
-      createJobEvent(updatedLead).catch(e=>console.error('[calendar] event error:',e));
-      await sendSms(from_phone, "Locked in! ✅ ICL Junk Removal arrives " + fullTiming + ".\n\nWe'll text you when we're on our way. Questions? Reply HELP anytime.");
+      let calendarResult = null;
+      try {
+        calendarResult = await createJobEvent(updatedLead);
+      } catch (e) {
+        console.error('[calendar] event error:', e);
+      }
+      if (calendarResult && calendarResult.id) {
+        await pool.query(
+          `UPDATE leads
+           SET calendar_event_id = $1,
+               calendar_event_url = $2,
+               calendar_sync_status = 'SYNCED',
+               calendar_synced_at = NOW(),
+               last_seen_at = NOW()
+           WHERE from_phone = $3`,
+          [calendarResult.id, calendarResult.htmlLink || null, from_phone]
+        );
+        logEvent(from_phone, "calendar_event_created", {
+          source: "sms_schedule",
+          calendar_event_id: calendarResult.id,
+          calendar_event_url: calendarResult.htmlLink || null
+        });
+      } else if (calendarResult && calendarResult.reason === "calendar_not_configured") {
+        await pool.query(
+          `UPDATE leads
+           SET calendar_sync_status = 'NOT_CONFIGURED',
+               calendar_synced_at = NOW(),
+               last_seen_at = NOW()
+           WHERE from_phone = $1`,
+          [from_phone]
+        );
+        logEvent(from_phone, "calendar_event_skipped", { source: "sms_schedule", reason: "calendar_not_configured" });
+      } else {
+        await pool.query(
+          `UPDATE leads
+           SET calendar_sync_status = 'FAILED',
+               calendar_synced_at = NOW(),
+               last_seen_at = NOW()
+           WHERE from_phone = $1`,
+          [from_phone]
+        );
+        logEvent(from_phone, "calendar_event_failed", { source: "sms_schedule" });
+      }
+      const confId = await latestConfirmationId(from_phone);
+      await sendSms(
+        from_phone,
+        "Locked in! ✅ ICL Junk Removal arrives " + fullTiming + ".\n" +
+        (confId ? ("Confirmation #" + confId + "\n") : "") +
+        "We'll text you when we're on our way. Questions? Reply HELP anytime."
+      );
+      logEvent(from_phone, "booking_confirmation_sms_sent", {
+        source: "sms_schedule",
+        timing_pref: fullTiming,
+        confirmation_id: confId || null
+      });
       break;
     }
 

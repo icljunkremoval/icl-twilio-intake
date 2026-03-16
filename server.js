@@ -359,17 +359,85 @@ app.post("/api/booking/confirm", async (req, res) => {
     });
 
     // Mirror same appointment into Google Calendar when credentials exist.
-    createJobEvent({
+    const calendarResult = await createJobEvent({
       ...lead,
       address: lead.address_text || lead.address || "",
       quote_amount: lead.quote_total_cents ? Math.round(Number(lead.quote_total_cents) / 100) : null,
       id: lead.from_phone
-    }).catch(() => {});
+    }).catch(() => null);
+
+    if (calendarResult && calendarResult.id) {
+      await pool.query(
+        `UPDATE leads
+         SET calendar_event_id = $1,
+             calendar_event_url = $2,
+             calendar_sync_status = 'SYNCED',
+             calendar_synced_at = NOW(),
+             last_seen_at = NOW()
+         WHERE from_phone = $3`,
+        [calendarResult.id, calendarResult.htmlLink || null, parsed.phone]
+      );
+      insertEvent.run({
+        from_phone: parsed.phone,
+        event_type: "calendar_event_created",
+        payload_json: JSON.stringify({
+          source: "booking_link",
+          calendar_event_id: calendarResult.id,
+          calendar_event_url: calendarResult.htmlLink || null
+        }),
+        created_at: new Date().toISOString()
+      });
+    } else if (calendarResult && calendarResult.reason === "calendar_not_configured") {
+      await pool.query(
+        `UPDATE leads
+         SET calendar_sync_status = 'NOT_CONFIGURED',
+             calendar_synced_at = NOW(),
+             last_seen_at = NOW()
+         WHERE from_phone = $1`,
+        [parsed.phone]
+      );
+      insertEvent.run({
+        from_phone: parsed.phone,
+        event_type: "calendar_event_skipped",
+        payload_json: JSON.stringify({ source: "booking_link", reason: "calendar_not_configured" }),
+        created_at: new Date().toISOString()
+      });
+    } else {
+      await pool.query(
+        `UPDATE leads
+         SET calendar_sync_status = 'FAILED',
+             calendar_synced_at = NOW(),
+             last_seen_at = NOW()
+         WHERE from_phone = $1`,
+        [parsed.phone]
+      );
+      insertEvent.run({
+        from_phone: parsed.phone,
+        event_type: "calendar_event_failed",
+        payload_json: JSON.stringify({ source: "booking_link" }),
+        created_at: new Date().toISOString()
+      });
+    }
+
+    const paymentMeta = await latestPaymentMetaForPhone(parsed.phone);
+    const confId = paymentMeta?.confirmation_id || null;
 
     sendSms(
       parsed.phone,
-      `You're booked ✅ ${timingPref}\nWe'll text before arrival. Reply HELP anytime.`
+      `You're booked ✅ ${timingPref}\n` +
+      (confId ? `Confirmation #${confId}\n` : "") +
+      `We'll text before arrival. Reply HELP anytime.`
     ).catch(() => {});
+    insertEvent.run({
+      from_phone: parsed.phone,
+      event_type: "booking_confirmation_sms_sent",
+      payload_json: JSON.stringify({
+        source: "booking_link",
+        timing_pref: timingPref,
+        confirmation_id: confId
+      }),
+      created_at: new Date().toISOString()
+    });
 
     return res.json({ ok: true, timing_pref: timingPref });
   } catch (e) {

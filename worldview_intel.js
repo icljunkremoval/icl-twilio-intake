@@ -67,6 +67,14 @@ function deriveRecommendedAction(lead, quoteCents) {
   return "Review lead details";
 }
 
+function deriveCalendarSyncStatus(lead) {
+  const s = String(lead?.calendar_sync_status || "").toUpperCase();
+  if (s === "SYNCED") return "SYNCED";
+  if (s === "NOT_CONFIGURED") return "NOT CONFIGURED";
+  if (s === "FAILED") return "FAILED";
+  return "PENDING";
+}
+
 function deriveVisionTopItems(lead) {
   const vision = parseJson(lead?.vision_analysis) || {};
   const items = Array.isArray(vision?.items) ? vision.items : [];
@@ -137,7 +145,11 @@ async function loadJourneyEvents(phones) {
     "window_selected",
     "job_completed",
     "sms_sent_quote_link",
-    "sms_sent_window_picker"
+    "sms_sent_window_picker",
+    "calendar_event_created",
+    "calendar_event_skipped",
+    "calendar_event_failed",
+    "booking_confirmation_sms_sent"
   ];
   const rows = (
     await pool.query(
@@ -161,7 +173,11 @@ async function loadJourneyEvents(phones) {
     window_selected: "Window selected",
     job_completed: "Job completed",
     sms_sent_quote_link: "Quote SMS sent",
-    sms_sent_window_picker: "Post-pay SMS sent"
+    sms_sent_window_picker: "Post-pay SMS sent",
+    calendar_event_created: "Google Calendar synced",
+    calendar_event_skipped: "Calendar sync skipped",
+    calendar_event_failed: "Calendar sync failed",
+    booking_confirmation_sms_sent: "Booking SMS confirmed"
   };
 
   for (const r of rows) {
@@ -275,6 +291,10 @@ async function listWorldviewLeads({ limit = 80 } = {}) {
          quote_total_cents,
          upfront_total_cents,
          upfront_discount_pct,
+         calendar_event_id,
+         calendar_event_url,
+         calendar_sync_status,
+         calendar_synced_at,
          salvage_est_value,
          salvage_actual_value,
          vision_analysis
@@ -382,7 +402,10 @@ async function listWorldviewLeads({ limit = 80 } = {}) {
         },
         ops: {
           next_action: deriveRecommendedAction(lead, quoteTotalCents),
-          timing_pref: lead.timing_pref || null
+          timing_pref: lead.timing_pref || null,
+          calendar_sync_status: deriveCalendarSyncStatus(lead),
+          calendar_event_url: lead.calendar_event_url || null,
+          calendar_event_id: lead.calendar_event_id || null
         },
         journey: {
           progress: journeyProgress,

@@ -555,6 +555,7 @@ function leadHoverHtml(phone){
       <div class="intel-label">Dump</div><div class="intel-value">${items.dump||0}</div>
       <div class="intel-label">Resale Value</div><div class="intel-value">${fCents(value.resale_low_cents)} - ${fCents(value.resale_high_cents)}</div>
       <div class="intel-label">Next Action</div><div class="intel-value">${esc(ops.next_action||'Review lead')}</div>
+      <div class="intel-label">Calendar</div><div class="intel-value">${esc(ops.calendar_sync_status||'PENDING')}</div>
     </div>
     ${top.length?`<div class="intel-top">Top items: ${top.map(esc).join(' · ')}</div>`:''}
   `;
@@ -569,6 +570,7 @@ function leadMapTooltipHtml(lead){
     <div><span class="th">Journey</span> <span class="tv">${progress}/6 complete</span></div>
     <div><span class="th">Quote</span> <span class="tv">${fCents(intel.quote_total_cents||lead?.quote_total_cents)}</span></div>
     <div><span class="th">Payment</span> <span class="tv">${esc(intel.payment_status||'—')}</span></div>
+    <div><span class="th">Calendar</span> <span class="tv">${esc(((intel.ops||{}).calendar_sync_status)||'PENDING')}</span></div>
     <div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--bd)">
       <span class="th">Next</span> <span class="tg">${esc((intel.ops||{}).next_action||'Review lead')}</span>
     </div>
@@ -601,6 +603,8 @@ function leadMapDetailHtml(lead){
       <div class="k">Resell / Scrap / Donate / Dump</div><div class="v">${items.resell||0} / ${items.scrap||0} / ${items.donate||0} / ${items.dump||0}</div>
       <div class="k">Resale Value</div><div class="v">${fCents(value.resale_low_cents)} - ${fCents(value.resale_high_cents)}</div>
       <div class="k">Next Action</div><div class="v">${esc(ops.next_action||'Review lead')}</div>
+      <div class="k">Calendar Sync</div><div class="v">${esc(ops.calendar_sync_status||'PENDING')}</div>
+      <div class="k">Calendar Link</div><div class="v">${ops.calendar_event_url?`<a href="${esc(ops.calendar_event_url)}" target="_blank" rel="noopener">Open event</a>`:'—'}</div>
     </div>
     <div class="intel-top">Journey: ${esc(stepLine)}</div>
     ${recent.length?`<div class="intel-top">Recent: ${recent.map(r=>esc(r.label||r.type||'')).join(' · ')}</div>`:''}
