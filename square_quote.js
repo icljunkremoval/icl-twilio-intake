@@ -44,9 +44,11 @@ async function createSquareQuickPayLink(lead, opts = {}) {
     note: String(opts.note || "").trim() || ("Phone: " + lead.from_phone)
   };
 
-  // Optional redirect. If omitted, Square keeps customer on its receipt/confirmation flow.
+  // Redirects are opt-in to avoid accidental 404s after payment.
+  // Set SQUARE_ENABLE_REDIRECT=1 to force redirect_url usage.
+  const redirectEnabled = String(process.env.SQUARE_ENABLE_REDIRECT || "").trim() === "1";
   const redirectUrl = String(process.env.SQUARE_REDIRECT_URL || "").trim();
-  if (redirectUrl) {
+  if (redirectEnabled && redirectUrl) {
     body.checkout_options.redirect_url = redirectUrl;
   }
 

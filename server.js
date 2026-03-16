@@ -44,6 +44,61 @@ async function geocodeOSM(q) {
 const app = express();
 app.use("/public", require("express").static(require("path").join(__dirname, "public")));
 app.use(express.json({ limit: "2mb" }))
+function paymentLandingHtml() {
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ICL Payment Confirmed</title>
+  <style>
+    body{margin:0;background:#f8fafc;color:#0f172a;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:18px}
+    .card{max-width:640px;margin:32px auto;background:#fff;border:1px solid #e2e8f0;border-radius:14px;box-shadow:0 8px 26px rgba(2,6,23,.08);overflow:hidden}
+    .hero{background:linear-gradient(135deg,#0f766e,#134e4a);color:#f0fdfa;padding:18px 20px}
+    .hero h1{margin:0 0 4px;font-size:24px}
+    .hero p{margin:0;color:#ccfbf1}
+    .body{padding:18px 20px}
+    .ok{display:inline-block;background:#dcfce7;border:1px solid #16a34a;color:#166534;border-radius:999px;padding:6px 10px;font-size:12px;font-weight:700}
+    .small{font-size:13px;color:#475569}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="hero">
+      <h1>Payment received ✅</h1>
+      <p>ICL Junk Removal</p>
+    </div>
+    <div class="body">
+      <div class="ok">Confirmed</div>
+      <p>Thanks — your payment went through.</p>
+      <p class="small">You’ll receive (or may have already received) a confirmation SMS with your scheduling step and confirmation number.</p>
+      <p class="small">If you don’t see the text within a minute, reply to our SMS thread and we’ll help right away.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+app.get("/", (_req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.status(200).end(paymentLandingHtml());
+});
+app.get("/thanks", (_req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.status(200).end(paymentLandingHtml());
+});
+app.get("/thank-you", (_req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.status(200).end(paymentLandingHtml());
+});
+app.get("/payment-success", (_req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.status(200).end(paymentLandingHtml());
+});
+app.get("/payment/confirmed", (_req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.status(200).end(paymentLandingHtml());
+});
 // Territory dashboard
 app.get('/dashboard', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
