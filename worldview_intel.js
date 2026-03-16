@@ -12,6 +12,18 @@ function parseJson(v) {
   try { return JSON.parse(String(v)); } catch { return null; }
 }
 
+function parseTs(v) {
+  if (!v) return null;
+  const d = new Date(v);
+  const t = d.getTime();
+  if (!Number.isFinite(t)) return null;
+  return d.toISOString();
+}
+
+function isDoneStep(ts) {
+  return !!parseTs(ts);
+}
+
 function centsToDollars(cents) {
   const n = asInt(cents);
   if (n == null) return null;
@@ -111,6 +123,76 @@ async function loadLatestPricingEvents(phones) {
   return out;
 }
 
+async function loadJourneyEvents(phones) {
+  const out = new Map();
+  if (!phones.length) return out;
+  const tracked = [
+    "inbound_raw",
+    "media_received",
+    "square_quote_created",
+    "deposit_paid",
+    "upfront_paid",
+    "booking_link_scheduled",
+    "day_selected",
+    "window_selected",
+    "job_completed",
+    "sms_sent_quote_link",
+    "sms_sent_window_picker"
+  ];
+  const rows = (
+    await pool.query(
+      `SELECT from_phone, event_type, payload_json, created_at, id
+       FROM events
+       WHERE from_phone = ANY($1)
+         AND event_type = ANY($2)
+       ORDER BY id DESC`,
+      [phones, tracked]
+    )
+  ).rows;
+
+  const labels = {
+    inbound_raw: "Lead contacted",
+    media_received: "Media received",
+    square_quote_created: "Quote created",
+    deposit_paid: "Deposit paid",
+    upfront_paid: "Paid upfront",
+    booking_link_scheduled: "Scheduled (booking link)",
+    day_selected: "Scheduled (SMS)",
+    window_selected: "Window selected",
+    job_completed: "Job completed",
+    sms_sent_quote_link: "Quote SMS sent",
+    sms_sent_window_picker: "Post-pay SMS sent"
+  };
+
+  for (const r of rows) {
+    const phone = String(r.from_phone || "");
+    if (!phone) continue;
+    let rec = out.get(phone);
+    if (!rec) {
+      rec = { latest: {}, recent: [], payment: null };
+      out.set(phone, rec);
+    }
+    const type = String(r.event_type || "");
+    if (!rec.latest[type]) rec.latest[type] = r;
+    if (rec.recent.length < 8) {
+      rec.recent.push({
+        type,
+        label: labels[type] || type,
+        at: parseTs(r.created_at)
+      });
+    }
+    if (!rec.payment && (type === "deposit_paid" || type === "upfront_paid")) {
+      const payload = parseJson(r.payload_json) || {};
+      rec.payment = {
+        kind: type === "upfront_paid" ? "upfront" : "deposit",
+        confirmation_id: payload.confirmation_id || null,
+        paid_at: parseTs(r.created_at)
+      };
+    }
+  }
+  return out;
+}
+
 async function loadJobItemAgg(phones) {
   const out = new Map();
   if (!phones.length) return out;
@@ -204,9 +286,10 @@ async function listWorldviewLeads({ limit = 80 } = {}) {
   ).rows;
 
   const phones = leads.map((l) => l.from_phone).filter(Boolean);
-  const [latestEventsByPhone, jobAggByPhone] = await Promise.all([
+  const [latestEventsByPhone, jobAggByPhone, journeyByPhone] = await Promise.all([
     loadLatestPricingEvents(phones),
-    loadJobItemAgg(phones)
+    loadJobItemAgg(phones),
+    loadJourneyEvents(phones)
   ]);
 
   return leads.map((lead) => {
@@ -215,6 +298,7 @@ async function listWorldviewLeads({ limit = 80 } = {}) {
     const upfrontTotalCents = asInt(lead.upfront_total_cents);
     const state = deriveState(lead);
     const paymentStatus = derivePaymentStatus(lead, quoteTotalCents);
+    const journeyRaw = journeyByPhone.get(phone) || { latest: {}, recent: [], payment: null };
 
     const jobAgg = jobAggByPhone.get(phone) || {
       counts: { RESELL: 0, SCRAP: 0, DONATE: 0, DUMP: 0 },
@@ -233,6 +317,33 @@ async function listWorldviewLeads({ limit = 80 } = {}) {
     const resaleLowCents = Math.max(jobAgg.resaleLowCents || 0, salvageEstCents || 0);
     const resaleHighCents = Math.max(jobAgg.resaleHighCents || 0, salvageEstCents || 0);
     const topItems = (jobAgg.topItems.length ? jobAgg.topItems : visionTop).slice(0, 3);
+    const stepContactedAt = parseTs(lead.first_seen_at || journeyRaw.latest.inbound_raw?.created_at || null);
+    const stepMediaAt = parseTs(journeyRaw.latest.media_received?.created_at || null);
+    const stepQuotedAt = parseTs(journeyRaw.latest.square_quote_created?.created_at || null);
+    const stepPaidAt = parseTs(
+      journeyRaw.latest.upfront_paid?.created_at ||
+      journeyRaw.latest.deposit_paid?.created_at ||
+      (Number(lead.deposit_paid) === 1 ? lead.deposit_paid_at : null)
+    );
+    const stepScheduledAt = parseTs(
+      journeyRaw.latest.booking_link_scheduled?.created_at ||
+      journeyRaw.latest.day_selected?.created_at ||
+      journeyRaw.latest.window_selected?.created_at ||
+      (lead.timing_pref ? lead.last_seen_at : null)
+    );
+    const stepRemovedAt = parseTs(
+      journeyRaw.latest.job_completed?.created_at ||
+      (String(lead.quote_status || "").toUpperCase() === "COMPLETED" ? lead.last_seen_at : null)
+    );
+    const journeySteps = [
+      { id: "contacted", label: "Contacted", done: isDoneStep(stepContactedAt), at: stepContactedAt },
+      { id: "media", label: "Media", done: isDoneStep(stepMediaAt), at: stepMediaAt },
+      { id: "quoted", label: "Quoted", done: isDoneStep(stepQuotedAt), at: stepQuotedAt },
+      { id: "paid", label: "Paid", done: isDoneStep(stepPaidAt), at: stepPaidAt },
+      { id: "scheduled", label: "Scheduled", done: isDoneStep(stepScheduledAt), at: stepScheduledAt },
+      { id: "removed", label: "Removed", done: isDoneStep(stepRemovedAt), at: stepRemovedAt }
+    ];
+    const journeyProgress = journeySteps.reduce((s, st) => s + (st.done ? 1 : 0), 0);
 
     return {
       phone,
@@ -253,6 +364,8 @@ async function listWorldviewLeads({ limit = 80 } = {}) {
         upfront_total_dollars: centsToDollars(upfrontTotalCents),
         upfront_discount_pct: asInt(lead.upfront_discount_pct),
         payment_status: paymentStatus,
+        confirmation_id: journeyRaw.payment?.confirmation_id || null,
+        payment_kind: journeyRaw.payment?.kind || null,
         items: {
           resell: resellCount,
           scrap: jobAgg.counts.SCRAP || 0,
@@ -270,6 +383,11 @@ async function listWorldviewLeads({ limit = 80 } = {}) {
         ops: {
           next_action: deriveRecommendedAction(lead, quoteTotalCents),
           timing_pref: lead.timing_pref || null
+        },
+        journey: {
+          progress: journeyProgress,
+          steps: journeySteps,
+          recent: journeyRaw.recent
         }
       }
     };

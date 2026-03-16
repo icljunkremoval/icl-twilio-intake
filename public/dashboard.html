@@ -539,11 +539,14 @@ function leadHoverHtml(phone){
   const items=intel.items||{};
   const value=intel.value||{};
   const ops=intel.ops||{};
+  const journey=intel.journey||{};
   const top=Array.isArray(items.top)?items.top.filter(Boolean).slice(0,3):[];
+  const progress=Number(journey.progress||0);
   return `
     <h4>${fPhone(phone)}</h4>
     <div class="intel-grid">
       <div class="intel-label">Stage</div><div class="intel-value">${esc(stateLabel(intel.state||'NEW'))}</div>
+      <div class="intel-label">Journey</div><div class="intel-value">${progress}/6 complete</div>
       <div class="intel-label">Quote Given</div><div class="intel-value">${fCents(intel.quote_total_cents)}</div>
       <div class="intel-label">Payment</div><div class="intel-value">${esc(intel.payment_status||'—')}</div>
       <div class="intel-label">Resale</div><div class="intel-value">${items.resell||0}</div>
@@ -559,9 +562,11 @@ function leadHoverHtml(phone){
 function leadMapTooltipHtml(lead){
   const phone=String(lead?.phone||'');
   const intel=LEAD_INTEL[phone]||lead?.hover||{};
+  const progress=Number((intel.journey||{}).progress||0);
   return `
     <h4>${fPhone(phone)}</h4>
     <div><span class="th">Stage</span> <span class="tv">${esc(stateLabel(intel.state||lead?.state||'NEW'))}</span></div>
+    <div><span class="th">Journey</span> <span class="tv">${progress}/6 complete</span></div>
     <div><span class="th">Quote</span> <span class="tv">${fCents(intel.quote_total_cents||lead?.quote_total_cents)}</span></div>
     <div><span class="th">Payment</span> <span class="tv">${esc(intel.payment_status||'—')}</span></div>
     <div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--bd)">
@@ -575,20 +580,30 @@ function leadMapDetailHtml(lead){
   const items=intel.items||{};
   const value=intel.value||{};
   const ops=intel.ops||{};
+  const journey=intel.journey||{};
   const top=Array.isArray(items.top)?items.top.filter(Boolean).slice(0,3):[];
+  const steps=Array.isArray(journey.steps)?journey.steps:[];
+  const stepLine=steps.length
+    ? steps.map(s=>`${s.done?'✓':'○'} ${s.label}`).join(' · ')
+    : '○ Contacted · ○ Media · ○ Quoted · ○ Paid · ○ Scheduled · ○ Removed';
+  const recent=Array.isArray(journey.recent)?journey.recent.slice(0,3):[];
   return `<div class="ttl">Lead Detail</div>
     <div class="ph">${fPhone(phone)}</div>
     <div class="rows">
       <div class="k">Stage</div><div class="v">${esc(stateLabel(intel.state||lead?.state||'NEW'))}</div>
+      <div class="k">Journey</div><div class="v">${Number(journey.progress||0)}/6</div>
       <div class="k">Address</div><div class="v">${esc(lead?.address||'No address')}</div>
       <div class="k">ZIP</div><div class="v">${esc(lead?.zip||'—')}</div>
       <div class="k">Quote Given</div><div class="v">${fCents(intel.quote_total_cents||lead?.quote_total_cents)}</div>
       <div class="k">Upfront</div><div class="v">${fCents(intel.upfront_total_cents)}</div>
       <div class="k">Payment</div><div class="v">${esc(intel.payment_status||'—')}</div>
+      <div class="k">Confirmation #</div><div class="v">${esc(intel.confirmation_id||'—')}</div>
       <div class="k">Resell / Scrap / Donate / Dump</div><div class="v">${items.resell||0} / ${items.scrap||0} / ${items.donate||0} / ${items.dump||0}</div>
       <div class="k">Resale Value</div><div class="v">${fCents(value.resale_low_cents)} - ${fCents(value.resale_high_cents)}</div>
       <div class="k">Next Action</div><div class="v">${esc(ops.next_action||'Review lead')}</div>
     </div>
+    <div class="intel-top">Journey: ${esc(stepLine)}</div>
+    ${recent.length?`<div class="intel-top">Recent: ${recent.map(r=>esc(r.label||r.type||'')).join(' · ')}</div>`:''}
     ${top.length?`<div class="intel-top">Top items: ${top.map(esc).join(' · ')}</div>`:''}`;
 }
 function renderMapLeadPanel(){
@@ -1128,15 +1143,24 @@ function renderMap(metric){
 function showTooltip(e,zip){
   const tt=document.getElementById('map-tt');
   const d=CD&&CD[zip]?CD[zip]:{name:zip};
-  tt.innerHTML=`<h4>${zip} · ${d.name||''}</h4>
-    <div><span class="th">Median Income</span> <span class="tv">${f$(d.income)}</span></div>
-    <div><span class="th">Home Value</span> <span class="tv">${f$(d.homeValue)}</span></div>
-    <div><span class="th">Owner-Occ.</span> <span class="tv">${fPct(d.ownerPct)}</span></div>
-    <div><span class="th">65+ Pop.</span> <span class="tv">${fPct(d.pct65)}</span></div>
-    <div><span class="th">Households</span> <span class="tv">${d.households?Number(d.households).toLocaleString():'—'}</span></div>
-    <div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--bd)">
-      <span class="th">Est. ICL Rev / yr</span> <span class="tg">${f$(d.estRevenue)}</span>
-    </div>`;
+  if(curLayer==='none'){
+    tt.innerHTML=`<h4>${zip} · ${d.name||''}</h4>
+      <div><span class="th">Mode</span> <span class="tv">Territory + Leads only</span></div>
+      <div><span class="th">Households</span> <span class="tv">${d.households?Number(d.households).toLocaleString():'—'}</span></div>
+      <div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--bd)">
+        <span class="th">Tip</span> <span class="tg">Use “Color by” to opt into demographics.</span>
+      </div>`;
+  } else {
+    tt.innerHTML=`<h4>${zip} · ${d.name||''}</h4>
+      <div><span class="th">Median Income</span> <span class="tv">${f$(d.income)}</span></div>
+      <div><span class="th">Home Value</span> <span class="tv">${f$(d.homeValue)}</span></div>
+      <div><span class="th">Owner-Occ.</span> <span class="tv">${fPct(d.ownerPct)}</span></div>
+      <div><span class="th">65+ Pop.</span> <span class="tv">${fPct(d.pct65)}</span></div>
+      <div><span class="th">Households</span> <span class="tv">${d.households?Number(d.households).toLocaleString():'—'}</span></div>
+      <div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--bd)">
+        <span class="th">Est. ICL Rev / yr</span> <span class="tg">${f$(d.estRevenue)}</span>
+      </div>`;
+  }
   tt.style.display='block';
   moveTooltip(e);
 }

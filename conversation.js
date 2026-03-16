@@ -6,6 +6,7 @@ const { analyzeJobMedia, analyzeAllMedia } = require("./vision_analyzer");
 const { backfillLatestMedia } = require("./twilio_media_backfill");
 const { recomputeDerived } = require("./recompute");
 const { createJobEvent } = require("./calendar");
+const APP_BASE_URL = String(process.env.APP_BASE_URL || "https://icl-twilio-intake-production.up.railway.app").replace(/\/+$/, "");
 
 const STATES = {
   NEW: "NEW", AWAITING_MEDIA: "AWAITING_MEDIA", AWAITING_HAZMAT: "AWAITING_HAZMAT",
@@ -212,7 +213,7 @@ async function handleConversation(payload) {
                 ? "Hey! You just called us — glad you reached out. Go ahead and send up to 10 photos of what needs to go — different angles help us give you the most accurate quote. 📦\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote."
                 : "Hi! Thanks for texting ICL Junk Removal.\n\nSend us up to 10 photos of what you need removed — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.";
               sendSms(from_phone, msg).then(() => {
-              sendSms(from_phone, "Save our contact card: https://icl-twilio-intake-production.up.railway.app/contact.vcf").catch(()=>{});
+              sendSms(from_phone, "Save our contact card: " + APP_BASE_URL + "/contact.vcf").catch(()=>{});
             }).catch(()=>{});
             }).catch(()=>{ sendSms(from_phone,"Hi! Thanks for texting ICL Junk Removal.\n\nSend us up to 10 photos of what you need removed — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.").catch(()=>{}); });
           }
@@ -241,7 +242,7 @@ async function handleConversation(payload) {
       const zipMatch=body.match(/\b(\d{5})\b/); const zip=zipMatch?zipMatch[1]:null;
       await pool.query('UPDATE leads SET address_text=$1,zip=$2,zip_text=$2,last_seen_at=NOW() WHERE from_phone=$3', [body,zip,from_phone]);
       logEvent(from_phone,"address_capture",{address:body,zip});
-      await sendSms(from_phone, "Got it — " + body + " confirmed. Hang tight while we build your quote.");
+      await sendSms(from_phone, "Excellent — we have " + body + " confirmed. We're preparing your quote now.");
       await advanceAfterAddress(from_phone);
       break;
     }
