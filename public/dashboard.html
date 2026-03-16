@@ -213,6 +213,8 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 .lead-panel .rows{display:grid;grid-template-columns:1fr auto;gap:4px 8px}
 .lead-panel .k{color:var(--tx3);font-size:9px}
 .lead-panel .v{color:var(--tx);font-size:9px;text-align:right}
+.map-ctrl-g{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.map-ctrl-sep{width:1px;height:18px;background:var(--bd2)}
 </style>
 </head>
 <body>
@@ -339,12 +341,33 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
       <span class="tag tag-acs">Census ACS 2023 · svg rendering</span>
     </div>
     <div class="map-ctrl">
-      <span class="mc-lbl">Color by:</span>
-      <button class="mc on" onclick="setLayer('income',this)">Median Income</button>
-      <button class="mc" onclick="setLayer('homevalue',this)">Home Value</button>
-      <button class="mc" onclick="setLayer('owner',this)">Owner-Occupancy</button>
-      <button class="mc" onclick="setLayer('seniors',this)">65+ Population</button>
-      <button class="mc" onclick="setLayer('revenue',this)">Est. ICL Revenue</button>
+      <div class="map-ctrl-g">
+        <span class="mc-lbl">Color by:</span>
+        <button class="mc mc-metric on" onclick="setLayer('income',this)">Median Income</button>
+        <button class="mc mc-metric" onclick="setLayer('homevalue',this)">Home Value</button>
+        <button class="mc mc-metric" onclick="setLayer('owner',this)">Owner-Occupancy</button>
+        <button class="mc mc-metric" onclick="setLayer('seniors',this)">65+ Population</button>
+        <button class="mc mc-metric" onclick="setLayer('revenue',this)">Est. ICL Revenue</button>
+      </div>
+      <div class="map-ctrl-sep"></div>
+      <div class="map-ctrl-g">
+        <span class="mc-lbl">Stage:</span>
+        <button class="mc mc-stage on" onclick="setLeadStageFilter('all',this)">All</button>
+        <button class="mc mc-stage" onclick="setLeadStageFilter('new',this)">New</button>
+        <button class="mc mc-stage" onclick="setLeadStageFilter('media',this)">Media</button>
+        <button class="mc mc-stage" onclick="setLeadStageFilter('quoted',this)">Quoted</button>
+        <button class="mc mc-stage" onclick="setLeadStageFilter('deposit',this)">Deposit</button>
+        <button class="mc mc-stage" onclick="setLeadStageFilter('booked',this)">Booked</button>
+      </div>
+      <div class="map-ctrl-sep"></div>
+      <div class="map-ctrl-g">
+        <span class="mc-lbl">Value:</span>
+        <button class="mc mc-value on" onclick="setLeadValueFilter('all',this)">All</button>
+        <button class="mc mc-value" onclick="setLeadValueFilter('high_quote',this)">Quote $600+</button>
+        <button class="mc mc-value" onclick="setLeadValueFilter('resale',this)">Has resale</button>
+      </div>
+      <div class="map-ctrl-sep"></div>
+      <span class="mc-lbl" id="map-lead-filter-stats">Clients: 0</span>
     </div>
     <div class="cb0" id="map-svg-wrap" style="position:relative;background:#0d1422;min-height:520px">
       <div class="map-tooltip" id="map-tt"></div>
@@ -353,6 +376,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
     <div class="cb" style="border-top:1px solid var(--bd);padding:14px 16px">
       <div style="display:flex;gap:24px;align-items:start;flex-wrap:wrap">
         <div id="map-legend" class="map-legend"></div>
+        <div id="map-lead-legend" class="map-legend"></div>
         <div style="flex:1;min-width:200px">
           <div style="font-size:9px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Key Venues</div>
           <div class="dr"><span class="dl">🏟 SoFi Stadium</span><span class="dv b">2.1 mi · Opening Ceremony</span></div>
@@ -816,9 +840,20 @@ function getColor(val,metric){
 let curLayer='income';
 let hoveredZip=null;
 let mapSelectedLeadPhone=null;
+let mapLeadStageFilter='all';
+let mapLeadValueFilter='all';
 
 function getLeadByPhone(phone){
   return (WORLDVIEW_LEADS||[]).find(l=>String(l.phone||'')===String(phone||''))||null;
+}
+function leadStateGroup(state){
+  const u=String(state||'').toUpperCase();
+  if(u==='NEW') return 'new';
+  if(u.includes('MEDIA')||u.includes('HAZMAT')||u.includes('ADDRESS')||u.includes('ACCESS')||u.includes('LOAD')) return 'media';
+  if(u.includes('QUOTE')) return 'quoted';
+  if(u.includes('DEPOSIT')) return 'deposit';
+  if(u.includes('DAY')||u.includes('WINDOW')||u.includes('BOOKING')||u.includes('COMPLETED')) return 'booked';
+  return 'other';
 }
 function stateDotColor(state){
   const u=String(state||'').toUpperCase();
@@ -848,6 +883,64 @@ function leadMapPoint(lead){
   const ang=((h%360)*Math.PI)/180;
   const rad=4+((h>>3)%16);
   return [base[0]+Math.cos(ang)*rad,base[1]+Math.sin(ang)*rad];
+}
+function leadQuoteCents(lead){
+  return Number((lead?.hover||{}).quote_total_cents||lead?.quote_total_cents||0)||0;
+}
+function leadResaleHighCents(lead){
+  return Number((((lead?.hover||{}).value||{}).resale_high_cents)||0)||0;
+}
+function leadPaymentStatus(lead){
+  return String(((lead?.hover||{}).payment_status)||'').toUpperCase();
+}
+function leadDotRadius(lead){
+  const q=leadQuoteCents(lead);
+  if(q>=100000) return 8.1;
+  if(q>=70000) return 7.3;
+  if(q>=40000) return 6.5;
+  if(q>=20000) return 5.7;
+  return 4.9;
+}
+function leadRingColor(lead){
+  const p=leadPaymentStatus(lead);
+  if(p.includes('PAID')) return '#10b981';
+  if(p.includes('AWAITING')||p.includes('QUOTE SENT')) return '#f59e0b';
+  if(p.includes('PENDING')) return '#64748b';
+  return '#475569';
+}
+function leadPassesFilters(lead){
+  const stage=leadStateGroup(lead?.state);
+  if(mapLeadStageFilter!=='all'&&stage!==mapLeadStageFilter) return false;
+  if(mapLeadValueFilter==='high_quote'&&leadQuoteCents(lead)<60000) return false;
+  if(mapLeadValueFilter==='resale'&&leadResaleHighCents(lead)<=0) return false;
+  return true;
+}
+function setLeadStageFilter(kind,btn){
+  mapLeadStageFilter=String(kind||'all');
+  document.querySelectorAll('.mc-stage').forEach(b=>b.classList.remove('on'));
+  if(btn)btn.classList.add('on');
+  if(mapBuilt)renderMap(curLayer);
+}
+function setLeadValueFilter(kind,btn){
+  mapLeadValueFilter=String(kind||'all');
+  document.querySelectorAll('.mc-value').forEach(b=>b.classList.remove('on'));
+  if(btn)btn.classList.add('on');
+  if(mapBuilt)renderMap(curLayer);
+}
+function renderLeadFilterStats(visible,total){
+  const el=document.getElementById('map-lead-filter-stats');
+  if(!el)return;
+  el.textContent=`Clients: ${visible}/${total}`;
+}
+function renderLeadDensityLegend(){
+  const el=document.getElementById('map-lead-legend');
+  if(!el)return;
+  el.innerHTML=`
+    <div style="font-size:8px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:7px">Lead Density Encoding</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#3b82f6"></div>Fill color = lead stage</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#0b1020;border:2px solid #10b981"></div>Outer ring = payment status</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#94a3b8"></div>Dot size = quote amount</div>
+  `;
 }
 
 function buildMap(){
@@ -909,23 +1002,32 @@ function renderMap(metric){
     html+=`<text x="${vx+11}" y="${vy+4}" fill="#f59e0b" font-size="8" font-family="DM Mono,monospace">${note}</text>`;
   });
 
+  const allLeads=(WORLDVIEW_LEADS||[]);
+  const visibleLeads=allLeads.filter(leadPassesFilters).slice(0,220);
+  if(mapSelectedLeadPhone){
+    const selectedVisible=visibleLeads.some(l=>String(l.phone||'')===String(mapSelectedLeadPhone));
+    if(!selectedVisible)mapSelectedLeadPhone=null;
+  }
+
   // Lead markers (click/hover for client intelligence)
-  (WORLDVIEW_LEADS||[]).slice(0,220).forEach((lead)=>{
+  visibleLeads.forEach((lead)=>{
     if(!lead||!lead.phone)return;
     const [lx,ly]=leadMapPoint(lead);
-    const fill=stateDotColor(lead.state);
+    const fill=stateDotColor(lead?.state);
+    const ring=leadRingColor(lead);
+    const baseR=leadDotRadius(lead);
     const selected=String(mapSelectedLeadPhone||'')===String(lead.phone||'');
-    html+=`<circle
+    const coreR = selected ? baseR + 0.9 : baseR;
+    const ringR = coreR + 1.45;
+    html+=`<g
       data-lead-phone="${esc(lead.phone)}"
-      cx="${Math.round(lx*10)/10}"
-      cy="${Math.round(ly*10)/10}"
-      r="${selected?6.6:4.8}"
-      fill="${fill}"
-      fill-opacity="0.92"
-      stroke="${selected?'#ffffff':'#0b1020'}"
-      stroke-width="${selected?'1.9':'1.1'}"
+      data-base-r="${baseR}"
+      data-selected="${selected?'1':'0'}"
       style="cursor:pointer"
-    />`;
+    >
+      <circle data-role="ring" cx="${Math.round(lx*10)/10}" cy="${Math.round(ly*10)/10}" r="${Math.round(ringR*10)/10}" fill="none" stroke="${ring}" stroke-opacity="0.95" stroke-width="${selected?'1.9':'1.35'}"/>
+      <circle data-role="core" cx="${Math.round(lx*10)/10}" cy="${Math.round(ly*10)/10}" r="${Math.round(coreR*10)/10}" fill="${fill}" fill-opacity="0.94" stroke="${selected?'#ffffff':'#0b1020'}" stroke-width="${selected?'1.9':'1.1'}"/>
+    </g>`;
   });
 
   svg.innerHTML=html;
@@ -950,22 +1052,28 @@ function renderMap(metric){
   });
 
   // Hover/click events on lead markers
-  svg.querySelectorAll('circle[data-lead-phone]').forEach(marker=>{
+  svg.querySelectorAll('g[data-lead-phone]').forEach(marker=>{
     const phone=marker.dataset.leadPhone;
+    const core=marker.querySelector('circle[data-role="core"]');
+    const ring=marker.querySelector('circle[data-role="ring"]');
+    const base=Number(marker.dataset.baseR||4.9);
+    const selected=marker.dataset.selected==='1';
     marker.addEventListener('mouseenter',e=>{
       showLeadMapHoverTooltip(e,phone);
-      if(String(mapSelectedLeadPhone||'')!==String(phone)){
-        marker.setAttribute('r','6');
-        marker.setAttribute('stroke','#ffffff');
-        marker.setAttribute('stroke-width','1.6');
+      if(!selected&&core&&ring){
+        core.setAttribute('r',String(Math.round((base+0.8)*10)/10));
+        core.setAttribute('stroke','#ffffff');
+        core.setAttribute('stroke-width','1.5');
+        ring.setAttribute('r',String(Math.round((base+2.2)*10)/10));
       }
     });
     marker.addEventListener('mousemove',e=>moveTooltip(e));
     marker.addEventListener('mouseleave',()=>{
-      if(String(mapSelectedLeadPhone||'')!==String(phone)){
-        marker.setAttribute('r','4.8');
-        marker.setAttribute('stroke','#0b1020');
-        marker.setAttribute('stroke-width','1.1');
+      if(!selected&&core&&ring){
+        core.setAttribute('r',String(Math.round(base*10)/10));
+        core.setAttribute('stroke','#0b1020');
+        core.setAttribute('stroke-width','1.1');
+        ring.setAttribute('r',String(Math.round((base+1.45)*10)/10));
       }
       hideTooltip();
     });
@@ -981,7 +1089,7 @@ function renderMap(metric){
 
   // Click map background to clear selected lead
   svg.onclick=(e)=>{
-    const phone=e?.target?.dataset?.leadPhone;
+    const phone=e?.target?.dataset?.leadPhone||e?.target?.parentNode?.dataset?.leadPhone;
     if(phone)return;
     mapSelectedLeadPhone=null;
     renderMapLeadPanel();
@@ -991,6 +1099,8 @@ function renderMap(metric){
 
   renderLegend(metric);
   renderMapLeadPanel();
+  renderLeadFilterStats(visibleLeads.length,allLeads.length);
+  renderLeadDensityLegend();
 }
 
 function showTooltip(e,zip){
@@ -1034,7 +1144,7 @@ function updateMap(metric){
   if(mapBuilt)renderMap(metric);
 }
 function setLayer(metric,btn){
-  document.querySelectorAll('.mc').forEach(b=>b.classList.remove('on'));
+  document.querySelectorAll('.mc-metric').forEach(b=>b.classList.remove('on'));
   btn.classList.add('on');
   curLayer=metric;
   if(mapBuilt)renderMap(metric);
