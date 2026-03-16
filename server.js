@@ -19,6 +19,18 @@ const { db, pool, upsertLead, insertEvent, getLead } = require("./db");
 const fetch = (...args) => import("node-fetch").then(({default: f}) => f(...args));
 
 const BASE_LOCATION = "506 E Brett St, Inglewood, CA 90301";
+const BASE_COORD = { lat: 33.9776848, lng: -118.3523303 };
+const ZIP_CENTROIDS = {
+  "90008": { lat: 34.011, lng: -118.336 },
+  "90043": { lat: 33.985, lng: -118.343 },
+  "90016": { lat: 34.03, lng: -118.352 },
+  "90056": { lat: 33.989, lng: -118.372 },
+  "90301": { lat: 33.956, lng: -118.401 },
+  "90302": { lat: 33.977, lng: -118.355 },
+  "90047": { lat: 33.956, lng: -118.311 },
+  "90044": { lat: 33.954, lng: -118.29 }
+};
+const LEAD_GEO_CACHE = new Map();
 const DASHBOARD_DUMPSITES_FALLBACK = [
   {
     id: "south_gate_lacsd",
@@ -143,6 +155,97 @@ async function geocodeOSM(q) {
   const j = await r.json();
   if (!Array.isArray(j) || j.length === 0) return null;
   return { lat: Number(j[0].lat), lon: Number(j[0].lon), display: j[0].display_name };
+}
+
+function toIsoMaybe(v) {
+  if (!v) return null;
+  const d = new Date(v);
+  const t = d.getTime();
+  if (!Number.isFinite(t)) return null;
+  return d.toISOString();
+}
+
+function toMinAgeSince(tsIso) {
+  const ts = tsIso ? new Date(tsIso).getTime() : NaN;
+  if (!Number.isFinite(ts)) return 0;
+  return Math.max(0, Math.floor((Date.now() - ts) / 60000));
+}
+
+function leadState(lead) {
+  return String(lead?.conv_state || lead?.quote_status || "NEW");
+}
+
+function flowBucketFromState(state) {
+  const u = String(state || "").toUpperCase();
+  if (u.includes("WINDOW") || u.includes("DAY") || u.includes("BOOKING") || u.includes("COMPLETED")) return "booked";
+  if (u.includes("DEPOSIT")) return "deposit";
+  if (u.includes("QUOTE")) return "quoted";
+  if (u.includes("MEDIA")) return "media";
+  return "new";
+}
+
+function stageFromLead(lead) {
+  if (Number(lead?.deposit_paid) === 1) return "green";
+  const flow = flowBucketFromState(leadState(lead));
+  if (flow === "quoted" || flow === "deposit" || flow === "booked") return "yellow";
+  return "red";
+}
+
+function stageLabel(stage) {
+  if (stage === "green") return "Completed / review";
+  if (stage === "yellow") return "Deposit paid";
+  return "Lead (pre-deposit)";
+}
+
+function riskFromInactivity(minutes) {
+  if (minutes >= 120) return "high";
+  if (minutes >= 45) return "medium";
+  return "low";
+}
+
+function extractZipFromLead(lead) {
+  const z1 = String(lead?.zip || "").trim();
+  if (/^\d{5}$/.test(z1)) return z1;
+  const z2 = String(lead?.zip_text || "").trim();
+  if (/^\d{5}$/.test(z2)) return z2;
+  const addr = String(lead?.address_text || "").trim();
+  const m = addr.match(/\b(\d{5})(?:-\d{4})?\b/);
+  return m ? m[1] : "";
+}
+
+function cachedLeadGeo(cacheKey) {
+  const rec = LEAD_GEO_CACHE.get(cacheKey);
+  if (!rec) return null;
+  if (!Number.isFinite(Number(rec.lat)) || !Number.isFinite(Number(rec.lng))) return null;
+  return { lat: Number(rec.lat), lng: Number(rec.lng), source: String(rec.source || "cache") };
+}
+
+async function resolveLeadCoordinates(lead, { allowGeocode = true } = {}) {
+  const phone = String(lead?.from_phone || lead?.phone || "");
+  const address = String(lead?.address_text || "").trim();
+  const zip = extractZipFromLead(lead);
+  const cacheKey = `${phone}|${address}|${zip}`;
+  const fromCache = cachedLeadGeo(cacheKey);
+  if (fromCache) return fromCache;
+
+  if (allowGeocode && address.length >= 6) {
+    try {
+      const q = `${address}${zip ? ` ${zip}` : ""} Los Angeles CA`;
+      const geo = await geocodeOSM(q);
+      if (geo && Number.isFinite(geo.lat) && Number.isFinite(geo.lon)) {
+        const out = { lat: Number(geo.lat), lng: Number(geo.lon), source: "osm" };
+        LEAD_GEO_CACHE.set(cacheKey, out);
+        return out;
+      }
+    } catch {}
+  }
+
+  if (zip && ZIP_CENTROIDS[zip]) {
+    const out = { lat: ZIP_CENTROIDS[zip].lat, lng: ZIP_CENTROIDS[zip].lng, source: "zip_fallback" };
+    LEAD_GEO_CACHE.set(cacheKey, out);
+    return out;
+  }
+  return null;
 }
 
 function isFutureIso(raw) {
@@ -397,6 +500,177 @@ app.get("/api/worldview/lead/:from", async (req, res) => {
     const lead = leads.find((l) => String(l.phone) === from);
     if (!lead) return res.status(404).json({ ok: false, error: "not_found" });
     return res.json({ ok: true, lead, generated_at: new Date().toISOString() });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/dashboard/leads", async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit || 120) || 120));
+    const geocodeBudget = Math.max(0, Math.min(20, Number(req.query.geocode_budget || 6) || 6));
+
+    const rows = (
+      await pool.query(
+        `SELECT
+           from_phone,
+           first_seen_at,
+           last_seen_at,
+           address_text,
+           zip,
+           zip_text,
+           load_bucket,
+           quote_status,
+           conv_state,
+           deposit_paid,
+           timing_pref,
+           quote_total_cents,
+           has_media,
+           num_media
+         FROM leads
+         ORDER BY last_seen_at DESC NULLS LAST
+         LIMIT $1`,
+        [limit]
+      )
+    ).rows;
+
+    const phones = rows.map((r) => String(r.from_phone || "")).filter(Boolean);
+    const actionCounts = new Map();
+    if (phones.length) {
+      try {
+        const tracked = ["next_action_sent", "sla_nudge_sent", "dropoff_recovery_sent"];
+        const evRows = (
+          await pool.query(
+            `SELECT from_phone, COUNT(*)::int AS cnt
+             FROM events
+             WHERE from_phone = ANY($1)
+               AND event_type = ANY($2)
+             GROUP BY from_phone`,
+            [phones, tracked]
+          )
+        ).rows;
+        for (const r of evRows) actionCounts.set(String(r.from_phone || ""), Number(r.cnt || 0));
+      } catch {}
+    }
+
+    const leads = rows.map((r) => {
+      const phone = String(r.from_phone || "");
+      const state = leadState(r);
+      return {
+        phone,
+        from_phone: phone,
+        state,
+        created_at: toIsoMaybe(r.first_seen_at || r.last_seen_at) || new Date().toISOString(),
+        last_seen_at: r.last_seen_at || null,
+        address: String(r.address_text || ""),
+        zip: extractZipFromLead(r),
+        load_bucket: r.load_bucket || null,
+        quote_status: r.quote_status || null,
+        deposit_paid: Number(r.deposit_paid) === 1,
+        settled_revenue_cents: null,
+        total_cost_cents: null,
+        margin_cents: null,
+        margin_pct: null,
+        next_action_sent_count: Number(actionCounts.get(phone) || 0)
+      };
+    });
+
+    const pins = [];
+    for (let i = 0; i < rows.length; i++) {
+      const raw = rows[i];
+      const lead = leads[i];
+      const coords = await resolveLeadCoordinates(raw, { allowGeocode: i < geocodeBudget });
+      if (!coords) continue;
+      const distance = haversineMiles(BASE_COORD.lat, BASE_COORD.lng, Number(coords.lat), Number(coords.lng));
+      const inactivityMinutes = toMinAgeSince(toIsoMaybe(raw.last_seen_at || raw.first_seen_at) || null);
+      const risk = riskFromInactivity(inactivityMinutes);
+      const stage = stageFromLead(raw);
+      const stageWeight = stage === "red" ? 90 : stage === "yellow" ? 60 : 30;
+      const riskWeight = risk === "high" ? 30 : risk === "medium" ? 15 : 0;
+      const priorityScore = stageWeight + riskWeight + Math.min(120, Math.floor(inactivityMinutes / 5));
+      pins.push({
+        phone: lead.phone,
+        address: lead.address,
+        zip: lead.zip,
+        lat: Number(coords.lat),
+        lng: Number(coords.lng),
+        stage,
+        stage_label: stageLabel(stage),
+        conv_state: raw.conv_state || null,
+        quote_status: raw.quote_status || null,
+        source: coords.source,
+        eta_minutes_est: Math.max(5, Math.round(distance * 4)),
+        distance_miles_to_base: Math.round(distance * 10) / 10,
+        inactivity_minutes: inactivityMinutes,
+        risk,
+        priority_score: priorityScore
+      });
+    }
+
+    pins.sort((a, b) => Number(b.priority_score || 0) - Number(a.priority_score || 0));
+    const routeSuggestion = [];
+    for (let i = 0; i < Math.min(6, pins.length); i++) {
+      const p = pins[i];
+      const prev = i === 0 ? BASE_COORD : { lat: pins[i - 1].lat, lng: pins[i - 1].lng };
+      const legMiles = haversineMiles(prev.lat, prev.lng, Number(p.lat), Number(p.lng));
+      routeSuggestion.push({
+        stop: i + 1,
+        phone: p.phone,
+        stage: p.stage,
+        stage_label: p.stage_label,
+        risk: p.risk,
+        eta_minutes_est: p.eta_minutes_est,
+        leg_miles: Math.round(legMiles * 10) / 10,
+        address: p.address,
+        conv_state: p.conv_state,
+        traffic_model: "haversine"
+      });
+    }
+
+    const stageCounts = { red: 0, yellow: 0, green: 0 };
+    const riskCounts = { high: 0, medium: 0, low: 0 };
+    let etaSum = 0;
+    for (const p of pins) {
+      if (stageCounts[p.stage] != null) stageCounts[p.stage] += 1;
+      if (riskCounts[p.risk] != null) riskCounts[p.risk] += 1;
+      etaSum += Number(p.eta_minutes_est || 0);
+    }
+    const paidCount = leads.filter((l) => l.deposit_paid).length;
+    const now = new Date();
+    const y = now.getUTCFullYear();
+    const m = now.getUTCMonth();
+    const d = now.getUTCDate();
+    const bookedToday = rows.filter((r) => {
+      if (!String(r.timing_pref || "").trim()) return false;
+      const ts = new Date(r.last_seen_at || r.first_seen_at || 0);
+      return ts.getUTCFullYear() === y && ts.getUTCMonth() === m && ts.getUTCDate() === d;
+    }).length;
+    const slaRedCount = pins.filter((p) => Number(p.inactivity_minutes || 0) >= 120 && p.stage !== "green").length;
+    const nextActionsSentTotal = leads.reduce((s, l) => s + Number(l.next_action_sent_count || 0), 0);
+
+    return res.json({
+      ok: true,
+      leads,
+      pins,
+      route_suggestion: routeSuggestion,
+      meta: {
+        total: leads.length,
+        pins: pins.length,
+        stage_counts: stageCounts,
+        risk_counts: riskCounts,
+        avg_eta_min: pins.length ? Math.round(etaSum / pins.length) : 0,
+        booked_today: bookedToday,
+        deposit_rate: leads.length ? Math.round((paidCount / leads.length) * 100) : 0,
+        avg_revenue_job: null,
+        avg_margin_job: null,
+        margin_truth_jobs: 0,
+        square_connected: !!(process.env.SQUARE_ACCESS_TOKEN && process.env.SQUARE_LOCATION_ID),
+        sla_red_count: slaRedCount,
+        next_actions_sent_total: nextActionsSentTotal,
+        eta_mode: "haversine",
+        generated_at: new Date().toISOString()
+      }
+    });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
