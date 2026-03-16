@@ -106,18 +106,22 @@ async function handleSquareWebhook(req, res) {
     }
 
     const event = req.body;
+    const obj = event?.data?.object || {};
+    const payment = obj?.payment || obj || {};
     const eventType = event?.type || "";
+    const paymentStatus = String(payment?.status || obj?.payment?.status || "").toUpperCase();
 
     console.log("[square_webhook] event:", eventType, JSON.stringify(event?.data?.object).substring(0, 300));
 
-    if (eventType !== "payment.completed") {
+    const shouldHandlePayment =
+      eventType === "payment.completed" ||
+      (eventType === "payment.updated" && paymentStatus === "COMPLETED");
+    if (!shouldHandlePayment) {
       return res.status(200).send("ok");
     }
 
     // Extract order_id from event
     let orderId = null;
-    const obj = event?.data?.object || {};
-    const payment = obj?.payment || obj || {};
     if (obj?.payment?.order_id) {
       orderId = obj.payment.order_id;
     } else if (obj?.order?.id) {
