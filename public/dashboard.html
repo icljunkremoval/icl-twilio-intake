@@ -468,6 +468,7 @@ function esc(s){return String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt
 
 // ── LEADS ─────────────────────────────────────────────────────────────────────
 let LEAD_INTEL={};
+let WORLDVIEW_LEADS=[];
 function stateCls(s){
   const u=(s||'').toUpperCase();
   if(u==='NEW')return'sn';
@@ -509,6 +510,26 @@ function leadHoverHtml(phone){
       <div class="intel-label">Dump</div><div class="intel-value">${items.dump||0}</div>
       <div class="intel-label">Resale Value</div><div class="intel-value">${fCents(value.resale_low_cents)} - ${fCents(value.resale_high_cents)}</div>
       <div class="intel-label">Next Action</div><div class="intel-value">${esc(ops.next_action||'Review lead')}</div>
+    </div>
+    ${top.length?`<div class="intel-top">Top items: ${top.map(esc).join(' · ')}</div>`:''}
+  `;
+}
+function leadMapTooltipHtml(lead){
+  const phone=String(lead?.phone||'');
+  const intel=LEAD_INTEL[phone]||lead?.hover||{};
+  const items=intel.items||{};
+  const value=intel.value||{};
+  const ops=intel.ops||{};
+  const top=Array.isArray(items.top)?items.top.filter(Boolean).slice(0,3):[];
+  return `
+    <h4>${fPhone(phone)} · ${esc(stateLabel(intel.state||lead?.state||'NEW'))}</h4>
+    <div><span class="th">Address</span> <span class="tv">${esc(lead?.address||'No address')}</span></div>
+    <div><span class="th">Quote Given</span> <span class="tv">${fCents(intel.quote_total_cents||lead?.quote_total_cents)}</span></div>
+    <div><span class="th">Payment</span> <span class="tv">${esc(intel.payment_status||'—')}</span></div>
+    <div><span class="th">Buckets</span> <span class="tv">Resell ${items.resell||0} · Scrap ${items.scrap||0} · Donate ${items.donate||0} · Dump ${items.dump||0}</span></div>
+    <div><span class="th">Resale Value</span> <span class="tv">${fCents(value.resale_low_cents)} - ${fCents(value.resale_high_cents)}</span></div>
+    <div style="margin-top:7px;padding-top:7px;border-top:1px solid var(--bd)">
+      <span class="th">Next Action</span> <span class="tg">${esc(ops.next_action||'Review lead')}</span>
     </div>
     ${top.length?`<div class="intel-top">Top items: ${top.map(esc).join(' · ')}</div>`:''}
   `;
@@ -561,6 +582,7 @@ async function fetchLeads(){
     if(!r.ok)throw new Error(r.status);
     const raw=await r.json();
     const leads=Array.isArray(raw)?raw:(raw.leads||raw.data||[]);
+    WORLDVIEW_LEADS=leads;
     LEAD_INTEL={};
     leads.forEach(l=>{if(l&&l.phone&&l.hover)LEAD_INTEL[l.phone]=l.hover;});
     const today=new Date().toDateString();
@@ -577,11 +599,14 @@ async function fetchLeads(){
     setPipe(leads);
     document.getElementById('leads-mini').innerHTML=leads.slice(0,5).map(leadHtml).join('');
     document.getElementById('leads-full').innerHTML=leads.map(leadHtml).join('')||'<div style="padding:8px;font-size:10px;color:var(--tx3)">No leads yet.</div>';
+    if(mapBuilt)renderMap(curLayer);
   }catch(e){
     LEAD_INTEL={};
+    WORLDVIEW_LEADS=[];
     ['kpi-tot','kpi-q','kpi-bk','kpi-rev'].forEach(id=>document.getElementById(id).textContent='—');
     const fb=`<div style="padding:14px;background:var(--bg3);border-radius:5px;text-align:center;font-size:10px;color:var(--tx3)">Lead feed unavailable right now.</div>`;
     ['leads-mini','leads-full'].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML=fb;});
+    if(mapBuilt)renderMap(curLayer);
   }
 }
 
@@ -750,6 +775,40 @@ function getColor(val,metric){
 
 let curLayer='income';
 let hoveredZip=null;
+let mapPinnedLeadPhone=null;
+
+function getLeadByPhone(phone){
+  return (WORLDVIEW_LEADS||[]).find(l=>String(l.phone||'')===String(phone||''))||null;
+}
+function stateDotColor(state){
+  const u=String(state||'').toUpperCase();
+  if(u.includes('DAY')||u.includes('WINDOW')||u.includes('BOOKING')||u.includes('DEPOSIT_PAID')) return '#10b981';
+  if(u.includes('QUOTE')||u.includes('DEPOSIT')) return '#f59e0b';
+  if(u.includes('ESCALATED')) return '#ef4444';
+  if(u.includes('MEDIA')||u.includes('ADDRESS')||u.includes('ACCESS')||u.includes('LOAD')) return '#3b82f6';
+  return '#94a3b8';
+}
+function hashPhone(v){
+  const s=String(v||'');
+  let h=0;
+  for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;
+  return h;
+}
+function zoneCenter(zip){
+  const z=ZONES[String(zip||'')];
+  if(!z)return null;
+  const cx=z.coords.reduce((s,[ln])=>s+ln,0)/z.coords.length;
+  const cy=z.coords.reduce((s,[,la])=>s+la,0)/z.coords.length;
+  return project(cx,cy);
+}
+function leadMapPoint(lead){
+  const zip=String(lead?.zip||'').trim();
+  const base=zoneCenter(zip)||zoneCenter('90043')||[400,260];
+  const h=hashPhone(lead?.phone||'x');
+  const ang=((h%360)*Math.PI)/180;
+  const rad=4+((h>>3)%16);
+  return [base[0]+Math.cos(ang)*rad,base[1]+Math.sin(ang)*rad];
+}
 
 function buildMap(){
   mapBuilt=true;
@@ -761,7 +820,7 @@ function renderMap(metric){
   const svg=document.getElementById('map-svg');
 
   // Background
-  let html=`<rect width="800" height="520" fill="#0d1422"/>`;
+  let html=`<rect id="map-bg" width="800" height="520" fill="#0d1422"/>`;
 
   // Grid lines
   for(let i=1;i<5;i++){
@@ -809,19 +868,39 @@ function renderMap(metric){
     html+=`<text x="${vx+11}" y="${vy+4}" fill="#f59e0b" font-size="8" font-family="DM Mono,monospace">${note}</text>`;
   });
 
+  // Lead markers (click/hover for client intelligence)
+  (WORLDVIEW_LEADS||[]).slice(0,220).forEach((lead)=>{
+    if(!lead||!lead.phone)return;
+    const [lx,ly]=leadMapPoint(lead);
+    const fill=stateDotColor(lead.state);
+    html+=`<circle
+      data-lead-phone="${esc(lead.phone)}"
+      cx="${Math.round(lx*10)/10}"
+      cy="${Math.round(ly*10)/10}"
+      r="4.8"
+      fill="${fill}"
+      fill-opacity="0.92"
+      stroke="#0b1020"
+      stroke-width="1.1"
+      style="cursor:pointer"
+    />`;
+  });
+
   svg.innerHTML=html;
 
   // Hover events on polygons
   svg.querySelectorAll('polygon[data-zip]').forEach(poly=>{
     poly.addEventListener('mouseenter',e=>{
+      if(mapPinnedLeadPhone)return;
       hoveredZip=poly.dataset.zip;
       showTooltip(e,poly.dataset.zip);
       poly.setAttribute('fill-opacity','0.95');
       poly.setAttribute('stroke','#fff');
       poly.setAttribute('stroke-width','2.5');
     });
-    poly.addEventListener('mousemove',e=>moveTooltip(e));
+    poly.addEventListener('mousemove',e=>{if(!mapPinnedLeadPhone)moveTooltip(e);});
     poly.addEventListener('mouseleave',()=>{
+      if(mapPinnedLeadPhone)return;
       hoveredZip=null;
       hideTooltip();
       poly.setAttribute('fill-opacity','0.78');
@@ -830,10 +909,47 @@ function renderMap(metric){
     });
   });
 
+  // Hover/click events on lead markers
+  svg.querySelectorAll('circle[data-lead-phone]').forEach(marker=>{
+    const phone=marker.dataset.leadPhone;
+    marker.addEventListener('mouseenter',e=>{
+      if(mapPinnedLeadPhone&&mapPinnedLeadPhone!==phone)return;
+      showLeadMapTooltip(e,phone);
+      marker.setAttribute('r','6');
+      marker.setAttribute('stroke','#ffffff');
+      marker.setAttribute('stroke-width','1.6');
+    });
+    marker.addEventListener('mousemove',e=>{
+      if(!mapPinnedLeadPhone||mapPinnedLeadPhone===phone)moveTooltip(e);
+    });
+    marker.addEventListener('mouseleave',()=>{
+      marker.setAttribute('r','4.8');
+      marker.setAttribute('stroke','#0b1020');
+      marker.setAttribute('stroke-width','1.1');
+      if(!mapPinnedLeadPhone)hideTooltip();
+    });
+    marker.addEventListener('click',e=>{
+      e.preventDefault();
+      e.stopPropagation();
+      mapPinnedLeadPhone = mapPinnedLeadPhone===phone ? null : phone;
+      if(mapPinnedLeadPhone)showLeadMapTooltip(e,phone);
+      else hideTooltip();
+    });
+  });
+
+  // Click map background to clear pinned lead tooltip
+  svg.onclick=(e)=>{
+    const phone=e?.target?.dataset?.leadPhone;
+    if(phone)return;
+    mapPinnedLeadPhone=null;
+    hideTooltip();
+  };
+
   renderLegend(metric);
 }
 
 function showTooltip(e,zip){
+  if(mapPinnedLeadPhone)return;
   const tt=document.getElementById('map-tt');
   const d=CD&&CD[zip]?CD[zip]:{name:zip};
   tt.innerHTML=`<h4>${zip} · ${d.name||''}</h4>
@@ -848,13 +964,23 @@ function showTooltip(e,zip){
   tt.style.display='block';
   moveTooltip(e);
 }
+function showLeadMapTooltip(e,phone){
+  const lead=getLeadByPhone(phone);
+  if(!lead)return;
+  const tt=document.getElementById('map-tt');
+  tt.innerHTML=leadMapTooltipHtml(lead);
+  tt.style.display='block';
+  moveTooltip(e);
+}
 function moveTooltip(e){
   const wrap=document.getElementById('map-svg-wrap');
   const rect=wrap.getBoundingClientRect();
   const tt=document.getElementById('map-tt');
   let x=e.clientX-rect.left+12, y=e.clientY-rect.top+12;
-  if(x+220>rect.width)x-=240;
-  if(y+220>rect.height)y-=230;
+  const tw=tt.offsetWidth||220;
+  const th=tt.offsetHeight||220;
+  if(x+tw+12>rect.width)x=rect.width-tw-12;
+  if(y+th+12>rect.height)y=rect.height-th-12;
   tt.style.left=x+'px';tt.style.top=y+'px';
 }
 function hideTooltip(){document.getElementById('map-tt').style.display='none';}
