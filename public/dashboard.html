@@ -458,12 +458,12 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
           <button class="mc mc-layer" onclick="setLayer('homevalue',this)">Home Value</button>
           <button class="mc mc-layer" onclick="setLayer('owner',this)">Owner%</button>
           <button class="mc mc-layer" onclick="setLayer('seniors',this)">65+%</button>
-          <button class="mc on" id="neighborhoods-toggle" onclick="toggleNeighborhoods(this)">Neighborhoods</button>
+          <button class="mc" id="neighborhoods-toggle" onclick="toggleNeighborhoods(this)">Neighborhoods</button>
         </div>
         <div class="map-ctrl-g">
           <span class="mc-lbl">Map tools</span>
           <button class="mc on" id="territory-toggle" onclick="toggleTerritoryEdge(this)">Territory Edge</button>
-          <button class="mc on" id="signals-toggle" onclick="toggleSignals(this)">Signals</button>
+          <button class="mc" id="signals-toggle" onclick="toggleSignals(this)">Signals</button>
           <button class="mc on" id="legend-toggle" onclick="toggleMapLegend(this)">Legend</button>
           <button class="mc" onclick="fitToTerritory()">Fit Territory</button>
           <button class="mc map-fullscreen-toggle" onclick="toggleMapFullscreen()">Fullscreen</button>
@@ -474,14 +474,14 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
         </div>
         <div class="map-ctrl-g" style="grid-column:1/-1">
           <span class="mc-lbl">Key venues</span>
-          <button class="mc on" id="venues-toggle" onclick="toggleVenues(this)">On</button>
+          <button class="mc" id="venues-toggle" onclick="toggleVenues(this)">On</button>
           <button class="mc mc-venue-filter on" onclick="setVenueFilter('all',this)">All</button>
           <button class="mc mc-venue-filter" onclick="setVenueFilter('whales',this)">Whales</button>
           <button class="mc mc-venue-filter" onclick="setVenueFilter('partners',this)">ICL Partners</button>
         </div>
         <div class="map-ctrl-g" style="grid-column:1/-1">
           <span class="mc-lbl">Dumpsites</span>
-          <button class="mc on" id="dumpsites-toggle" onclick="toggleDumpSites(this)">On</button>
+          <button class="mc" id="dumpsites-toggle" onclick="toggleDumpSites(this)">On</button>
           <button class="mc mc-dump-filter on" onclick="setDumpSiteFilter('msw',this)">MSW Priority</button>
           <button class="mc mc-dump-filter" onclick="setDumpSiteFilter('open',this)">Open Now</button>
           <button class="mc mc-dump-filter" onclick="setDumpSiteFilter('all',this)">All</button>
@@ -1454,15 +1454,41 @@ const TERRITORY_WAYPOINTS=[
   [-118.3494,34.0180],
 ];
 let showTerritoryEdge=true;
-let showNeighborhoods=true;
+let showNeighborhoods=false;
 let showMapLegend=true;
-let showVenues=true;
-let showSignals=true;
-let showDumpSites=true;
+let showVenues=false;
+let showSignals=false;
+let showDumpSites=false;
 let venueFilter='all';
 let dumpSiteFilter='msw';
 let leadFilter='all';
 let signalData={permits:[],housing:[],corridors:[],transit:[],meta:{}};
+
+function applyMapDefaultState(){
+  showTerritoryEdge=true;
+  showNeighborhoods=false;
+  showVenues=false;
+  showSignals=false;
+  showDumpSites=false;
+  leadFilter='all';
+  leadFlowFilter='all';
+  const setOn=(id,on)=>{
+    const b=document.getElementById(id);
+    if(!b)return;
+    b.classList.toggle('on',!!on);
+  };
+  setOn('territory-toggle',true);
+  setOn('neighborhoods-toggle',false);
+  setOn('signals-toggle',false);
+  setOn('venues-toggle',false);
+  setOn('dumpsites-toggle',false);
+  const leadBtns=[...document.querySelectorAll('.mc-lead-filter')];
+  leadBtns.forEach(b=>b.classList.remove('on'));
+  if(leadBtns[0])leadBtns[0].classList.add('on');
+  const flowBtns=[...document.querySelectorAll('.mc-flow-filter')];
+  flowBtns.forEach(b=>b.classList.remove('on'));
+  if(flowBtns[0])flowBtns[0].classList.add('on');
+}
 
 function segsCross(a,b,c,d){
   const ccw=(p1,p2,p3)=>((p3[1]-p1[1])*(p2[0]-p1[0])>(p2[1]-p1[1])*(p3[0]-p1[0]));
@@ -2882,6 +2908,7 @@ window.addEventListener('DOMContentLoaded',()=>{
   try{document.addEventListener('fullscreenchange',syncMapFullscreenUi);}catch(e){}
   try{syncMapFullscreenUi();}catch(e){}
   try{applyPageVisibility('overview');}catch(e){}
+  try{applyMapDefaultState();}catch(e){}
   try{fetchLeads();}catch(e){}
   try{fetchCensus();}catch(e){}
   try{fetchMapSignals();}catch(e){}
