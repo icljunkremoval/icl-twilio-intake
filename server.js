@@ -11,6 +11,7 @@ const { listWorldviewLeads } = require("./worldview_intel");
 const { extractVisionBuckets } = require("./vision_buckets");
 const { parseBookingToken } = require("./booking_link");
 const { createJobEvent } = require("./calendar");
+const { createSquarePaymentOptions } = require("./square_quote");
 const { sendSms } = require("./twilio_sms");
 const express = require("express");
 const fs = require("fs");
@@ -744,6 +745,29 @@ function mergeUniqueStrings(base, extra, limit = 8) {
   return out;
 }
 
+function normalizePhoneE164(raw) {
+  const digits = String(raw || "").replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) return "+" + digits;
+  if (digits.length === 10) return "+1" + digits;
+  if (digits.length > 11) return "+" + digits;
+  return null;
+}
+
+function parseQuotedAmountToCents(v) {
+  if (v == null || v === "") return null;
+  const n = Number(String(v).replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n * 100);
+}
+
+function normalizeLeadSource(raw) {
+  const s = String(raw || "").trim().toLowerCase();
+  if (!s) return "sms";
+  if (["manual", "in_person", "inperson", "consult"].includes(s)) return "manual";
+  if (s === "sms") return "sms";
+  return s.slice(0, 24);
+}
+
 function extractMediaUrlsFromPayload(payload) {
   const out = [];
   if (!payload || typeof payload !== "object") return out;
@@ -1144,11 +1168,21 @@ app.get("/api/dashboard/leads", async (req, res) => {
            deposit_paid,
            timing_pref,
            quote_total_cents,
+           quoted_amount,
            has_media,
            num_media,
-           vision_analysis
+           vision_analysis,
+           lead_name,
+           lead_email,
+           notes,
+           site_visit_date,
+           lead_source,
+           square_payment_link_url,
+           square_upfront_payment_link_url
          FROM leads
-         ORDER BY last_seen_at DESC NULLS LAST
+         ORDER BY
+           CASE WHEN LOWER(COALESCE(lead_source,'sms'))='manual' THEN 0 ELSE 1 END,
+           last_seen_at DESC NULLS LAST
          LIMIT $1`,
         [limit]
       )
@@ -1267,7 +1301,18 @@ app.get("/api/dashboard/leads", async (req, res) => {
         zip: extractZipFromLead(r),
         load_bucket: r.load_bucket || null,
         quote_status: r.quote_status || null,
+        quote_amount: Number.isFinite(Number(r.quote_total_cents))
+          ? Number(r.quote_total_cents)
+          : (Number.isFinite(Number(r.quoted_amount)) ? Number(r.quoted_amount) : null),
         deposit_paid: Number(r.deposit_paid) === 1,
+        lead_name: String(r.lead_name || "").trim() || null,
+        lead_email: String(r.lead_email || "").trim() || null,
+        notes: String(r.notes || "").trim() || null,
+        site_visit_date: String(r.site_visit_date || "").trim() || null,
+        lead_source: normalizeLeadSource(r.lead_source || "sms"),
+        quoted_amount_cents: Number.isFinite(Number(r.quoted_amount)) ? Number(r.quoted_amount) : null,
+        square_payment_link_url: r.square_payment_link_url || null,
+        square_upfront_payment_link_url: r.square_upfront_payment_link_url || null,
         settled_revenue_cents: null,
         total_cost_cents: null,
         margin_cents: null,
@@ -1295,6 +1340,8 @@ app.get("/api/dashboard/leads", async (req, res) => {
       pins.push({
         phone: lead.phone,
         address: lead.address,
+        lead_name: lead.lead_name || null,
+        lead_source: lead.lead_source || "sms",
         zip: lead.zip,
         lat: Number(coords.lat),
         lng: Number(coords.lng),
@@ -1913,17 +1960,221 @@ app.get("/media-proxy", async (req, res) => {
 
 app.get("/admin/leads", async (_req, res) => {
   try {
-    const rows = (await pool.query("SELECT from_phone, last_event, substr(coalesce(last_body,''),1,80) AS last_body_80, substr(coalesce(address_text,''),1,60) AS address_60, zip_text, num_media, media_url0, distance_miles, last_seen_at FROM leads ORDER BY last_seen_at DESC LIMIT 50")).rows;
+    const rows = (
+      await pool.query(
+        `SELECT
+           from_phone,
+           lead_name,
+           lead_source,
+           quoted_amount,
+           site_visit_date,
+           last_event,
+           substr(coalesce(last_body,''),1,80) AS last_body_80,
+           substr(coalesce(address_text,''),1,60) AS address_60,
+           zip_text,
+           num_media,
+           media_url0,
+           distance_miles,
+           last_seen_at
+         FROM leads
+         ORDER BY
+           CASE WHEN LOWER(COALESCE(lead_source,'sms'))='manual' THEN 0 ELSE 1 END,
+           last_seen_at DESC
+         LIMIT 80`
+      )
+    ).rows;
     const esc = (s) => String(s ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#39;");
     const rowsHtml = rows.map(r => {
       const mediaHref = r.media_url0 ? ("/media-proxy?u=" + encodeURIComponent(r.media_url0)) : "";
       const mediaCell = mediaHref ? "<a target='_blank' href='" + mediaHref + "'>View</a>" : "";
-      return "<tr><td><a href='/admin/lead/" + esc(String(r.from_phone).replaceAll("+","%2B")) + "'>" + esc(r.from_phone) + "</a></td><td>" + esc(r.last_event) + "</td><td>" + esc(r.last_body_80) + "</td><td>" + esc(r.address_60) + "</td><td>" + esc(r.zip_text) + "</td><td>" + esc(r.num_media) + "</td><td>" + mediaCell + "</td><td>" + esc(r.distance_miles) + "</td><td>" + esc(r.last_seen_at) + "</td></tr>";
+      const source = String(r.lead_source || "sms").toLowerCase() === "manual"
+        ? "<span style='display:inline-block;padding:2px 6px;border-radius:999px;background:#fde68a;color:#111;font-size:10px;font-weight:700;border:1px solid #f59e0b'>MANUAL</span>"
+        : "<span style='display:inline-block;padding:2px 6px;border-radius:999px;background:#e2e8f0;color:#334155;font-size:10px;font-weight:700;border:1px solid #cbd5e1'>SMS</span>";
+      const name = String(r.lead_name || "").trim();
+      const quoted = Number.isFinite(Number(r.quoted_amount)) && Number(r.quoted_amount) > 0
+        ? ("$" + (Number(r.quoted_amount) / 100).toLocaleString(undefined, { maximumFractionDigits: 0 }))
+        : "—";
+      return "<tr><td><a href='/admin/lead/" + esc(String(r.from_phone).replaceAll("+","%2B")) + "'>" + esc(r.from_phone) + "</a><div style='color:#475569;font-size:11px;margin-top:2px'>" + esc(name || "—") + "</div></td><td>" + source + "</td><td>" + esc(quoted) + "</td><td>" + esc(r.site_visit_date || "—") + "</td><td>" + esc(r.last_event) + "</td><td>" + esc(r.last_body_80) + "</td><td>" + esc(r.address_60) + "</td><td>" + esc(r.zip_text) + "</td><td>" + esc(r.num_media) + "</td><td>" + mediaCell + "</td><td>" + esc(r.distance_miles) + "</td><td>" + esc(r.last_seen_at) + "</td></tr>";
     }).join("");
     res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.end("<html><head><title>ICL Leads</title><style>body{font-family:system-ui;padding:16px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;font-size:13px}th{background:#f6f6f6}</style></head><body><h2>ICL Intake Leads</h2><table><thead><tr><th>From</th><th>Last Event</th><th>Last Message</th><th>Address</th><th>ZIP</th><th>Media#</th><th>Media</th><th>Miles</th><th>Last Seen</th></tr></thead><tbody>" + rowsHtml + "</tbody></table></body></html>");
+    res.end("<html><head><title>ICL Leads</title><style>body{font-family:system-ui;padding:16px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;font-size:13px;vertical-align:top}th{background:#f6f6f6}</style></head><body><h2>ICL Intake Leads</h2><table><thead><tr><th>Lead</th><th>Source</th><th>Quoted</th><th>Visit</th><th>Last Event</th><th>Last Message</th><th>Address</th><th>ZIP</th><th>Media#</th><th>Media</th><th>Miles</th><th>Last Seen</th></tr></thead><tbody>" + rowsHtml + "</tbody></table></body></html>");
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+app.post("/admin/leads/manual", async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const fromPhone = normalizePhoneE164(body.from_phone || body.phone || "");
+    if (!fromPhone) return res.status(400).json({ ok: false, error: "valid from_phone required" });
+    const now = new Date().toISOString();
+    const leadName = String(body.lead_name || "").trim() || null;
+    const leadEmail = String(body.lead_email || "").trim() || null;
+    const notes = String(body.notes || "").trim() || null;
+    const addressText = String(body.address_text || body.address || "").trim() || null;
+    const zipTextRaw = String(body.zip_text || body.zip || "").trim();
+    const zipText = /^\d{5}$/.test(zipTextRaw) ? zipTextRaw : (extractZipFromLead({ address_text: addressText }) || null);
+    const siteVisitDateRaw = String(body.site_visit_date || "").trim();
+    const siteVisitDate = /^\d{4}-\d{2}-\d{2}$/.test(siteVisitDateRaw) ? siteVisitDateRaw : null;
+    const leadSource = normalizeLeadSource(body.lead_source || "manual");
+    const quotedCents = parseQuotedAmountToCents(body.quoted_amount);
+    const convState = quotedCents ? "QUOTE_READY" : "NEW";
+    const quoteStatus = quotedCents ? "AWAITING_DEPOSIT" : "NEW";
+
+    const row = (
+      await pool.query(
+        `INSERT INTO leads (
+           from_phone, to_phone, first_seen_at, last_seen_at,
+           last_event, last_body, address_text, zip_text, zip,
+           conv_state, quote_status, quote_total_cents, quoted_amount,
+           lead_name, lead_email, notes, site_visit_date, lead_source, status,
+           has_media, num_media
+         )
+         VALUES (
+           $1, $2, $3, $3,
+           'manual_lead_created', $4, $5, $6, $6,
+           $7, $8, $9, $9,
+           $10, $11, $12, $13, $14, 'ACTIVE',
+           0, 0
+         )
+         ON CONFLICT (from_phone) DO UPDATE SET
+           last_seen_at = EXCLUDED.last_seen_at,
+           last_event = 'manual_lead_updated',
+           last_body = COALESCE(EXCLUDED.last_body, leads.last_body),
+           address_text = COALESCE(NULLIF(EXCLUDED.address_text,''), leads.address_text),
+           zip_text = COALESCE(NULLIF(EXCLUDED.zip_text,''), leads.zip_text),
+           zip = COALESCE(NULLIF(EXCLUDED.zip,''), leads.zip),
+           conv_state = COALESCE(NULLIF(EXCLUDED.conv_state,''), leads.conv_state),
+           quote_status = COALESCE(NULLIF(EXCLUDED.quote_status,''), leads.quote_status),
+           quote_total_cents = COALESCE(EXCLUDED.quote_total_cents, leads.quote_total_cents),
+           quoted_amount = COALESCE(EXCLUDED.quoted_amount, leads.quoted_amount),
+           lead_name = COALESCE(NULLIF(EXCLUDED.lead_name,''), leads.lead_name),
+           lead_email = COALESCE(NULLIF(EXCLUDED.lead_email,''), leads.lead_email),
+           notes = COALESCE(NULLIF(EXCLUDED.notes,''), leads.notes),
+           site_visit_date = COALESCE(NULLIF(EXCLUDED.site_visit_date,''), leads.site_visit_date),
+           lead_source = COALESCE(NULLIF(EXCLUDED.lead_source,''), leads.lead_source),
+           status = COALESCE(NULLIF(EXCLUDED.status,''), leads.status)
+         RETURNING from_phone, lead_name, lead_email, notes, quoted_amount, site_visit_date, lead_source, quote_status, conv_state, quote_total_cents`,
+        [
+          fromPhone,
+          process.env.TWILIO_PHONE_NUMBER || null,
+          now,
+          notes || "manual in-person consult",
+          addressText,
+          zipText,
+          convState,
+          quoteStatus,
+          quotedCents,
+          leadName,
+          leadEmail,
+          notes,
+          siteVisitDate,
+          leadSource
+        ]
+      )
+    ).rows[0];
+
+    insertEvent.run({
+      from_phone: fromPhone,
+      event_type: "manual_lead_upsert",
+      payload_json: JSON.stringify({
+        lead_name: leadName,
+        lead_email: leadEmail,
+        notes,
+        quoted_amount_cents: quotedCents,
+        site_visit_date: siteVisitDate,
+        lead_source: leadSource,
+        address_text: addressText,
+        zip: zipText
+      }),
+      created_at: now
+    });
+
+    return res.json({ ok: true, lead: row, message: "Manual lead saved." });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/admin/leads/:from/payment-link", async (req, res) => {
+  try {
+    const fromPhone = normalizePhoneE164(req.params.from || "");
+    if (!fromPhone) return res.status(400).json({ ok: false, error: "invalid lead phone" });
+    const lead = (await pool.query("SELECT * FROM leads WHERE from_phone=$1 LIMIT 1", [fromPhone])).rows[0];
+    if (!lead) return res.status(404).json({ ok: false, error: "lead not found" });
+
+    const quoteFromBody = parseQuotedAmountToCents(req.body?.quoted_amount);
+    const quoteFromLead = Number.isFinite(Number(lead.quote_total_cents)) && Number(lead.quote_total_cents) > 0
+      ? Number(lead.quote_total_cents)
+      : (Number.isFinite(Number(lead.quoted_amount)) && Number(lead.quoted_amount) > 0 ? Number(lead.quoted_amount) : null);
+    const quoteCents = quoteFromBody || quoteFromLead;
+    if (!quoteCents || quoteCents <= 0) {
+      return res.status(400).json({ ok: false, error: "quoted_amount is required before generating payment link" });
+    }
+
+    const depositCents = Math.max(100, Number(process.env.SQUARE_DEPOSIT_CENTS || 5000));
+    const upfrontDiscountPct = Number(process.env.UPFRONT_DISCOUNT_PCT || 10);
+    const payment = await createSquarePaymentOptions(
+      { from_phone: fromPhone },
+      { quoteTotalCents: quoteCents, depositCents, upfrontDiscountPct }
+    );
+    const now = new Date().toISOString();
+
+    await pool.query(
+      `UPDATE leads
+       SET square_payment_link_id=$1,
+           square_payment_link_url=$2,
+           square_order_id=$3,
+           square_upfront_payment_link_id=$4,
+           square_upfront_payment_link_url=$5,
+           square_upfront_order_id=$6,
+           quote_total_cents=$7,
+           quoted_amount=COALESCE(quoted_amount,$7),
+           upfront_total_cents=$8,
+           upfront_discount_pct=$9,
+           quote_status='AWAITING_DEPOSIT',
+           conv_state=CASE WHEN conv_state IS NULL OR conv_state='' OR conv_state='NEW' THEN 'QUOTE_READY' ELSE conv_state END,
+           last_seen_at=NOW()
+       WHERE from_phone=$10`,
+      [
+        payment.deposit.payment_link_id,
+        payment.deposit.payment_link_url,
+        payment.deposit.order_id,
+        payment.upfront.payment_link_id,
+        payment.upfront.payment_link_url,
+        payment.upfront.order_id,
+        payment.quoteTotalCents,
+        payment.upfrontTotalCents,
+        payment.upfrontDiscountPct,
+        fromPhone
+      ]
+    );
+
+    insertEvent.run({
+      from_phone: fromPhone,
+      event_type: "square_quote_created",
+      payload_json: JSON.stringify({
+        from_phone: fromPhone,
+        source: "admin_manual_generate",
+        quote_total_cents: payment.quoteTotalCents,
+        upfront_total_cents: payment.upfrontTotalCents,
+        upfront_discount_pct: payment.upfrontDiscountPct,
+        payment_link_url: payment.deposit.payment_link_url,
+        upfront_payment_link_url: payment.upfront.payment_link_url
+      }),
+      created_at: now
+    });
+
+    return res.json({
+      ok: true,
+      from_phone: fromPhone,
+      quote_total_cents: payment.quoteTotalCents,
+      payment_link_url: payment.deposit.payment_link_url,
+      upfront_payment_link_url: payment.upfront.payment_link_url
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
