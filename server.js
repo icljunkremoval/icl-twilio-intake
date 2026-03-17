@@ -699,9 +699,9 @@ function stageFromLead(lead) {
 }
 
 function stageLabel(stage) {
-  if (stage === "completed") return "Job completed";
+  if (stage === "completed") return "Job Completed";
   if (stage === "paid") return "Paid";
-  if (stage === "deposit") return "Deposit requested";
+  if (stage === "deposit") return "Deposit";
   return "Lead";
 }
 
@@ -1128,7 +1128,8 @@ app.get("/api/dashboard/leads", async (req, res) => {
            timing_pref,
            quote_total_cents,
            has_media,
-           num_media
+           num_media,
+           vision_analysis
          FROM leads
          ORDER BY last_seen_at DESC NULLS LAST
          LIMIT $1`,
@@ -1223,11 +1224,17 @@ app.get("/api/dashboard/leads", async (req, res) => {
       const itemTable = itemTableByPhone.get(phone) || { resale: [], donate: [], dump: [], scrap: [] };
       const mediaUrls = [...(mediaByPhone.get(phone) || [])];
       if (r.media_url0 && !mediaUrls.includes(r.media_url0)) mediaUrls.unshift(String(r.media_url0));
-      const visionTop = Array.isArray(worldview?.hover?.items?.top)
-        ? worldview.hover.items.top.map((x) => String(x || "").trim()).filter(Boolean)
-        : [];
-      if (!itemTable.resale.length && !itemTable.donate.length && !itemTable.dump.length && !itemTable.scrap.length && visionTop.length) {
-        itemTable.dump = visionTop.slice(0, 6);
+      if (!itemTable.resale.length && !itemTable.donate.length && !itemTable.dump.length && !itemTable.scrap.length) {
+        const vision = safeJsonParse(r.vision_analysis) || {};
+        const visionResell = Array.isArray(vision.resell_items)
+          ? vision.resell_items.map((x) => String(x || "").trim()).filter(Boolean)
+          : [];
+        const visionItems = Array.isArray(vision.items)
+          ? vision.items.map((x) => String(x || "").trim()).filter(Boolean)
+          : [];
+        const resaleSet = new Set(visionResell.map((x) => x.toLowerCase()));
+        itemTable.resale = [...new Set(visionResell)].slice(0, 8);
+        itemTable.dump = [...new Set(visionItems.filter((x) => !resaleSet.has(String(x || "").toLowerCase())))].slice(0, 8);
       }
       const mergedIntel = {
         ...(worldview?.hover || {}),

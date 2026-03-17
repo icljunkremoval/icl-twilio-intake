@@ -131,13 +131,26 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .lead-dot.lead-dot-square{border-radius:2px}
 .lead-dot.lead-dot-triangle{border-radius:1px;clip-path:polygon(50% 6%, 6% 92%, 94% 92%)}
 .lead-dot.lead-dot-diamond{border-radius:2px;transform:rotate(45deg)}
-.hover-item-table{width:100%;border-collapse:collapse;margin-top:6px}
-.hover-item-table th,.hover-item-table td{border:1px solid var(--bd);padding:2px 5px;vertical-align:top}
-.hover-item-table th{font-size:8px;color:var(--tx3);text-transform:uppercase;letter-spacing:.4px}
-.hover-item-table td{font-size:10px;color:var(--tx)}
+.hover-item-table{width:100%;border-collapse:collapse;margin-top:6px;background:#fff}
+.hover-item-table th,.hover-item-table td{border:1px solid #cbd5e1;padding:2px 5px;vertical-align:top}
+.hover-item-table th{font-size:8px;color:#334155;text-transform:uppercase;letter-spacing:.4px;background:#f8fafc}
+.hover-item-table td{font-size:10px;color:#111}
 .lead-media-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:6px}
 .lead-media-grid a{display:block;border:1px solid var(--bd2);border-radius:4px;overflow:hidden;background:#0b1220}
 .lead-media-grid img{display:block;width:100%;height:72px;object-fit:cover}
+.map-tooltip.lead-hover-surface{
+  background:#fff;border:1px solid #cbd5e1;color:#111;
+  box-shadow:0 6px 18px rgba(2,6,23,.2);
+}
+.map-tooltip.lead-hover-surface h4{color:#111}
+.map-tooltip.lead-hover-surface .th{color:#334155}
+.map-tooltip.lead-hover-surface .tv{color:#0f172a}
+.map-tooltip.lead-hover-surface .tg{color:#0f172a}
+.leaflet-tooltip.lead-hover-tip{
+  background:#fff!important;color:#111!important;border:1px solid #cbd5e1!important;
+  box-shadow:0 6px 18px rgba(2,6,23,.2);
+}
+.leaflet-tooltip.lead-hover-tip::before{border-top-color:#cbd5e1!important}
 .map-tooltip{
   position:absolute;pointer-events:none;
   background:var(--bg2);border:1px solid var(--bd2);border-radius:6px;
@@ -450,7 +463,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
           <button class="mc mc-lead-filter" onclick="setLeadFilter('deposit',this)">Deposit</button>
           <button class="mc mc-lead-filter" onclick="setLeadFilter('paid',this)">Paid</button>
           <button class="mc mc-lead-filter" onclick="setLeadFilter('completed',this)">Job Completed</button>
-          <span class="mc-lbl" style="margin-left:8px">Flow</span>
+          <span class="mc-lbl" style="margin-left:8px">Workflow</span>
           <button class="mc mc-flow-filter on" onclick="setLeadFlowFilter('all',this)">All</button>
           <button class="mc mc-flow-filter" onclick="setLeadFlowFilter('new',this)">New</button>
           <button class="mc mc-flow-filter" onclick="setLeadFlowFilter('media',this)">Media</button>
@@ -1627,24 +1640,32 @@ function mediaUrlsForLead(lead){
 }
 function mediaProxyUrl(url){return '/media-proxy?u='+encodeURIComponent(String(url||''));}
 function itemTableHtml(table){
-  const cols=[
-    ['resale','Resale'],
-    ['donate','Donate'],
-    ['dump','Dump'],
-    ['scrap','Scrap']
-  ];
+  const cols=[['resale','Resale'],['donate','Donate'],['dump','Dump']];
   const rows=Math.max(1,...cols.map(([k])=>table[k].length));
   const body=[];
   for(let i=0;i<rows;i++){
     body.push(`<tr>${cols.map(([k])=>`<td>${h(table[k][i]||'—')}</td>`).join('')}</tr>`);
   }
-  return `<table class="hover-item-table"><thead><tr>${cols.map(([,label])=>`<th>${label}</th>`).join('')}</tr></thead><tbody>${body.join('')}</tbody></table>`;
+  const scrapLine=table.scrap.length?`<div style="margin-top:4px;font-size:10px;color:#111"><strong>Scrap:</strong> ${h(table.scrap.join(' · '))}</div>`:'';
+  return `<table class="hover-item-table"><thead><tr>${cols.map(([,label])=>`<th>${label}</th>`).join('')}</tr></thead><tbody>${body.join('')}</tbody></table>${scrapLine}`;
 }
 function leadHoverInfoHtml(lead){
+  const intel=(lead&&lead.intel&&typeof lead.intel==='object')?lead.intel:{};
   const table=normalizeItemTable(lead);
-  return `<div style="font-family:DM Mono,monospace;font-size:11px;line-height:1.45">
+  const items=intel.items||{};
+  const value=intel.value||{};
+  const ops=intel.ops||{};
+  const journey=intel.journey||{};
+  const top=Array.isArray(items.top)?items.top.filter(Boolean).slice(0,3):[];
+  return `<div class="lead-hover-card" style="font-family:DM Mono,monospace;font-size:11px;line-height:1.45;color:#111">
     <div style="font-weight:700;margin-bottom:4px">${h(lead.stage_label||'Lead')} · ${h(fPhone(lead.phone))}</div>
-    <div>${h(lead.address||'No address')}</div>
+    <div style="margin-bottom:3px">${h(lead.address||'No address')}</div>
+    <div><strong>Stage:</strong> ${h(lead.stage_label||'Lead')} · <strong>Workflow:</strong> ${h(stateLabel(lead.conv_state||lead.quote_status||'NEW'))}</div>
+    <div><strong>Quote:</strong> ${h(fCents(intel.quote_total_cents))} · <strong>Payment:</strong> ${h(intel.payment_status||'—')}</div>
+    <div><strong>Resale value:</strong> ${h(fCents(value.resale_low_cents))} - ${h(fCents(value.resale_high_cents))}</div>
+    <div><strong>Items:</strong> R ${Number(items.resell||0)} · S ${Number(items.scrap||0)} · Dn ${Number(items.donate||0)} · Dp ${Number(items.dump||0)}</div>
+    <div><strong>Next:</strong> ${h(ops.next_action||'Review lead')} · <strong>Journey:</strong> ${Number(journey.progress||0)}/6</div>
+    ${top.length?`<div style="opacity:.9"><strong>Top:</strong> ${h(top.join(' · '))}</div>`:''}
     ${itemTableHtml(table)}
   </div>`;
 }
@@ -1660,7 +1681,7 @@ function leadClickInfoHtml(lead){
     <div style="font-weight:700;font-size:12px;margin-bottom:4px">${h(fPhone(lead.phone))}</div>
     <div style="opacity:.9;margin-bottom:6px">${h(lead.address||'No address')}</div>
     <div><strong>Stage:</strong> ${h(lead.stage_label||'Lead')}</div>
-    <div><strong>State:</strong> ${h(stateLabel(lead.conv_state||lead.quote_status||'NEW'))}</div>
+    <div><strong>Workflow:</strong> ${h(stateLabel(lead.conv_state||lead.quote_status||'NEW'))}</div>
     <div><strong>Quote:</strong> ${h(fCents(intel.quote_total_cents))} · <strong>Payment:</strong> ${h(intel.payment_status||'—')}</div>
     <div><strong>Resale value:</strong> ${h(fCents(value.resale_low_cents))} - ${h(fCents(value.resale_high_cents))}</div>
     <div><strong>Next:</strong> ${h(ops.next_action||'Review lead')}</div>
@@ -1967,7 +1988,7 @@ function renderStreetLeads(){
         iconAnchor:[7,7]
       })
     });
-    marker.bindTooltip(leadHoverInfoHtml(lead),{sticky:true,direction:'top',offset:[0,-10],opacity:.96});
+    marker.bindTooltip(leadHoverInfoHtml(lead),{sticky:true,direction:'top',offset:[0,-10],opacity:.98,className:'lead-hover-tip'});
     marker.bindPopup(leadClickInfoHtml(lead),{maxWidth:360});
     marker.on('mouseover',()=>{try{marker.openTooltip();}catch(e){}});
     marker.on('click',()=>{
@@ -2326,6 +2347,7 @@ function renderMap(metric){
 
 function showTooltip(e,zip){
   const tt=document.getElementById('map-tt');
+  tt.classList.remove('lead-hover-surface');
   const d=CD&&CD[zip]?CD[zip]:{name:zip};
   tt.innerHTML=`<h4>${zip} · ${d.name||''}</h4>
     <div><span class="th">Median Income</span> <span class="tv">${f$(d.income)}</span></div>
@@ -2338,6 +2360,7 @@ function showTooltip(e,zip){
 }
 function showLeadTooltip(e,lead){
   const tt=document.getElementById('map-tt');
+  tt.classList.add('lead-hover-surface');
   tt.innerHTML=leadHoverInfoHtml(lead);
   tt.style.display='block';
   moveTooltip(e);
@@ -2351,7 +2374,12 @@ function moveTooltip(e){
   if(y+220>rect.height)y-=230;
   tt.style.left=x+'px';tt.style.top=y+'px';
 }
-function hideTooltip(){document.getElementById('map-tt').style.display='none';}
+function hideTooltip(){
+  const tt=document.getElementById('map-tt');
+  if(!tt)return;
+  tt.style.display='none';
+  tt.classList.remove('lead-hover-surface');
+}
 
 function updateMap(metric){
   curLayer=metric;
