@@ -1,4 +1,5 @@
 const fetch = require("node-fetch");
+const { normalizeVisionPayload } = require("./vision_buckets");
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
@@ -48,7 +49,14 @@ Analyze this image and respond ONLY with a JSON object in this exact format:
   "access_level": "CURB" or "DRIVEWAY" or "GARAGE" or "INSIDE_HOME" or "STAIRS" or "APARTMENT" or "UNKNOWN",
   "access_confidence": "HIGH" or "MEDIUM" or "LOW",
   "items": ["specific", "visible", "items", "with", "descriptors"],
-  "resell_items": ["items likely worth reselling or donating — furniture, appliances, bikes, tools, electronics in good condition"],
+  "resell_items": ["items likely worth reselling"],
+  "scrap_items": ["items likely paid as scrap metal"],
+  "donate_items": ["items likely suitable for donation"],
+  "dump_items": ["items likely landfill/trash"],
+  "classified_items": [
+    { "item": "string", "bucket": "RESELL or SCRAP or DONATE or DUMP", "confidence": 0.0 to 1.0 }
+  ],
+  "bucket_confidence": { "resell": 0.0 to 1.0, "scrap": 0.0 to 1.0, "donate": 0.0 to 1.0, "dump": 0.0 to 1.0 },
   "resell_notes": "brief note on resell potential, or null if none",
   "sentimental_risk": true or false,
   "sentimental_notes": "note if photos, religious items, personal keepsakes visible — crew should handle with care, or null",
@@ -70,6 +78,15 @@ Resell guide — flag these if they appear to be in decent condition:
 - Electronics: TVs, monitors, speakers, computers
 - Equipment: bikes, treadmills, tools, ladders, dollies
 - Decor: lamps, mirrors, artwork, shelving
+
+Scrap guide:
+- Metals and wire: copper, aluminum, steel, brass, cast iron, piping, appliance shells
+
+Donate guide:
+- Household goods and usable items: clothes, books, toys, kitchenware, small furniture in good condition
+
+Dump guide:
+- Broken, contaminated, heavily worn, non-recoverable items
 
 troll_flag should be true if: image is clearly not junk (selfie, meme, random street photo, explicit content)
 is_valid_junk should be false ONLY if the image is clearly not junk-related (selfie, meme, blank wall, street scene). If ANY household item, furniture, appliance, or debris is visible — even if it looks like it could stay — set is_valid_junk to true. When in doubt, set true.
@@ -119,7 +136,7 @@ Respond with ONLY the JSON object, no other text.`;
 
   try {
     const clean = text.replace(/```json|```/g, "").trim();
-    return JSON.parse(clean);
+    return normalizeVisionPayload(JSON.parse(clean));
   } catch (e) {
     throw new Error("Could not parse vision response: " + text);
   }
@@ -139,36 +156,67 @@ async function analyzeAllMedia(urls) {
 
   if (valid.length === 0) return results[0].value || results[0].reason;
 
-  // Merge: take highest load_bucket, merge items, merge crew_notes
+  // Merge: take highest load_bucket, merge item buckets, merge notes
   const LOAD_ORDER = ["MIN","QTR","HALF","3Q","FULL"];
-  let merged = { ...valid[0] };
+  let merged = normalizeVisionPayload(valid[0]);
+  const mergeUnique = (base, extra, limit = 40) => {
+    const out = [];
+    const seen = new Set();
+    const src = [...(Array.isArray(base) ? base : []), ...(Array.isArray(extra) ? extra : [])];
+    for (const raw of src) {
+      const item = String(raw || "").trim();
+      if (!item) continue;
+      const key = item.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(item);
+      if (out.length >= limit) break;
+    }
+    return out;
+  };
 
   for (const v of valid.slice(1)) {
+    const norm = normalizeVisionPayload(v);
     // Take larger load estimate
     const curIdx = LOAD_ORDER.indexOf(merged.load_bucket);
-    const newIdx = LOAD_ORDER.indexOf(v.load_bucket);
+    const newIdx = LOAD_ORDER.indexOf(norm.load_bucket);
     if (newIdx > curIdx) {
-      merged.load_bucket = v.load_bucket;
-      merged.load_confidence = v.load_confidence;
+      merged.load_bucket = norm.load_bucket;
+      merged.load_confidence = norm.load_confidence;
     }
-    // Merge items (deduplicate)
-    const allItems = [...(merged.items||[]), ...(v.items||[])];
-    merged.items = [...new Set(allItems)];
+    merged.items = mergeUnique(merged.items, norm.items);
+    merged.resell_items = mergeUnique(merged.resell_items, norm.resell_items);
+    merged.scrap_items = mergeUnique(merged.scrap_items, norm.scrap_items);
+    merged.donate_items = mergeUnique(merged.donate_items, norm.donate_items);
+    merged.dump_items = mergeUnique(merged.dump_items, norm.dump_items);
+    merged.classified_items = mergeUnique(
+      (merged.classified_items || []).map((r) => `${r.bucket}:${r.item}`),
+      (norm.classified_items || []).map((r) => `${r.bucket}:${r.item}`)
+    ).map((k) => {
+      const [bucket, ...rest] = String(k || "").split(":");
+      return { bucket, item: rest.join(":").trim(), confidence: merged.bucket_confidence?.[String(bucket || "").toLowerCase()] || 0.58 };
+    });
+    merged.bucket_confidence = {
+      resell: Math.max(Number(merged.bucket_confidence?.resell || 0), Number(norm.bucket_confidence?.resell || 0)),
+      scrap: Math.max(Number(merged.bucket_confidence?.scrap || 0), Number(norm.bucket_confidence?.scrap || 0)),
+      donate: Math.max(Number(merged.bucket_confidence?.donate || 0), Number(norm.bucket_confidence?.donate || 0)),
+      dump: Math.max(Number(merged.bucket_confidence?.dump || 0), Number(norm.bucket_confidence?.dump || 0))
+    };
     // Append crew notes
-    if (v.crew_notes && v.crew_notes !== merged.crew_notes) {
-      merged.crew_notes = (merged.crew_notes || "") + " " + v.crew_notes;
+    if (norm.crew_notes && norm.crew_notes !== merged.crew_notes) {
+      merged.crew_notes = (merged.crew_notes || "") + " " + norm.crew_notes;
     }
     // If any photo flags troll, flag it
-    if (v.troll_flag) merged.troll_flag = true;
+    if (norm.troll_flag) merged.troll_flag = true;
     // Take more specific access level
-    if (v.access_confidence === "HIGH" && merged.access_confidence !== "HIGH") {
-      merged.access_level = v.access_level;
-      merged.access_confidence = v.access_confidence;
+    if (norm.access_confidence === "HIGH" && merged.access_confidence !== "HIGH") {
+      merged.access_level = norm.access_level;
+      merged.access_confidence = norm.access_confidence;
     }
   }
 
   merged.photo_count = urls.length;
-  return merged;
+  return normalizeVisionPayload(merged);
 }
 
 module.exports = { analyzeJobMedia, analyzeAllMedia };

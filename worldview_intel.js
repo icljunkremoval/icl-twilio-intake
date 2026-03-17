@@ -1,4 +1,5 @@
 const { pool } = require("./db");
+const { extractVisionBuckets } = require("./vision_buckets");
 
 function asInt(v) {
   const n = Number(v);
@@ -76,18 +77,29 @@ function deriveCalendarSyncStatus(lead) {
 }
 
 function deriveVisionTopItems(lead) {
-  const vision = parseJson(lead?.vision_analysis) || {};
-  const items = Array.isArray(vision?.items) ? vision.items : [];
-  return items
-    .map((i) => String(i || "").trim())
-    .filter(Boolean)
-    .slice(0, 3);
+  const buckets = extractVisionBuckets(parseJson(lead?.vision_analysis) || {}, { limitPerBucket: 12 });
+  return [
+    ...buckets.resell_items,
+    ...buckets.scrap_items,
+    ...buckets.donate_items,
+    ...buckets.dump_items
+  ].slice(0, 3);
 }
 
 function deriveVisionResellCount(lead) {
-  const vision = parseJson(lead?.vision_analysis) || {};
-  const resell = Array.isArray(vision?.resell_items) ? vision.resell_items : [];
-  return resell.filter(Boolean).length;
+  const buckets = extractVisionBuckets(parseJson(lead?.vision_analysis) || {}, { limitPerBucket: 24 });
+  return buckets.resell_items.length;
+}
+
+function deriveVisionBucketCounts(lead) {
+  const buckets = extractVisionBuckets(parseJson(lead?.vision_analysis) || {}, { limitPerBucket: 24 });
+  return {
+    RESELL: buckets.resell_items.length,
+    SCRAP: buckets.scrap_items.length,
+    DONATE: buckets.donate_items.length,
+    DUMP: buckets.dump_items.length,
+    TOP: [...buckets.resell_items, ...buckets.scrap_items, ...buckets.donate_items, ...buckets.dump_items].slice(0, 4)
+  };
 }
 
 function parseLatestQuoteCents(lead, latestEventsByPhone) {
@@ -332,15 +344,15 @@ async function listWorldviewLeads({ limit = 80 } = {}) {
     };
 
     const visionTop = deriveVisionTopItems(lead);
+    const visionCounts = deriveVisionBucketCounts(lead);
     const fallbackResellCount = deriveVisionResellCount(lead);
     const resellCount = jobAgg.counts.RESELL || fallbackResellCount;
     const totalLogged = (jobAgg.counts.RESELL || 0) + (jobAgg.counts.SCRAP || 0) + (jobAgg.counts.DONATE || 0) + (jobAgg.counts.DUMP || 0);
-    const dumpFallback = totalLogged === 0 && visionTop.length > 0 ? Math.max(0, visionTop.length - fallbackResellCount) : 0;
 
     const salvageEstCents = estimateCentsFromMaybeDollars(lead.salvage_est_value);
     const resaleLowCents = Math.max(jobAgg.resaleLowCents || 0, salvageEstCents || 0);
     const resaleHighCents = Math.max(jobAgg.resaleHighCents || 0, salvageEstCents || 0);
-    const topItems = (jobAgg.topItems.length ? jobAgg.topItems : visionTop).slice(0, 3);
+    const topItems = (jobAgg.topItems.length ? jobAgg.topItems : visionCounts.TOP.length ? visionCounts.TOP : visionTop).slice(0, 3);
     const stepContactedAt = parseTs(lead.first_seen_at || journeyRaw.latest.inbound_raw?.created_at || null);
     const stepMediaAt = parseTs(journeyRaw.latest.media_received?.created_at || null);
     const stepQuotedAt = parseTs(journeyRaw.latest.square_quote_created?.created_at || null);
@@ -392,9 +404,9 @@ async function listWorldviewLeads({ limit = 80 } = {}) {
         payment_kind: journeyRaw.payment?.kind || null,
         items: {
           resell: resellCount,
-          scrap: jobAgg.counts.SCRAP || 0,
-          donate: jobAgg.counts.DONATE || 0,
-          dump: (jobAgg.counts.DUMP || 0) + dumpFallback,
+          scrap: jobAgg.counts.SCRAP || visionCounts.SCRAP || 0,
+          donate: jobAgg.counts.DONATE || visionCounts.DONATE || 0,
+          dump: jobAgg.counts.DUMP || visionCounts.DUMP || 0,
           top: topItems
         },
         value: {

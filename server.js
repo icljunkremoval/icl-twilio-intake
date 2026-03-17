@@ -8,6 +8,7 @@ const { handleWindowReply } = require("./window_reply");
 const { evaluateQuoteReadyRow } = require("./quote_gate");
 const { handleConversation } = require("./conversation");
 const { listWorldviewLeads } = require("./worldview_intel");
+const { extractVisionBuckets } = require("./vision_buckets");
 const { parseBookingToken } = require("./booking_link");
 const { createJobEvent } = require("./calendar");
 const { sendSms } = require("./twilio_sms");
@@ -727,6 +728,22 @@ function safeJsonParse(v) {
   try { return JSON.parse(String(v)); } catch { return null; }
 }
 
+function mergeUniqueStrings(base, extra, limit = 8) {
+  const out = [];
+  const seen = new Set();
+  const src = [...(Array.isArray(base) ? base : []), ...(Array.isArray(extra) ? extra : [])];
+  for (const raw of src) {
+    const item = String(raw || "").trim();
+    if (!item) continue;
+    const key = item.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 function extractMediaUrlsFromPayload(payload) {
   const out = [];
   if (!payload || typeof payload !== "object") return out;
@@ -1224,18 +1241,12 @@ app.get("/api/dashboard/leads", async (req, res) => {
       const itemTable = itemTableByPhone.get(phone) || { resale: [], donate: [], dump: [], scrap: [] };
       const mediaUrls = [...(mediaByPhone.get(phone) || [])];
       if (r.media_url0 && !mediaUrls.includes(r.media_url0)) mediaUrls.unshift(String(r.media_url0));
-      if (!itemTable.resale.length && !itemTable.donate.length && !itemTable.dump.length && !itemTable.scrap.length) {
-        const vision = safeJsonParse(r.vision_analysis) || {};
-        const visionResell = Array.isArray(vision.resell_items)
-          ? vision.resell_items.map((x) => String(x || "").trim()).filter(Boolean)
-          : [];
-        const visionItems = Array.isArray(vision.items)
-          ? vision.items.map((x) => String(x || "").trim()).filter(Boolean)
-          : [];
-        const resaleSet = new Set(visionResell.map((x) => x.toLowerCase()));
-        itemTable.resale = [...new Set(visionResell)].slice(0, 8);
-        itemTable.dump = [...new Set(visionItems.filter((x) => !resaleSet.has(String(x || "").toLowerCase())))].slice(0, 8);
-      }
+      const vision = safeJsonParse(r.vision_analysis) || {};
+      const visionBuckets = extractVisionBuckets(vision, { limitPerBucket: 8 });
+      itemTable.resale = mergeUniqueStrings(itemTable.resale, visionBuckets.resell_items, 8);
+      itemTable.donate = mergeUniqueStrings(itemTable.donate, visionBuckets.donate_items, 8);
+      itemTable.dump = mergeUniqueStrings(itemTable.dump, visionBuckets.dump_items, 8);
+      itemTable.scrap = mergeUniqueStrings(itemTable.scrap, visionBuckets.scrap_items, 8);
       const mergedIntel = {
         ...(worldview?.hover || {}),
         item_table: {
