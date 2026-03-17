@@ -721,6 +721,32 @@ function extractZipFromLead(lead) {
   return m ? m[1] : "";
 }
 
+function safeJsonParse(v) {
+  if (!v) return null;
+  if (typeof v === "object") return v;
+  try { return JSON.parse(String(v)); } catch { return null; }
+}
+
+function extractMediaUrlsFromPayload(payload) {
+  const out = [];
+  if (!payload || typeof payload !== "object") return out;
+  for (const [k, v] of Object.entries(payload)) {
+    const key = String(k || "");
+    if (!/mediaurl\d+/i.test(key) && key !== "media_url0" && key !== "mediaUrl0") continue;
+    const u = String(v || "").trim();
+    if (!u || !/^https?:\/\//i.test(u)) continue;
+    if (!out.includes(u)) out.push(u);
+  }
+  if (Array.isArray(payload.media_urls)) {
+    for (const v of payload.media_urls) {
+      const u = String(v || "").trim();
+      if (!u || !/^https?:\/\//i.test(u)) continue;
+      if (!out.includes(u)) out.push(u);
+    }
+  }
+  return out;
+}
+
 function cachedLeadGeo(cacheKey) {
   const rec = LEAD_GEO_CACHE.get(cacheKey);
   if (!rec) return null;
@@ -1094,6 +1120,7 @@ app.get("/api/dashboard/leads", async (req, res) => {
            address_text,
            zip,
            zip_text,
+           media_url0,
            load_bucket,
            quote_status,
            conv_state,
@@ -1111,6 +1138,8 @@ app.get("/api/dashboard/leads", async (req, res) => {
 
     const phones = rows.map((r) => String(r.from_phone || "")).filter(Boolean);
     const actionCounts = new Map();
+    const itemTableByPhone = new Map();
+    const mediaByPhone = new Map();
     if (phones.length) {
       try {
         const tracked = ["next_action_sent", "sla_nudge_sent", "dropoff_recovery_sent"];
@@ -1126,12 +1155,90 @@ app.get("/api/dashboard/leads", async (req, res) => {
         ).rows;
         for (const r of evRows) actionCounts.set(String(r.from_phone || ""), Number(r.cnt || 0));
       } catch {}
+
+      try {
+        const itemRows = (
+          await pool.query(
+            `SELECT from_phone, UPPER(COALESCE(bucket,'DUMP')) AS bucket,
+                    ARRAY_REMOVE(ARRAY_AGG(item_name ORDER BY id DESC), NULL) AS names
+             FROM job_items
+             WHERE from_phone = ANY($1)
+             GROUP BY from_phone, UPPER(COALESCE(bucket,'DUMP'))`,
+            [phones]
+          )
+        ).rows;
+        for (const r of itemRows) {
+          const phone = String(r.from_phone || "");
+          if (!phone) continue;
+          const rec = itemTableByPhone.get(phone) || { resale: [], donate: [], dump: [], scrap: [] };
+          const bucket = String(r.bucket || "");
+          const key =
+            bucket === "RESELL" ? "resale" :
+            bucket === "DONATE" ? "donate" :
+            bucket === "SCRAP" ? "scrap" :
+            "dump";
+          const names = Array.isArray(r.names) ? r.names : [];
+          for (const name of names) {
+            const item = String(name || "").trim();
+            if (!item || rec[key].includes(item)) continue;
+            rec[key].push(item);
+            if (rec[key].length >= 8) break;
+          }
+          itemTableByPhone.set(phone, rec);
+        }
+      } catch {}
+
+      try {
+        const mediaRows = (
+          await pool.query(
+            `SELECT from_phone, payload_json
+             FROM events
+             WHERE from_phone = ANY($1)
+               AND event_type = ANY($2)
+             ORDER BY id DESC
+             LIMIT 5000`,
+            [phones, ["inbound_raw", "media_received", "media_backfill_hit"]]
+          )
+        ).rows;
+        for (const r of mediaRows) {
+          const phone = String(r.from_phone || "");
+          if (!phone) continue;
+          const rec = mediaByPhone.get(phone) || [];
+          if (rec.length >= 8) continue;
+          const payload = safeJsonParse(r.payload_json) || {};
+          const urls = extractMediaUrlsFromPayload(payload);
+          for (const u of urls) {
+            if (!rec.includes(u)) rec.push(u);
+            if (rec.length >= 8) break;
+          }
+          mediaByPhone.set(phone, rec);
+        }
+      } catch {}
     }
 
     const leads = rows.map((r) => {
       const phone = String(r.from_phone || "");
       const state = leadState(r);
       const worldview = worldviewByPhone.get(phone) || null;
+      const itemTable = itemTableByPhone.get(phone) || { resale: [], donate: [], dump: [], scrap: [] };
+      const mediaUrls = [...(mediaByPhone.get(phone) || [])];
+      if (r.media_url0 && !mediaUrls.includes(r.media_url0)) mediaUrls.unshift(String(r.media_url0));
+      const visionTop = Array.isArray(worldview?.hover?.items?.top)
+        ? worldview.hover.items.top.map((x) => String(x || "").trim()).filter(Boolean)
+        : [];
+      if (!itemTable.resale.length && !itemTable.donate.length && !itemTable.dump.length && !itemTable.scrap.length && visionTop.length) {
+        itemTable.dump = visionTop.slice(0, 6);
+      }
+      const mergedIntel = {
+        ...(worldview?.hover || {}),
+        item_table: {
+          resale: itemTable.resale.slice(0, 8),
+          donate: itemTable.donate.slice(0, 8),
+          dump: itemTable.dump.slice(0, 8),
+          scrap: itemTable.scrap.slice(0, 8)
+        },
+        media_urls: mediaUrls.slice(0, 8)
+      };
       return {
         phone,
         from_phone: phone,
@@ -1148,7 +1255,9 @@ app.get("/api/dashboard/leads", async (req, res) => {
         margin_cents: null,
         margin_pct: null,
         next_action_sent_count: Number(actionCounts.get(phone) || 0),
-        intel: worldview?.hover || null
+        intel: mergedIntel,
+        item_table: mergedIntel.item_table,
+        media_urls: mergedIntel.media_urls
       };
     });
 
@@ -1181,7 +1290,9 @@ app.get("/api/dashboard/leads", async (req, res) => {
         inactivity_minutes: inactivityMinutes,
         risk,
         priority_score: priorityScore,
-        intel: lead.intel || null
+        intel: lead.intel || null,
+        item_table: lead.item_table || { resale: [], donate: [], dump: [], scrap: [] },
+        media_urls: lead.media_urls || []
       });
     }
 
