@@ -1640,14 +1640,13 @@ function mediaUrlsForLead(lead){
 }
 function mediaProxyUrl(url){return '/media-proxy?u='+encodeURIComponent(String(url||''));}
 function itemTableHtml(table){
-  const cols=[['resale','Resale'],['donate','Donate'],['dump','Dump']];
+  const cols=[['resale','Resale'],['donate','Donate'],['dump','Dump'],['scrap','Scrap']];
   const rows=Math.max(1,...cols.map(([k])=>table[k].length));
   const body=[];
   for(let i=0;i<rows;i++){
     body.push(`<tr>${cols.map(([k])=>`<td>${h(table[k][i]||'—')}</td>`).join('')}</tr>`);
   }
-  const scrapLine=table.scrap.length?`<div style="margin-top:4px;font-size:10px;color:#111"><strong>Scrap:</strong> ${h(table.scrap.join(' · '))}</div>`:'';
-  return `<table class="hover-item-table"><thead><tr>${cols.map(([,label])=>`<th>${label}</th>`).join('')}</tr></thead><tbody>${body.join('')}</tbody></table>${scrapLine}`;
+  return `<table class="hover-item-table"><thead><tr>${cols.map(([,label])=>`<th>${label}</th>`).join('')}</tr></thead><tbody>${body.join('')}</tbody></table>`;
 }
 function leadHoverInfoHtml(lead){
   const intel=(lead&&lead.intel&&typeof lead.intel==='object')?lead.intel:{};
