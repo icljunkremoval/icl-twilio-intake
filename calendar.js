@@ -63,19 +63,37 @@ function parseTimingPref(timing_pref) {
       startAmPm = (sh === 12 || eh !== 12) ? "pm" : "am";
     }
   }
-  const year = new Date().getFullYear();
-  const base = new Date(`${dateStr} ${year}`);
+  const MONTHS = {
+    jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+    jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12
+  };
+  const parts = String(dateStr).trim().split(/\s+/);
+  const monRaw = String(parts[1] || "").slice(0, 3).toLowerCase();
+  const month = MONTHS[monRaw];
+  const day = parseInt(parts[2], 10);
+  if (!month || !Number.isFinite(day)) return null;
+
+  const now = new Date();
+  let year = now.getFullYear();
+  const noonCandidateTs = Date.UTC(year, month - 1, day, 12, 0, 0, 0);
+  // If date label is already behind us (year rollover edge), use next year.
+  if (Number.isFinite(noonCandidateTs) && noonCandidateTs < (now.getTime() - 12 * 3600 * 1000)) {
+    year += 1;
+  }
+
+  const pad2 = (n) => String(n).padStart(2, '0');
   function toHour24(h, ampm) {
     let hour = parseInt(h);
     if (ampm.toLowerCase() === 'pm' && hour !== 12) hour += 12;
     if (ampm.toLowerCase() === 'am' && hour === 12) hour = 0;
     return hour;
   }
-  const start = new Date(base);
-  start.setHours(toHour24(startHour, startAmPm), 0, 0, 0);
-  const end = new Date(base);
-  end.setHours(toHour24(endHour, endAmPm), 0, 0, 0);
-  return { start, end };
+  const startHour24 = toHour24(startHour, startAmPm);
+  const endHour24 = toHour24(endHour, endAmPm);
+  // Use local wall-clock times for America/Los_Angeles (no trailing Z).
+  const startLocal = `${year}-${pad2(month)}-${pad2(day)}T${pad2(startHour24)}:00:00`;
+  const endLocal = `${year}-${pad2(month)}-${pad2(day)}T${pad2(endHour24)}:00:00`;
+  return { startLocal, endLocal };
 }
 
 async function createJobEvent(lead) {
@@ -107,8 +125,8 @@ async function createJobEvent(lead) {
     const event = {
       summary: `ICL Job — ${(lead.address || lead.address_text || lead.from_phone)}`,
       description,
-      start: { dateTime: timing.start.toISOString(), timeZone: 'America/Los_Angeles' },
-      end: { dateTime: timing.end.toISOString(), timeZone: 'America/Los_Angeles' },
+      start: { dateTime: timing.startLocal, timeZone: 'America/Los_Angeles' },
+      end: { dateTime: timing.endLocal, timeZone: 'America/Los_Angeles' },
       colorId: '2'
     };
     const res = await calendar.events.insert({ calendarId, resource: event });
