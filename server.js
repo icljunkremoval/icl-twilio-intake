@@ -2433,8 +2433,16 @@ app.post("/admin/leads/:from/payment-link", async (req, res) => {
   }
 });
 
-app.post("/admin/leads/:from/simulate-deposit", async (req, res) => {
+async function handleSimulateDeposit(req, res) {
   try {
+    const rawFrom = String(req.params.from || "").trim();
+    if (!rawFrom || rawFrom.startsWith(":")) {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid lead phone",
+        hint: "Use a real phone in the path, e.g. /admin/leads/%2B13233979698/simulate-deposit"
+      });
+    }
     const fromPhone = normalizePhoneE164(req.params.from || "");
     if (!fromPhone) return res.status(400).json({ ok: false, error: "invalid lead phone" });
     const result = await simulateDepositForPhone(fromPhone, {
@@ -2452,7 +2460,9 @@ app.post("/admin/leads/:from/simulate-deposit", async (req, res) => {
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
-});
+}
+app.post("/admin/leads/:from/simulate-deposit", handleSimulateDeposit);
+app.get("/admin/leads/:from/simulate-deposit", handleSimulateDeposit);
 
 app.post("/admin/leads/:from/load-bucket", async (req, res) => {
   try {
