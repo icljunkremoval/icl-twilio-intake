@@ -198,7 +198,7 @@ async function processPostPaymentForLead({
 
   if (!alreadyPaid) {
     await pool.query(
-      "UPDATE leads SET deposit_paid=1, deposit_paid_at=COALESCE(deposit_paid_at,NOW()), quote_status='BOOKING_SENT', conv_state='BOOKING_SENT', last_seen_at=NOW() WHERE from_phone=$1",
+      "UPDATE leads SET deposit_paid=1, deposit_paid_at=COALESCE(NULLIF(deposit_paid_at,''),NOW()::text), quote_status='BOOKING_SENT', conv_state='BOOKING_SENT', last_seen_at=NOW() WHERE from_phone=$1",
       [lead.from_phone]
     );
     actions_taken.push("lead_marked_paid");
