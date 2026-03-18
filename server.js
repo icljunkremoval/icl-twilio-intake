@@ -1,6 +1,6 @@
 const { checkDropoffs } = require("./dropoff_monitor");
 const { handleOpsReply } = require("./job_complete");
-const { handleSquareWebhook } = require("./square_webhook");
+const { handleSquareWebhook, simulateDepositForPhone } = require("./square_webhook");
 const { fetchLatest } = require("./twilio_debug");
 const { backfillLatestMedia } = require("./twilio_media_backfill");
 const { recomputeDerived } = require("./recompute");
@@ -2427,6 +2427,27 @@ app.post("/admin/leads/:from/payment-link", async (req, res) => {
       quote_total_cents: payment.quoteTotalCents,
       payment_link_url: payment.deposit.payment_link_url,
       upfront_payment_link_url: payment.upfront.payment_link_url
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/admin/leads/:from/simulate-deposit", async (req, res) => {
+  try {
+    const fromPhone = normalizePhoneE164(req.params.from || "");
+    if (!fromPhone) return res.status(400).json({ ok: false, error: "invalid lead phone" });
+    const result = await simulateDepositForPhone(fromPhone, {
+      baseUrl: String(process.env.APP_BASE_URL || process.env.BASE_URL || `https://${req.headers.host}`),
+      forceSms: true
+    });
+    if (!result.ok) return res.status(404).json(result);
+    return res.json({
+      ok: true,
+      booking_link: result.booking_link || null,
+      confirmation_id: result.confirmation_id || null,
+      actions_taken: result.actions_taken || [],
+      actions_failed: result.actions_failed || []
     });
   } catch (e) {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });

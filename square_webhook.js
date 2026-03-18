@@ -19,7 +19,15 @@ function verifySquareSignature(body, signature, url) {
 function baseUrlFromReq(req) {
   const envBase = String(process.env.APP_BASE_URL || "").trim();
   if (envBase) return envBase.replace(/\/+$/, "");
+  const envBase2 = String(process.env.BASE_URL || "").trim();
+  if (envBase2) return envBase2.replace(/\/+$/, "");
   return `https://${req.headers.host}`;
+}
+
+function configuredBaseUrl() {
+  const envBase = String(process.env.APP_BASE_URL || process.env.BASE_URL || "").trim();
+  if (envBase) return envBase.replace(/\/+$/, "");
+  return "https://icl-twilio-intake-production.up.railway.app";
 }
 
 function normalizePhone(raw) {
@@ -170,6 +178,116 @@ async function hasWindowPickerSms(fromPhone) {
   return !!row;
 }
 
+async function processPostPaymentForLead({
+  lead,
+  orderId,
+  paymentId,
+  eventType,
+  paymentKind = "deposit",
+  baseUrl,
+  forceSms = false
+}) {
+  const actions_taken = [];
+  const actions_failed = [];
+
+  const alreadyPaid = Number(lead.deposit_paid) === 1;
+  const alreadySentWindowPicker = await hasWindowPickerSms(lead.from_phone);
+  if (alreadyPaid && alreadySentWindowPicker && !forceSms) {
+    return { ok: true, skipped: true, actions_taken: ["already_paid_and_sms_sent"], actions_failed: [] };
+  }
+
+  if (!alreadyPaid) {
+    await pool.query(
+      "UPDATE leads SET deposit_paid=1, deposit_paid_at=COALESCE(deposit_paid_at,NOW()), quote_status='BOOKING_SENT', conv_state='BOOKING_SENT', last_seen_at=NOW() WHERE from_phone=$1",
+      [lead.from_phone]
+    );
+    actions_taken.push("lead_marked_paid");
+  } else {
+    await pool.query("UPDATE leads SET last_seen_at=NOW() WHERE from_phone=$1", [lead.from_phone]);
+    actions_taken.push("lead_touch_last_seen");
+  }
+
+  const bookingLink = buildBookingLink(String(baseUrl || configuredBaseUrl()), lead.from_phone);
+  const confirmationId = makeConfirmationId(paymentId, orderId);
+
+  if (!alreadyPaid) {
+    try {
+      insertEvent.run({
+        from_phone: lead.from_phone,
+        event_type: paymentKind === "upfront" ? "upfront_paid" : "deposit_paid",
+        payload_json: JSON.stringify({
+          order_id: orderId,
+          payment_id: paymentId || null,
+          event_type: eventType,
+          payment_kind: paymentKind,
+          confirmation_id: confirmationId,
+          booking_link: bookingLink
+        }),
+        created_at: new Date().toISOString(),
+      });
+      actions_taken.push("paid_event_logged");
+    } catch (e) {
+      actions_failed.push("paid_event_log_failed");
+    }
+  }
+
+  try {
+    const sms = await sendSms(
+      lead.from_phone,
+      buildPostPaymentSms({ confirmationId, bookingLink, paymentKind })
+    );
+    try {
+      insertEvent.run({
+        from_phone: lead.from_phone,
+        event_type: "sms_sent_window_picker",
+        payload_json: JSON.stringify({ twilio: sms }),
+        created_at: new Date().toISOString(),
+      });
+    } catch {}
+    actions_taken.push("window_picker_sms_sent");
+  } catch (smsErr) {
+    console.error("[square_webhook] post-payment sms failed:", smsErr?.message || smsErr);
+    try {
+      insertEvent.run({
+        from_phone: lead.from_phone,
+        event_type: "sms_failed_window_picker",
+        payload_json: JSON.stringify({
+          error: String(smsErr?.message || smsErr),
+          booking_link: bookingLink
+        }),
+        created_at: new Date().toISOString(),
+      });
+    } catch {}
+    actions_failed.push("window_picker_sms_failed");
+  }
+
+  if (!alreadyPaid && String(lead.timing_pref || "").trim()) {
+    try {
+      await sendCrewBrief(lead);
+      actions_taken.push("crew_brief_sent");
+    } catch {
+      actions_failed.push("crew_brief_failed");
+    }
+  }
+  if (!alreadyPaid) {
+    try {
+      await processSalvage(lead);
+      actions_taken.push("salvage_pipeline_triggered");
+    } catch {
+      actions_failed.push("salvage_pipeline_failed");
+    }
+  }
+
+  return {
+    ok: true,
+    skipped: false,
+    confirmation_id: confirmationId,
+    booking_link: bookingLink,
+    actions_taken,
+    actions_failed
+  };
+}
+
 async function handleSquareWebhook(req, res) {
   try {
     const signature = req.headers["x-square-hmacsha256-signature"] || "";
@@ -262,77 +380,21 @@ async function handleSquareWebhook(req, res) {
       return res.status(200).send("ok");
     }
 
-    const alreadyPaid = Number(lead.deposit_paid) === 1;
-    const alreadySentWindowPicker = await hasWindowPickerSms(lead.from_phone);
-    if (alreadyPaid && alreadySentWindowPicker) {
-      console.log("[square_webhook] payment already handled for:", lead.from_phone);
-      return res.status(200).send("ok");
-    }
-
-    // Mark payment as received and move lead into booking state.
-    // We do this before SMS so inbound replies can still progress even if send fails.
-    if (!alreadyPaid) {
-      await pool.query(
-        "UPDATE leads SET deposit_paid=1, deposit_paid_at=COALESCE(deposit_paid_at,NOW()), quote_status='BOOKING_SENT', conv_state='BOOKING_SENT', last_seen_at=NOW() WHERE from_phone=$1",
-        [lead.from_phone]
-      );
-    } else {
-      await pool.query("UPDATE leads SET last_seen_at=NOW() WHERE from_phone=$1", [lead.from_phone]);
-    }
-
-    const bookingLink = buildBookingLink(baseUrlFromReq(req), lead.from_phone);
-    const confirmationId = makeConfirmationId(paymentId, orderId);
     const paymentKind = String(lead.payment_kind || "deposit");
-
-    if (!alreadyPaid) {
-      try {
-        insertEvent.run({
-          from_phone: lead.from_phone,
-          event_type: paymentKind === "upfront" ? "upfront_paid" : "deposit_paid",
-          payload_json: JSON.stringify({
-            order_id: orderId,
-            payment_id: paymentId || null,
-            event_type: eventType,
-            payment_kind: paymentKind,
-            confirmation_id: confirmationId,
-            booking_link: bookingLink
-          }),
-          created_at: new Date().toISOString(),
-        });
-      } catch {}
+    const result = await processPostPaymentForLead({
+      lead,
+      orderId,
+      paymentId,
+      eventType,
+      paymentKind,
+      baseUrl: baseUrlFromReq(req),
+      forceSms: false
+    });
+    if (result.skipped) {
+      console.log("[square_webhook] payment already handled for:", lead.from_phone);
+    } else {
+      console.log("[square_webhook] post-payment actions:", result.actions_taken.join(","));
     }
-
-    // Send post-payment journey + booking guidance SMS
-    try {
-      const sms = await sendSms(
-        lead.from_phone,
-        buildPostPaymentSms({ confirmationId, bookingLink, paymentKind })
-      );
-      console.log("[square_webhook] window picker sent to:", lead.from_phone);
-      try {
-        insertEvent.run({
-          from_phone: lead.from_phone,
-          event_type: "sms_sent_window_picker",
-          payload_json: JSON.stringify({ twilio: sms }),
-          created_at: new Date().toISOString(),
-        });
-      } catch {}
-    } catch (smsErr) {
-      console.error("[square_webhook] post-payment sms failed:", smsErr?.message || smsErr);
-      try {
-        insertEvent.run({
-          from_phone: lead.from_phone,
-          event_type: "sms_failed_window_picker",
-          payload_json: JSON.stringify({
-            error: String(smsErr?.message || smsErr),
-            booking_link: bookingLink
-          }),
-          created_at: new Date().toISOString(),
-        });
-      } catch {}
-    }
-    sendCrewBrief(lead).catch(()=>{});
-    processSalvage(lead).catch(()=>{});
 
     return res.status(200).send("ok");
 
@@ -342,4 +404,36 @@ async function handleSquareWebhook(req, res) {
   }
 }
 
-module.exports = { handleSquareWebhook };
+async function simulateDepositForPhone(fromPhone, { baseUrl, forceSms = true } = {}) {
+  const lead = (await pool.query("SELECT * FROM leads WHERE from_phone=$1 LIMIT 1", [fromPhone])).rows[0];
+  if (!lead) {
+    return { ok: false, error: "lead_not_found" };
+  }
+  const orderId = `SIM-${Date.now()}`;
+  const paymentId = `SIMPAY-${Date.now()}`;
+  const result = await processPostPaymentForLead({
+    lead,
+    orderId,
+    paymentId,
+    eventType: "simulate.deposit",
+    paymentKind: "deposit",
+    baseUrl: String(baseUrl || configuredBaseUrl()),
+    forceSms: !!forceSms
+  });
+  try {
+    insertEvent.run({
+      from_phone: lead.from_phone,
+      event_type: "simulate_deposit",
+      payload_json: JSON.stringify({
+        order_id: orderId,
+        payment_id: paymentId,
+        actions_taken: result.actions_taken || [],
+        actions_failed: result.actions_failed || []
+      }),
+      created_at: new Date().toISOString()
+    });
+  } catch {}
+  return result;
+}
+
+module.exports = { handleSquareWebhook, simulateDepositForPhone };
