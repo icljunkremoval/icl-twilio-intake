@@ -1063,7 +1063,14 @@ function applyDumpSiteOverrides(baseSites, rows) {
 
 const app = express();
 app.use("/public", require("express").static(require("path").join(__dirname, "public")));
-app.use(express.json({ limit: "2mb" }))
+app.use(express.json({
+  limit: "2mb",
+  verify: (req, _res, buf) => {
+    try {
+      if (buf && buf.length) req.rawBody = buf.toString("utf8");
+    } catch {}
+  }
+}))
 function paymentLandingHtml() {
   return `<!doctype html>
 <html>
