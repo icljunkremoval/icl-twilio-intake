@@ -705,6 +705,18 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
     <div class="ld-row"><label>Quoted Amount (USD)</label><input id="manual-lead-quoted" type="number" step="0.01" min="0" placeholder="623.00" /></div>
     <div class="ld-row"><label>Site Visit Date</label><input id="manual-site-visit-date" type="date" /></div>
     <div class="ld-row"><label>Notes</label><textarea id="manual-lead-notes" placeholder="What you saw during consultation, constraints, access, special handling..."></textarea></div>
+    <div class="ld-row">
+      <label>Photos</label>
+      <div id="manual-photo-dropzone" style="border:1px dashed #94a3b8;border-radius:10px;padding:12px;background:#f8fafc;cursor:pointer">
+        <div style="font-size:12px;color:#0f172a;font-weight:700">Drag & drop photos here</div>
+        <div style="font-size:11px;color:#334155;margin-top:4px">or click to browse · JPEG/PNG/HEIC · up to 10 files, 10MB each</div>
+      </div>
+      <input id="manual-lead-photos" type="file" accept="image/jpeg,image/png,image/heic,image/heif" multiple style="display:none" />
+      <div id="manual-photo-counter" style="font-size:11px;color:#334155">0 of 10 photos selected</div>
+      <div id="manual-photo-previews" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+      <div id="manual-photo-status" style="font-size:11px;color:#334155"></div>
+      <div id="manual-vision-result" style="font-size:11px;color:#0f172a"></div>
+    </div>
   </div>
   <div class="ld-actions">
     <button class="ld-btn" onclick="closeAddLeadPanel()">Cancel</button>
@@ -809,6 +821,65 @@ function showToast(msg,type='ok'){
   wrap.appendChild(el);
   setTimeout(()=>{try{el.remove();}catch(e){}},3800);
 }
+function adminUploadHeaders(){
+  const h={'Accept':'application/json'};
+  const b64=getAdminAuthB64();
+  if(b64)h['Authorization']='Basic '+b64;
+  return h;
+}
+let MANUAL_SELECTED_FILES=[];
+let MANUAL_LAST_CREATED_PHONE='';
+function renderManualPhotoPreviews(){
+  const list=Array.isArray(MANUAL_SELECTED_FILES)?MANUAL_SELECTED_FILES:[];
+  const cnt=document.getElementById('manual-photo-counter');
+  if(cnt)cnt.textContent=`${list.length} of 10 photos selected`;
+  const box=document.getElementById('manual-photo-previews');
+  if(!box)return;
+  box.innerHTML='';
+  list.slice(0,10).forEach(file=>{
+    const u=URL.createObjectURL(file);
+    const img=document.createElement('img');
+    img.src=u;
+    img.alt='Preview';
+    img.style.cssText='width:52px;height:52px;object-fit:cover;border:1px solid #cbd5e1;border-radius:6px';
+    box.appendChild(img);
+    setTimeout(()=>URL.revokeObjectURL(u),4000);
+  });
+}
+function setManualPhotoStatus(msg,isErr=false){
+  const el=document.getElementById('manual-photo-status');
+  if(!el)return;
+  el.textContent=String(msg||'');
+  el.style.color=isErr?'#991b1b':'#334155';
+}
+function renderManualVisionResultBlock(phone, visionResult){
+  const el=document.getElementById('manual-vision-result');
+  if(!el)return;
+  if(!visionResult){el.innerHTML='';return;}
+  const bucket=String(visionResult.load_bucket||'—');
+  const conf=String(visionResult.load_confidence||'—');
+  const items=Array.isArray(visionResult.items)?visionResult.items.filter(Boolean):String(visionResult.item_list||'').split('\n').map(s=>s.trim()).filter(Boolean);
+  const shown=items.slice(0,8);
+  const more=Math.max(0,items.length-shown.length);
+  el.innerHTML=`
+    <div style="margin-top:8px;padding:8px;border:1px solid #d1fae5;background:#f0fdf4;border-radius:8px">
+      <div style="font-weight:700">Load bucket detected: ${bucket} (${conf})</div>
+      <div style="margin-top:4px;font-size:11px;line-height:1.35">Items identified: ${shown.join(', ')||'—'}${more>0?` <span style="opacity:.7">(+${more} more)</span>`:''}</div>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap">
+        <label style="font-size:10px;color:#0f172a">Override load:</label>
+        <select id="manual-load-override" style="border:1px solid #cbd5e1;border-radius:6px;padding:5px 7px;font:11px DM Mono,monospace">
+          ${['MIN','QTR','HALF','3Q','FULL'].map(v=>`<option value="${v}" ${v===bucket?'selected':''}>${v}</option>`).join('')}
+        </select>
+        <button class="lead-act-btn" onclick="applyManualLoadOverride('${String(phone||'')}')">Apply</button>
+      </div>
+    </div>`;
+}
+function onManualPhotosSelected(fileList){
+  const arr=Array.from(fileList||[]).filter(f=>f&&f.size>0);
+  MANUAL_SELECTED_FILES=arr.slice(0,10);
+  renderManualPhotoPreviews();
+  setManualPhotoStatus(MANUAL_SELECTED_FILES.length?'':'No photos selected');
+}
 function openAddLeadPanel(){
   document.getElementById('lead-drawer')?.classList.add('on');
   document.getElementById('lead-drawer-backdrop')?.classList.add('on');
@@ -819,6 +890,30 @@ function openAddLeadPanel(){
 function closeAddLeadPanel(){
   document.getElementById('lead-drawer')?.classList.remove('on');
   document.getElementById('lead-drawer-backdrop')?.classList.remove('on');
+  MANUAL_SELECTED_FILES=[];
+  renderManualPhotoPreviews();
+  setManualPhotoStatus('');
+  renderManualVisionResultBlock('',null);
+}
+async function uploadLeadPhotos(phone, files, {silent=false,inlineResult=false}={}){
+  const list=Array.from(files||[]).slice(0,10);
+  if(!list.length)return null;
+  const fd=new FormData();
+  list.forEach(f=>fd.append('photos',f,f.name));
+  if(!silent)showToast('Analyzing photos with AI…');
+  setManualPhotoStatus('Analyzing photos with AI...');
+  const r=await fetch(`/admin/leads/${encodeURIComponent(String(phone||''))}/photos`,{
+    method:'POST',
+    headers:adminUploadHeaders(),
+    body:fd
+  });
+  const j=await r.json().catch(()=>({ok:false,error:'invalid response'}));
+  if(!r.ok||!j.ok)throw new Error(j.error||`HTTP ${r.status}`);
+  const skipped=Array.isArray(j.skipped)?j.skipped:[];
+  if(skipped.length)showToast(`Uploaded with warnings: ${skipped[0]}`,'err');
+  if(inlineResult)renderManualVisionResultBlock(phone,j.vision_result||null);
+  setManualPhotoStatus('Analysis complete.');
+  return j;
 }
 async function submitManualLead(){
   const pw=String(document.getElementById('manual-admin-password')?.value||'').trim();
@@ -848,13 +943,119 @@ async function submitManualLead(){
     const r=await fetch('/admin/leads/manual',{method:'POST',headers:adminJsonHeaders(),body:JSON.stringify(payload)});
     const j=await r.json().catch(()=>({ok:false,error:'invalid response'}));
     if(!r.ok||!j.ok)throw new Error(j.error||`HTTP ${r.status}`);
+    const phone=String(j?.lead?.from_phone||payload.from_phone||'');
+    MANUAL_LAST_CREATED_PHONE=phone;
     showToast('Manual lead saved.');
-    closeAddLeadPanel();
+    if(MANUAL_SELECTED_FILES.length&&phone){
+      try{
+        await uploadLeadPhotos(phone,MANUAL_SELECTED_FILES,{silent:true,inlineResult:true});
+        MANUAL_SELECTED_FILES=[];
+        renderManualPhotoPreviews();
+      }catch(e){
+        showToast(`Photo analyze failed: ${e.message||e}`,'err');
+      }
+    }else{
+      renderManualVisionResultBlock('',null);
+      setManualPhotoStatus('No photos uploaded yet. You can upload later from the lead row.');
+    }
     await fetchLeads();
+    if(!MANUAL_SELECTED_FILES.length)closeAddLeadPanel();
   }catch(e){
     showToast(`Save failed: ${e.message||e}`,'err');
   }finally{
     if(btn){btn.disabled=false;btn.textContent='Save Lead';}
+  }
+}
+async function applyManualLoadOverride(phone){
+  const p=String(phone||MANUAL_LAST_CREATED_PHONE||'').trim();
+  if(!p)return;
+  if(!getAdminAuthB64()){
+    openAddLeadPanel();
+    showToast('Enter admin password first, then apply override.','err');
+    return;
+  }
+  const sel=document.getElementById('manual-load-override');
+  const loadBucket=String(sel?.value||'').trim();
+  if(!loadBucket)return;
+  try{
+    const r=await fetch(`/admin/leads/${encodeURIComponent(p)}/load-bucket`,{
+      method:'POST',
+      headers:adminJsonHeaders(),
+      body:JSON.stringify({load_bucket:loadBucket})
+    });
+    const j=await r.json().catch(()=>({ok:false,error:'invalid response'}));
+    if(!r.ok||!j.ok)throw new Error(j.error||`HTTP ${r.status}`);
+    showToast('Load bucket override saved.');
+    await fetchLeads();
+  }catch(e){
+    showToast(`Override failed: ${e.message||e}`,'err');
+  }
+}
+async function pickAndUploadLeadPhotos(phone){
+  const p=String(phone||'').trim();
+  if(!p)return;
+  if(!getAdminAuthB64()){
+    openAddLeadPanel();
+    showToast('Enter admin password first, then upload photos.','err');
+    return;
+  }
+  const inp=document.createElement('input');
+  inp.type='file';
+  inp.accept='image/jpeg,image/png,image/heic,image/heif';
+  inp.multiple=true;
+  inp.onchange=async()=>{
+    try{
+      await uploadLeadPhotos(p,inp.files,{silent:false,inlineResult:false});
+      showToast('Photos uploaded and analyzed.');
+      await fetchLeads();
+    }catch(e){
+      showToast(`Upload failed: ${e.message||e}`,'err');
+    }
+  };
+  inp.click();
+}
+async function reanalyzeLeadPhotos(phone){
+  const p=String(phone||'').trim();
+  if(!p)return;
+  if(!getAdminAuthB64()){
+    openAddLeadPanel();
+    showToast('Enter admin password first, then re-analyze.','err');
+    return;
+  }
+  try{
+    showToast('Re-analyzing photos...');
+    const r=await fetch(`/admin/leads/${encodeURIComponent(p)}/reanalyze`,{
+      method:'POST',
+      headers:adminJsonHeaders()
+    });
+    const j=await r.json().catch(()=>({ok:false,error:'invalid response'}));
+    if(!r.ok||!j.ok)throw new Error(j.error||`HTTP ${r.status}`);
+    showToast('Re-analysis complete.');
+    await fetchLeads();
+  }catch(e){
+    showToast(`Re-analysis failed: ${e.message||e}`,'err');
+  }
+}
+async function generateQuoteForLead(phone,createPaymentLink=false){
+  const p=String(phone||'').trim();
+  if(!p)return;
+  if(!getAdminAuthB64()){
+    openAddLeadPanel();
+    showToast('Enter admin password first, then generate quote.','err');
+    return;
+  }
+  try{
+    const r=await fetch(`/admin/leads/${encodeURIComponent(p)}/generate-quote`,{
+      method:'POST',
+      headers:adminJsonHeaders(),
+      body:JSON.stringify({create_payment_link:!!createPaymentLink})
+    });
+    const j=await r.json().catch(()=>({ok:false,error:'invalid response'}));
+    if(!r.ok||!j.ok)throw new Error(j.error||`HTTP ${r.status}`);
+    showToast(createPaymentLink?'Quote + payment link generated.':'Quote generated.');
+    await fetchLeads();
+  }catch(e){
+    showToast(`Quote generation failed: ${e.message||e}`,'err');
   }
 }
 async function generateLeadPaymentLink(phone){
@@ -1111,6 +1312,34 @@ function stateCls(s){
   return'sn';
 }
 function stateLabel(s){return(s||'?').replace('AWAITING_','').replace(/_/g,' ');}
+function parseVisionPayload(raw){
+  if(!raw)return null;
+  if(raw&&typeof raw==='object')return raw;
+  try{return JSON.parse(String(raw));}catch(e){return null;}
+}
+function leadVisionSummary(lead){
+  const v=parseVisionPayload(lead?.vision_analysis);
+  if(!v)return null;
+  const items=Array.isArray(v.items)?v.items.map(x=>String(x||'').trim()).filter(Boolean):[];
+  return {
+    bucket:String(v.load_bucket||'').trim()||null,
+    confidence:String(v.load_confidence||'').trim()||null,
+    items
+  };
+}
+function leadMediaThumbs(lead){
+  const list=Array.isArray(lead?.media_urls)?lead.media_urls:[];
+  return list
+    .map(u=>{
+      const v=String(u||'').trim();
+      if(!v)return'';
+      if(v.startsWith('/'))return v;
+      if(/^https?:\/\//i.test(v))return '/media-proxy?u='+encodeURIComponent(v);
+      return '';
+    })
+    .filter(Boolean)
+    .slice(0,4);
+}
 function normalizePinStage(stage){
   const s=String(stage||'').toLowerCase();
   if(s==='green')return'paid';
@@ -1143,14 +1372,33 @@ function leadHtml(l){
   const manual=String(l.lead_source||'sms').toLowerCase()==='manual';
   const title=h(l.lead_name||fPhone(l.phone));
   const depositLink=String(l.square_payment_link_url||'').trim();
+  const vision=leadVisionSummary(l);
+  const itemsShown=(vision?.items||[]).slice(0,6);
+  const itemsMore=Math.max(0,(vision?.items||[]).length-itemsShown.length);
+  const thumbs=leadMediaThumbs(l);
+  const hasPhotos=thumbs.length>0;
+  const phoneEsc=h(l.phone||'');
+  const quoteBtn=vision?.bucket
+    ? `<button class="lead-act-btn" onclick="generateQuoteForLead('${phoneEsc}',false)">Generate Quote</button>`
+    : '';
+  const reanalyzeBtn=hasPhotos
+    ? `<button class="lead-act-btn" onclick="reanalyzeLeadPhotos('${phoneEsc}')">Re-analyze</button>`
+    : '';
   return`<div class="lead">
     <div class="av">${init}</div>
     <div><div class="lead-meta"><div style="font-size:11px;color:var(--tx)">${title}</div>${manual?'<span class="manual-badge">Manual</span>':''}</div>
     <div style="font-size:10px;color:var(--tx2)">${h(fPhone(l.phone))}</div>
     <div style="font-size:9px;color:var(--tx3)">${fAgo(l.created_at||l.createdAt)} · ${h(l.address||'No address')}</div>
-    <div style="font-size:8px;color:var(--tx2);margin-top:2px">${h(l.next_action||'—')} · <span style="color:${sla.color}">${h(sla.label)}</span></div></div>
+    <div style="font-size:8px;color:var(--tx2);margin-top:2px">${h(l.next_action||'—')} · <span style="color:${sla.color}">${h(sla.label)}</span></div>
+    ${vision?`<div style="font-size:8px;color:var(--green);margin-top:3px"><strong>Load Assessment:</strong> ${h(vision.bucket||'—')} — ${h(vision.confidence||'—')}</div>`:''}
+    ${vision&&itemsShown.length?`<div style="font-size:8px;color:var(--tx2);margin-top:2px"><strong>Items:</strong> ${h(itemsShown.join(', '))}${itemsMore>0?` <span style="opacity:.7">(+${itemsMore} more)</span>`:''}</div>`:''}
+    ${thumbs.length?`<div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap">${thumbs.map(u=>`<a href="${h(u)}" target="_blank" rel="noopener"><img src="${h(u)}" alt="Lead photo" style="width:28px;height:28px;object-fit:cover;border:1px solid var(--bd2);border-radius:4px"/></a>`).join('')}</div>`:''}
+    </div>
     <span class="sb ${stateCls(l.state)}">${stateLabel(l.state)}</span>
     <div class="lead-actions">
+      <button class="lead-act-btn" onclick="pickAndUploadLeadPhotos('${phoneEsc}')">${hasPhotos?'Add Photos':'Upload Photos'}</button>
+      ${reanalyzeBtn}
+      ${quoteBtn}
       ${depositLink?`<a class="lead-act-btn" href="${h(depositLink)}" target="_blank" rel="noopener">Deposit ↗</a>`:''}
       <button class="lead-act-btn" onclick="generateLeadPaymentLink('${h(l.phone||'')}')">Generate Payment Link</button>
     </div>
@@ -1239,6 +1487,8 @@ async function fetchLeads(){
         ...l,
         phone:phone||l.phone,
         lead_source:String(l.lead_source||'sms').toLowerCase(),
+        vision_analysis:l.vision_analysis||null,
+        media_urls:Array.isArray(l.media_urls)?l.media_urls:[],
         quote_amount:(Number(l.quote_amount||l.quoted_amount_cents||0)||0)>0
           ? (Number(l.quote_amount||l.quoted_amount_cents||0)/100)
           : null,
@@ -3195,6 +3445,20 @@ window.addEventListener('DOMContentLoaded',()=>{
   try{
     const pw=document.getElementById('manual-admin-password');
     if(pw&&getAdminAuthB64())pw.placeholder='Using saved admin password';
+    const dz=document.getElementById('manual-photo-dropzone');
+    const inp=document.getElementById('manual-lead-photos');
+    if(dz&&inp){
+      dz.addEventListener('click',()=>inp.click());
+      dz.addEventListener('dragover',e=>{e.preventDefault();dz.style.background='#e2e8f0';});
+      dz.addEventListener('dragleave',()=>{dz.style.background='#f8fafc';});
+      dz.addEventListener('drop',e=>{
+        e.preventDefault();
+        dz.style.background='#f8fafc';
+        onManualPhotosSelected(e.dataTransfer?.files||[]);
+      });
+      inp.addEventListener('change',()=>onManualPhotosSelected(inp.files||[]));
+      renderManualPhotoPreviews();
+    }
     document.addEventListener('keydown',e=>{
       if(e.key==='Escape')closeAddLeadPanel();
     });

@@ -9,13 +9,17 @@ const { evaluateQuoteReadyRow } = require("./quote_gate");
 const { handleConversation } = require("./conversation");
 const { listWorldviewLeads } = require("./worldview_intel");
 const { extractVisionBuckets } = require("./vision_buckets");
+const { analyzeBase64Images } = require("./vision_analyzer");
 const { parseBookingToken } = require("./booking_link");
 const { createJobEvent } = require("./calendar");
 const { createSquarePaymentOptions } = require("./square_quote");
+const { priceQuoteV1 } = require("./pricing_v1");
 const { sendSms } = require("./twilio_sms");
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+const multer = require("multer");
+const sharp = require("sharp");
 const { execSync } = require("child_process");
 const { db, pool, upsertLead, insertEvent, getLead } = require("./db");
 const fetch = (...args) => import("node-fetch").then(({default: f}) => f(...args));
@@ -33,6 +37,12 @@ const ZIP_CENTROIDS = {
   "90044": { lat: 33.954, lng: -118.29 }
 };
 const LEAD_GEO_CACHE = new Map();
+const MANUAL_MEDIA_INLINE_MAX_BYTES = 5 * 1024 * 1024;
+const MANUAL_MEDIA_MAX_FILES = 10;
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: MANUAL_MEDIA_MAX_FILES }
+});
 const DASHBOARD_DUMPSITES_FALLBACK = [
   // Priority transfer stations
   {
@@ -768,6 +778,205 @@ function normalizeLeadSource(raw) {
   return s.slice(0, 24);
 }
 
+function parseJsonArrayText(v) {
+  if (!v) return [];
+  if (Array.isArray(v)) return v;
+  try {
+    const parsed = JSON.parse(String(v));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function safePhonePathPart(phone) {
+  return String(phone || "").replace(/[^\d+]/g, "_").replace(/\+/g, "plus");
+}
+
+function normalizeImageMediaType(mt, fallbackName = "") {
+  const low = String(mt || "").toLowerCase();
+  const name = String(fallbackName || "").toLowerCase();
+  if (low.includes("png") || name.endsWith(".png")) return "image/png";
+  if (low.includes("webp") || name.endsWith(".webp")) return "image/webp";
+  if (low.includes("heic") || low.includes("heif") || name.endsWith(".heic") || name.endsWith(".heif")) return "image/heic";
+  return "image/jpeg";
+}
+
+function dataUriForImage(buffer, mediaType) {
+  return `data:${mediaType};base64,${Buffer.from(buffer).toString("base64")}`;
+}
+
+function parseDataUri(raw) {
+  const s = String(raw || "").trim();
+  const m = s.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/);
+  if (!m) return null;
+  return { mediaType: m[1], base64: m[2] };
+}
+
+function renderableLeadMediaUrls(phone, mediaList, limit = 8) {
+  const out = [];
+  const src = Array.isArray(mediaList) ? mediaList : [];
+  for (let i = 0; i < src.length; i++) {
+    const u = String(src[i] || "").trim();
+    if (!u) continue;
+    if (u.startsWith("data:image/")) {
+      out.push(`/lead-media/${encodeURIComponent(String(phone || ""))}/${i}`);
+    } else if (/^https?:\/\//i.test(u) || u.startsWith("/public/")) {
+      out.push(u);
+    }
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function extractVisionItemList(vision) {
+  const src = Array.isArray(vision?.items) ? vision.items : [];
+  const uniq = [];
+  const seen = new Set();
+  for (const raw of src) {
+    const item = String(raw || "").trim();
+    if (!item) continue;
+    const key = item.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniq.push(item);
+    if (uniq.length >= 80) break;
+  }
+  return uniq.join("\n");
+}
+
+async function normalizeUploadedImage(file) {
+  if (!file || !file.buffer || !file.originalname) return { ok: false, warning: "Unknown file skipped" };
+  const baseMediaType = normalizeImageMediaType(file.mimetype, file.originalname);
+  const isHeic = baseMediaType === "image/heic";
+  if (!/^image\//.test(baseMediaType)) {
+    return { ok: false, warning: `${file.originalname} — unsupported type` };
+  }
+  if (isHeic) {
+    try {
+      const jpg = await sharp(file.buffer).jpeg({ quality: 86 }).toBuffer();
+      return {
+        ok: true,
+        mediaType: "image/jpeg",
+        buffer: jpg,
+        originalname: file.originalname.replace(/\.(heic|heif)$/i, ".jpg")
+      };
+    } catch {
+      return { ok: false, warning: `${file.originalname} — HEIC not supported, please convert to JPEG` };
+    }
+  }
+  return {
+    ok: true,
+    mediaType: baseMediaType,
+    buffer: Buffer.from(file.buffer),
+    originalname: file.originalname
+  };
+}
+
+async function prepareLeadMediaStorage(files, phone) {
+  const normalized = [];
+  const warnings = [];
+  for (const file of Array.isArray(files) ? files : []) {
+    const out = await normalizeUploadedImage(file);
+    if (!out.ok) {
+      if (out.warning) warnings.push(out.warning);
+      continue;
+    }
+    normalized.push(out);
+  }
+  if (!normalized.length) return { ok: false, warnings, storedMedia: [], analysisInputs: [] };
+
+  const totalBytes = normalized.reduce((sum, f) => sum + Number(f.buffer?.length || 0), 0);
+  const useInline = totalBytes <= MANUAL_MEDIA_INLINE_MAX_BYTES;
+  const storedMedia = [];
+  const analysisInputs = [];
+
+  if (useInline) {
+    for (const f of normalized) {
+      const dataUri = dataUriForImage(f.buffer, f.mediaType);
+      storedMedia.push(dataUri);
+      analysisInputs.push(dataUri);
+    }
+    return { ok: true, warnings, storageMode: "inline", storedMedia, analysisInputs };
+  }
+
+  const uploadsDir = path.join(__dirname, "public", "uploads", safePhonePathPart(phone));
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  const nowTag = Date.now();
+  let idx = 0;
+  for (const f of normalized) {
+    idx += 1;
+    const ext = f.mediaType.includes("png") ? ".png" : f.mediaType.includes("webp") ? ".webp" : ".jpg";
+    const base = path.basename(String(f.originalname || "photo"), path.extname(String(f.originalname || "photo"))).replace(/[^\w.-]/g, "_").slice(0, 40) || "photo";
+    const fileName = `${nowTag}-${idx}-${base}${ext}`;
+    const abs = path.join(uploadsDir, fileName);
+    fs.writeFileSync(abs, f.buffer);
+    const publicUrl = `/public/uploads/${safePhonePathPart(phone)}/${fileName}`;
+    storedMedia.push(publicUrl);
+    analysisInputs.push(dataUriForImage(f.buffer, f.mediaType));
+  }
+  return { ok: true, warnings, storageMode: "public_url", storedMedia, analysisInputs };
+}
+
+async function runManualVisionAndPersist(phone, mediaList) {
+  const lead = (await pool.query("SELECT * FROM leads WHERE from_phone=$1 LIMIT 1", [phone])).rows[0];
+  if (!lead) throw new Error("Lead not found");
+  const stored = Array.isArray(mediaList) ? mediaList : parseJsonArrayText(lead.media_urls);
+  if (!stored.length) throw new Error("No photos available to analyze");
+
+  const analysisInputs = [];
+  for (const entry of stored.slice(0, MANUAL_MEDIA_MAX_FILES)) {
+    const raw = String(entry || "").trim();
+    if (!raw) continue;
+    if (raw.startsWith("data:image/")) {
+      analysisInputs.push(raw);
+      continue;
+    }
+    if (raw.startsWith("/public/")) {
+      const abs = path.join(__dirname, raw.replace(/^\/+/, ""));
+      if (!fs.existsSync(abs)) continue;
+      const buf = fs.readFileSync(abs);
+      const mt = normalizeImageMediaType(path.extname(abs), abs);
+      analysisInputs.push(dataUriForImage(buf, mt));
+      continue;
+    }
+    if (/^https?:\/\//i.test(raw)) {
+      try {
+        const r = await fetch(raw);
+        if (!r.ok) continue;
+        const buf = Buffer.from(await r.arrayBuffer());
+        const mt = normalizeImageMediaType(r.headers.get("content-type") || "", raw);
+        analysisInputs.push(dataUriForImage(buf, mt));
+      } catch {}
+    }
+  }
+  if (!analysisInputs.length) throw new Error("No analyzable photos found");
+
+  const vision = await analyzeBase64Images(analysisInputs);
+  const itemList = extractVisionItemList(vision);
+  await pool.query(
+    `UPDATE leads
+     SET vision_analysis=$1,
+         load_bucket=COALESCE($2,load_bucket),
+         item_list=$3,
+         media_urls=$4,
+         has_media=CASE WHEN $5 > 0 THEN 1 ELSE has_media END,
+         num_media=GREATEST(COALESCE(num_media,0), $5),
+         last_seen_at=NOW()
+     WHERE from_phone=$6`,
+    [
+      JSON.stringify(vision),
+      vision.load_bucket || null,
+      itemList || null,
+      JSON.stringify(stored),
+      stored.length,
+      phone
+    ]
+  );
+  const updatedLead = (await pool.query("SELECT * FROM leads WHERE from_phone=$1 LIMIT 1", [phone])).rows[0] || null;
+  return { vision, updatedLead };
+}
+
 function extractMediaUrlsFromPayload(payload) {
   const out = [];
   if (!payload || typeof payload !== "object") return out;
@@ -931,6 +1140,8 @@ app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 app.use("/admin", (req, res, next) => {
   if (!ADMIN_PASSWORD) return res.status(500).send("Admin password not set.");
+  const headerPass = String(req.headers["x-admin-password"] || "").trim();
+  if (headerPass && headerPass === ADMIN_PASSWORD) return next();
   const h = req.headers.authorization || "";
   if (!h.startsWith("Basic ")) {
     res.setHeader("WWW-Authenticate", 'Basic realm="ICL Admin"');
@@ -1177,6 +1388,8 @@ app.get("/api/dashboard/leads", async (req, res) => {
            notes,
            site_visit_date,
            lead_source,
+           item_list,
+           media_urls,
            square_payment_link_url,
            square_upfront_payment_link_url
          FROM leads
@@ -1274,6 +1487,11 @@ app.get("/api/dashboard/leads", async (req, res) => {
       const worldview = worldviewByPhone.get(phone) || null;
       const itemTable = itemTableByPhone.get(phone) || { resale: [], donate: [], dump: [], scrap: [] };
       const mediaUrls = [...(mediaByPhone.get(phone) || [])];
+      const storedMediaRaw = parseJsonArrayText(r.media_urls);
+      const storedPreviewUrls = renderableLeadMediaUrls(phone, storedMediaRaw, 8);
+      for (const u of storedPreviewUrls) {
+        if (!mediaUrls.includes(u)) mediaUrls.push(u);
+      }
       if (r.media_url0 && !mediaUrls.includes(r.media_url0)) mediaUrls.unshift(String(r.media_url0));
       const vision = safeJsonParse(r.vision_analysis) || {};
       const visionBuckets = extractVisionBuckets(vision, { limitPerBucket: 8 });
@@ -1311,6 +1529,8 @@ app.get("/api/dashboard/leads", async (req, res) => {
         site_visit_date: String(r.site_visit_date || "").trim() || null,
         lead_source: normalizeLeadSource(r.lead_source || "sms"),
         quoted_amount_cents: Number.isFinite(Number(r.quoted_amount)) ? Number(r.quoted_amount) : null,
+        item_list: String(r.item_list || "").trim() || null,
+        vision_analysis: r.vision_analysis || null,
         square_payment_link_url: r.square_payment_link_url || null,
         square_upfront_payment_link_url: r.square_upfront_payment_link_url || null,
         settled_revenue_cents: null,
@@ -1958,6 +2178,34 @@ app.get("/media-proxy", async (req, res) => {
   }
 });
 
+app.get("/lead-media/:from/:idx", async (req, res) => {
+  try {
+    const fromPhone = normalizePhoneE164(req.params.from || "");
+    const idx = Number(req.params.idx);
+    if (!fromPhone || !Number.isInteger(idx) || idx < 0) return res.status(400).send("bad_request");
+    const lead = (await pool.query("SELECT media_urls FROM leads WHERE from_phone=$1 LIMIT 1", [fromPhone])).rows[0];
+    if (!lead) return res.status(404).send("not_found");
+    const media = parseJsonArrayText(lead.media_urls);
+    const raw = String(media[idx] || "").trim();
+    if (!raw) return res.status(404).send("not_found");
+    const data = parseDataUri(raw);
+    if (data) {
+      res.setHeader("Content-Type", data.mediaType || "image/jpeg");
+      return res.end(Buffer.from(data.base64, "base64"));
+    }
+    if (/^https?:\/\//i.test(raw)) return res.redirect(raw);
+    if (raw.startsWith("/public/")) {
+      const abs = path.join(__dirname, raw.replace(/^\/+/, ""));
+      if (!abs.startsWith(path.join(__dirname, "public"))) return res.status(403).send("forbidden");
+      if (!fs.existsSync(abs)) return res.status(404).send("not_found");
+      return res.sendFile(abs);
+    }
+    return res.status(404).send("not_found");
+  } catch (e) {
+    return res.status(500).send(String(e?.message || e));
+  }
+});
+
 app.get("/admin/leads", async (_req, res) => {
   try {
     const rows = (
@@ -2178,6 +2426,240 @@ app.post("/admin/leads/:from/payment-link", async (req, res) => {
   }
 });
 
+app.post("/admin/leads/:from/load-bucket", async (req, res) => {
+  try {
+    const fromPhone = normalizePhoneE164(req.params.from || "");
+    const bucket = String(req.body?.load_bucket || "").toUpperCase().trim();
+    if (!fromPhone) return res.status(400).json({ ok: false, error: "invalid lead phone" });
+    if (!["MIN", "QTR", "HALF", "3Q", "FULL"].includes(bucket)) {
+      return res.status(400).json({ ok: false, error: "invalid load_bucket" });
+    }
+    await pool.query(
+      `UPDATE leads
+       SET load_bucket=$1,
+           customer_load_bucket=$1,
+           conv_state=CASE WHEN conv_state IS NULL OR conv_state='' OR conv_state='NEW' THEN 'QUOTE_READY' ELSE conv_state END,
+           last_seen_at=NOW()
+       WHERE from_phone=$2`,
+      [bucket, fromPhone]
+    );
+    insertEvent.run({
+      from_phone: fromPhone,
+      event_type: "manual_load_bucket_override",
+      payload_json: JSON.stringify({ load_bucket: bucket }),
+      created_at: new Date().toISOString()
+    });
+    const lead = (await pool.query("SELECT * FROM leads WHERE from_phone=$1 LIMIT 1", [fromPhone])).rows[0] || null;
+    return res.json({ ok: true, lead });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/admin/leads/:from/generate-quote", async (req, res) => {
+  try {
+    const fromPhone = normalizePhoneE164(req.params.from || "");
+    if (!fromPhone) return res.status(400).json({ ok: false, error: "invalid lead phone" });
+    const lead = (await pool.query("SELECT * FROM leads WHERE from_phone=$1 LIMIT 1", [fromPhone])).rows[0];
+    if (!lead) return res.status(404).json({ ok: false, error: "lead not found" });
+    if (!lead.load_bucket) return res.status(400).json({ ok: false, error: "lead load_bucket required before quote generation" });
+
+    const pricing = priceQuoteV1({
+      load_bucket: lead.load_bucket,
+      distance_miles: Number(lead.distance_miles || 0),
+      access_level: lead.access_level
+    });
+    const quotedCents = Number(pricing.total_cents || 0);
+    if (!quotedCents) return res.status(500).json({ ok: false, error: "pricing failed" });
+
+    const createPayment = String(req.body?.create_payment_link || "").toLowerCase() === "1" || req.body?.create_payment_link === true;
+    let payment = null;
+    if (createPayment) {
+      const depositCents = Math.max(100, Number(process.env.SQUARE_DEPOSIT_CENTS || 5000));
+      const upfrontDiscountPct = Number(process.env.UPFRONT_DISCOUNT_PCT || 10);
+      payment = await createSquarePaymentOptions(
+        { from_phone: fromPhone },
+        { quoteTotalCents: quotedCents, depositCents, upfrontDiscountPct }
+      );
+    }
+
+    if (payment) {
+      await pool.query(
+        `UPDATE leads
+         SET quote_total_cents=$1,
+             quoted_amount=$1,
+             quote_status='AWAITING_DEPOSIT',
+             conv_state=CASE WHEN conv_state IS NULL OR conv_state='' OR conv_state='NEW' THEN 'QUOTE_READY' ELSE conv_state END,
+             square_payment_link_id=$2,
+             square_payment_link_url=$3,
+             square_order_id=$4,
+             square_upfront_payment_link_id=$5,
+             square_upfront_payment_link_url=$6,
+             square_upfront_order_id=$7,
+             upfront_total_cents=$8,
+             upfront_discount_pct=$9,
+             last_seen_at=NOW()
+         WHERE from_phone=$10`,
+        [
+          quotedCents,
+          payment.deposit.payment_link_id,
+          payment.deposit.payment_link_url,
+          payment.deposit.order_id,
+          payment.upfront.payment_link_id,
+          payment.upfront.payment_link_url,
+          payment.upfront.order_id,
+          payment.upfrontTotalCents,
+          payment.upfrontDiscountPct,
+          fromPhone
+        ]
+      );
+    } else {
+      await pool.query(
+        `UPDATE leads
+         SET quote_total_cents=$1,
+             quoted_amount=$1,
+             quote_status='QUOTE_READY',
+             conv_state=CASE WHEN conv_state IS NULL OR conv_state='' OR conv_state='NEW' THEN 'QUOTE_READY' ELSE conv_state END,
+             last_seen_at=NOW()
+         WHERE from_phone=$2`,
+        [quotedCents, fromPhone]
+      );
+    }
+
+    insertEvent.run({
+      from_phone: fromPhone,
+      event_type: "pricing_v1",
+      payload_json: JSON.stringify(pricing),
+      created_at: new Date().toISOString()
+    });
+    if (payment) {
+      insertEvent.run({
+        from_phone: fromPhone,
+        event_type: "square_quote_created",
+        payload_json: JSON.stringify({
+          from_phone: fromPhone,
+          source: "manual_generate_quote",
+          quote_total_cents: payment.quoteTotalCents,
+          upfront_total_cents: payment.upfrontTotalCents,
+          upfront_discount_pct: payment.upfrontDiscountPct,
+          payment_link_url: payment.deposit.payment_link_url,
+          upfront_payment_link_url: payment.upfront.payment_link_url
+        }),
+        created_at: new Date().toISOString()
+      });
+    }
+
+    const updated = (await pool.query("SELECT * FROM leads WHERE from_phone=$1 LIMIT 1", [fromPhone])).rows[0] || null;
+    return res.json({
+      ok: true,
+      quote_total_cents: quotedCents,
+      quote_total_dollars: Math.round((quotedCents / 100) * 100) / 100,
+      payment_link_url: payment?.deposit?.payment_link_url || null,
+      upfront_payment_link_url: payment?.upfront?.payment_link_url || null,
+      updated_lead: updated
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/admin/leads/:from/photos", upload.array("photos", MANUAL_MEDIA_MAX_FILES), async (req, res) => {
+  try {
+    const fromPhone = normalizePhoneE164(req.params.from || "");
+    if (!fromPhone) return res.status(400).json({ ok: false, error: "invalid lead phone" });
+    const lead = (await pool.query("SELECT * FROM leads WHERE from_phone=$1 LIMIT 1", [fromPhone])).rows[0];
+    if (!lead) return res.status(404).json({ ok: false, error: "lead not found" });
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!files.length) return res.status(400).json({ ok: false, error: "no photos uploaded" });
+
+    const prepared = await prepareLeadMediaStorage(files, fromPhone);
+    if (!prepared.ok || !prepared.storedMedia.length || !prepared.analysisInputs.length) {
+      return res.status(400).json({ ok: false, error: "no valid photos processed", skipped: prepared.warnings || [] });
+    }
+
+    const existingStored = parseJsonArrayText(lead.media_urls);
+    const mergedStored = [...existingStored, ...prepared.storedMedia].slice(-MANUAL_MEDIA_MAX_FILES);
+    const firstStored = String(mergedStored[0] || "");
+    const mediaUrl0 = /^data:image\//i.test(firstStored) ? null : (firstStored || lead.media_url0 || null);
+
+    await pool.query(
+      `UPDATE leads
+       SET media_urls=$1,
+           has_media=1,
+           num_media=$2,
+           media_url0=COALESCE($3, media_url0),
+           last_seen_at=NOW()
+       WHERE from_phone=$4`,
+      [JSON.stringify(mergedStored), mergedStored.length, mediaUrl0, fromPhone]
+    );
+
+    const { vision, updatedLead } = await runManualVisionAndPersist(fromPhone, mergedStored);
+    const itemList = extractVisionItemList(vision);
+    insertEvent.run({
+      from_phone: fromPhone,
+      event_type: "manual_photo_upload_analyzed",
+      payload_json: JSON.stringify({
+        storage_mode: prepared.storageMode,
+        uploaded_count: prepared.storedMedia.length,
+        total_media_count: mergedStored.length,
+        load_bucket: vision.load_bucket || null,
+        load_confidence: vision.load_confidence || null
+      }),
+      created_at: new Date().toISOString()
+    });
+
+    return res.json({
+      ok: true,
+      skipped: prepared.warnings || [],
+      storage_mode: prepared.storageMode,
+      vision_result: {
+        load_bucket: vision.load_bucket || null,
+        load_confidence: vision.load_confidence || null,
+        item_list: itemList,
+        items: Array.isArray(vision.items) ? vision.items : []
+      },
+      updated_lead: updatedLead
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.post("/admin/leads/:from/reanalyze", async (req, res) => {
+  try {
+    const fromPhone = normalizePhoneE164(req.params.from || "");
+    if (!fromPhone) return res.status(400).json({ ok: false, error: "invalid lead phone" });
+    const lead = (await pool.query("SELECT * FROM leads WHERE from_phone=$1 LIMIT 1", [fromPhone])).rows[0];
+    if (!lead) return res.status(404).json({ ok: false, error: "lead not found" });
+    const media = parseJsonArrayText(lead.media_urls);
+    if (!media.length) return res.status(400).json({ ok: false, error: "no stored media to analyze" });
+    const { vision, updatedLead } = await runManualVisionAndPersist(fromPhone, media);
+    const itemList = extractVisionItemList(vision);
+    insertEvent.run({
+      from_phone: fromPhone,
+      event_type: "manual_photo_reanalyzed",
+      payload_json: JSON.stringify({
+        total_media_count: media.length,
+        load_bucket: vision.load_bucket || null,
+        load_confidence: vision.load_confidence || null
+      }),
+      created_at: new Date().toISOString()
+    });
+    return res.json({
+      ok: true,
+      vision_result: {
+        load_bucket: vision.load_bucket || null,
+        load_confidence: vision.load_confidence || null,
+        item_list: itemList,
+        items: Array.isArray(vision.items) ? vision.items : []
+      },
+      updated_lead: updatedLead
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 app.get("/lead/:from", (req, res) => {
   const fp = path.join(LEADS_DIR, safeFilenameFromPhone(req.params.from) + ".json");
   if (!fs.existsSync(fp)) return res.status(404).json({ ok: false });
@@ -2189,7 +2671,7 @@ app.get("/admin/lead/:from", async (req, res) => {
     const from = req.params.from;
     const lead = (await pool.query("SELECT * FROM leads WHERE from_phone = $1", [from])).rows[0] || null;
     const events = (await pool.query("SELECT event_type, created_at, payload_json FROM events WHERE from_phone = $1 ORDER BY id DESC LIMIT 200", [from])).rows;
-    const mediaUrls = [];
+    const mediaUrls = renderableLeadMediaUrls(from, parseJsonArrayText(lead?.media_urls), 24);
     for (const e of events) {
       try {
         const pj = JSON.parse(e.payload_json || "{}");
@@ -2199,7 +2681,10 @@ app.get("/admin/lead/:from", async (req, res) => {
     }
     const esc = (s) => String(s ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#39;");
     const evHtml = events.map(e => "<tr><td>" + esc(e.created_at) + "</td><td>" + esc(e.event_type) + "</td><td><pre style='white-space:pre-wrap;margin:0'>" + esc(e.payload_json) + "</pre></td></tr>").join("");
-    const mediaHtml = !mediaUrls.length ? "<p>No media.</p>" : mediaUrls.map((u,i) => "<div style='margin:10px 0'><a href='/media-proxy?u=" + encodeURIComponent(u) + "' target='_blank'>Open media " + (i+1) + "</a><br/><img src='/media-proxy?u=" + encodeURIComponent(u) + "' style='max-width:360px;border:1px solid #ddd;border-radius:10px;margin-top:6px'/></div>").join("");
+    const mediaHtml = !mediaUrls.length ? "<p>No media.</p>" : mediaUrls.map((u,i) => {
+      const direct = /^https?:\/\//i.test(u) ? ("/media-proxy?u=" + encodeURIComponent(u)) : u;
+      return "<div style='margin:10px 0'><a href='" + direct + "' target='_blank'>Open media " + (i+1) + "</a><br/><img src='" + direct + "' style='max-width:360px;border:1px solid #ddd;border-radius:10px;margin-top:6px'/></div>";
+    }).join("");
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end("<html><head><title>Lead " + esc(from) + "</title><style>body{font-family:system-ui;padding:16px}a{color:#0366d6}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;font-size:12px;vertical-align:top}th{background:#f6f6f6}pre{max-width:100%;overflow-x:auto}</style></head><body><div><a href='/admin/leads'>← Back</a></div><h2>Lead: " + esc(from) + "</h2><pre>" + esc(JSON.stringify(lead,null,2)) + "</pre><h3>Media</h3>" + mediaHtml + "<h3>Events</h3><table><thead><tr><th>Time</th><th>Type</th><th>Payload</th></tr></thead><tbody>" + evHtml + "</tbody></table></body></html>");
   } catch (e) {

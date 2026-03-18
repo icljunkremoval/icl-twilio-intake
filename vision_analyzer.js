@@ -2,40 +2,9 @@ const fetch = require("node-fetch");
 const { normalizeVisionPayload } = require("./vision_buckets");
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
-
-function must(name) {
-  const v = process.env[name];
-  if (!v) throw new Error("Missing env: " + name);
-  return v;
-}
-
-async function fetchImageAsBase64(url) {
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
-  const auth = Buffer.from(accountSid + ":" + authToken).toString("base64");
-
-  const res = await fetch(url, {
-    headers: { "Authorization": "Basic " + auth }
-  });
-
-  if (!res.ok) throw new Error("Failed to fetch image: " + res.status);
-
-  const buffer = await res.buffer();
-  const contentType = res.headers.get("content-type") || "image/jpeg";
-  return { base64: buffer.toString("base64"), mediaType: contentType.split(";")[0] };
-}
-
-async function analyzeJobMedia(mediaUrl) {
-  const apiKey = must("ANTHROPIC_API_KEY");
-
-  let imageData;
-  try {
-    imageData = await fetchImageAsBase64(mediaUrl);
-  } catch (e) {
-    throw new Error("Could not fetch media: " + e.message);
-  }
-
-  const prompt = `You are analyzing a photo for ICL Junk Removal, a junk removal company in Los Angeles.
+const VISION_MODEL = "claude-opus-4-20250514";
+const LOAD_ORDER = ["MIN", "QTR", "HALF", "3Q", "FULL"];
+const VISION_PROMPT = `You are analyzing a photo for ICL Junk Removal, a junk removal company in Los Angeles.
 
 ICL operates with military precision and deep respect for every client. Your analysis helps the crew walk in prepared — knowing what to expect, what to protect, and what has value.
 
@@ -94,6 +63,65 @@ sentimental_risk should be true if you see: photo albums, framed family photos, 
 
 Respond with ONLY the JSON object, no other text.`;
 
+function must(name) {
+  const v = process.env[name];
+  if (!v) throw new Error("Missing env: " + name);
+  return v;
+}
+
+async function fetchImageAsBase64(url) {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+  const auth = Buffer.from(accountSid + ":" + authToken).toString("base64");
+
+  const res = await fetch(url, {
+    headers: { "Authorization": "Basic " + auth }
+  });
+
+  if (!res.ok) throw new Error("Failed to fetch image: " + res.status);
+
+  const buffer = await res.buffer();
+  const contentType = res.headers.get("content-type") || "image/jpeg";
+  return { base64: buffer.toString("base64"), mediaType: contentType.split(";")[0] };
+}
+
+function normalizeImageInput(raw) {
+  if (!raw) return null;
+  if (typeof raw === "object" && raw.base64) {
+    return {
+      base64: String(raw.base64),
+      mediaType: String(raw.mediaType || "image/jpeg")
+    };
+  }
+  const s = String(raw).trim();
+  if (!s) return null;
+  const m = s.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/);
+  if (m) {
+    return { mediaType: m[1], base64: m[2] };
+  }
+  // Backward-compatible: allow plain base64 strings.
+  return { mediaType: "image/jpeg", base64: s };
+}
+
+function mergeUnique(base, extra, limit = 40) {
+  const out = [];
+  const seen = new Set();
+  const src = [...(Array.isArray(base) ? base : []), ...(Array.isArray(extra) ? extra : [])];
+  for (const raw of src) {
+    const item = String(raw || "").trim();
+    if (!item) continue;
+    const key = item.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+async function analyzeImageData(imageData) {
+  const apiKey = must("ANTHROPIC_API_KEY");
+
   const res = await fetch(ANTHROPIC_API_URL, {
     method: "POST",
     headers: {
@@ -102,7 +130,7 @@ Respond with ONLY the JSON object, no other text.`;
       "content-type": "application/json"
     },
     body: JSON.stringify({
-      model: "claude-opus-4-20250514",
+      model: VISION_MODEL,
       max_tokens: 1024,
       messages: [
         {
@@ -118,7 +146,7 @@ Respond with ONLY the JSON object, no other text.`;
             },
             {
               type: "text",
-              text: prompt
+              text: VISION_PROMPT
             }
           ]
         }
@@ -142,42 +170,24 @@ Respond with ONLY the JSON object, no other text.`;
   }
 }
 
+async function analyzeJobMedia(mediaUrl) {
+  let imageData;
+  try {
+    imageData = await fetchImageAsBase64(mediaUrl);
+  } catch (e) {
+    throw new Error("Could not fetch media: " + e.message);
+  }
+  return analyzeImageData(imageData);
+}
 
-// Analyze multiple photos and merge results
-async function analyzeAllMedia(urls) {
-  if (!urls || urls.length === 0) throw new Error("No media URLs");
-  if (urls.length === 1) return analyzeJobMedia(urls[0]);
-
-  // Analyze each photo in parallel
-  const results = await Promise.allSettled(urls.map(u => analyzeJobMedia(u)));
-  const valid = results
-    .filter(r => r.status === "fulfilled" && r.value?.is_valid_junk)
-    .map(r => r.value);
-
-  if (valid.length === 0) return results[0].value || results[0].reason;
-
-  // Merge: take highest load_bucket, merge item buckets, merge notes
-  const LOAD_ORDER = ["MIN","QTR","HALF","3Q","FULL"];
+function mergeVisionResults(valid, totalCount) {
+  if (!Array.isArray(valid) || !valid.length) return null;
+  if (valid.length === 1) {
+    return { ...normalizeVisionPayload(valid[0]), photo_count: totalCount || 1 };
+  }
   let merged = normalizeVisionPayload(valid[0]);
-  const mergeUnique = (base, extra, limit = 40) => {
-    const out = [];
-    const seen = new Set();
-    const src = [...(Array.isArray(base) ? base : []), ...(Array.isArray(extra) ? extra : [])];
-    for (const raw of src) {
-      const item = String(raw || "").trim();
-      if (!item) continue;
-      const key = item.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(item);
-      if (out.length >= limit) break;
-    }
-    return out;
-  };
-
   for (const v of valid.slice(1)) {
     const norm = normalizeVisionPayload(v);
-    // Take larger load estimate
     const curIdx = LOAD_ORDER.indexOf(merged.load_bucket);
     const newIdx = LOAD_ORDER.indexOf(norm.load_bucket);
     if (newIdx > curIdx) {
@@ -194,7 +204,11 @@ async function analyzeAllMedia(urls) {
       (norm.classified_items || []).map((r) => `${r.bucket}:${r.item}`)
     ).map((k) => {
       const [bucket, ...rest] = String(k || "").split(":");
-      return { bucket, item: rest.join(":").trim(), confidence: merged.bucket_confidence?.[String(bucket || "").toLowerCase()] || 0.58 };
+      return {
+        bucket,
+        item: rest.join(":").trim(),
+        confidence: merged.bucket_confidence?.[String(bucket || "").toLowerCase()] || 0.58
+      };
     });
     merged.bucket_confidence = {
       resell: Math.max(Number(merged.bucket_confidence?.resell || 0), Number(norm.bucket_confidence?.resell || 0)),
@@ -202,21 +216,48 @@ async function analyzeAllMedia(urls) {
       donate: Math.max(Number(merged.bucket_confidence?.donate || 0), Number(norm.bucket_confidence?.donate || 0)),
       dump: Math.max(Number(merged.bucket_confidence?.dump || 0), Number(norm.bucket_confidence?.dump || 0))
     };
-    // Append crew notes
     if (norm.crew_notes && norm.crew_notes !== merged.crew_notes) {
       merged.crew_notes = (merged.crew_notes || "") + " " + norm.crew_notes;
     }
-    // If any photo flags troll, flag it
     if (norm.troll_flag) merged.troll_flag = true;
-    // Take more specific access level
     if (norm.access_confidence === "HIGH" && merged.access_confidence !== "HIGH") {
       merged.access_level = norm.access_level;
       merged.access_confidence = norm.access_confidence;
     }
   }
-
-  merged.photo_count = urls.length;
+  merged.photo_count = totalCount || valid.length;
   return normalizeVisionPayload(merged);
 }
 
-module.exports = { analyzeJobMedia, analyzeAllMedia };
+
+// Analyze multiple photos and merge results
+async function analyzeAllMedia(urls) {
+  if (!urls || urls.length === 0) throw new Error("No media URLs");
+  if (urls.length === 1) return analyzeJobMedia(urls[0]);
+
+  // Analyze each photo in parallel
+  const results = await Promise.allSettled(urls.map(u => analyzeJobMedia(u)));
+  const valid = results
+    .filter(r => r.status === "fulfilled" && r.value?.is_valid_junk)
+    .map(r => r.value);
+
+  if (valid.length === 0) throw new Error("No valid junk images detected");
+  return mergeVisionResults(valid, urls.length);
+}
+
+async function analyzeBase64Images(base64Array) {
+  const src = Array.isArray(base64Array) ? base64Array : [];
+  if (!src.length) throw new Error("No base64 images");
+  const images = src.map(normalizeImageInput).filter(Boolean);
+  if (!images.length) throw new Error("No parseable base64 images");
+  if (images.length === 1) return analyzeImageData(images[0]);
+
+  const results = await Promise.allSettled(images.map((img) => analyzeImageData(img)));
+  const valid = results
+    .filter((r) => r.status === "fulfilled" && r.value?.is_valid_junk)
+    .map((r) => r.value);
+  if (!valid.length) throw new Error("No valid junk images detected");
+  return mergeVisionResults(valid, images.length);
+}
+
+module.exports = { analyzeJobMedia, analyzeAllMedia, analyzeBase64Images };
