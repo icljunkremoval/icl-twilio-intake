@@ -11,7 +11,7 @@ const { listWorldviewLeads } = require("./worldview_intel");
 const { extractVisionBuckets } = require("./vision_buckets");
 const { analyzeBase64Images } = require("./vision_analyzer");
 const { parseBookingToken } = require("./booking_link");
-const { createJobEvent } = require("./calendar");
+const { createJobEvent, getBookedWindows } = require("./calendar");
 const { createSquarePaymentOptions } = require("./square_quote");
 const { priceQuoteV1 } = require("./pricing_v1");
 const { sendSms } = require("./twilio_sms");
@@ -1279,16 +1279,26 @@ function dayLabelFromIso(iso) {
   return `${dow} ${mon} ${dt.getUTCDate()}`;
 }
 
-function bookingDayOptions(days = 7) {
+function bookingDayOptions(days = 7, { sameDayMinLeadHours = 0 } = {}) {
   const now = new Date();
   const out = [];
-  for (let i = 0; i < days; i++) {
+  let cursor = 0;
+  const maxLookahead = Math.max(days + 7, 21);
+  while (out.length < days && cursor < maxLookahead) {
     const d = new Date(now);
-    d.setDate(now.getDate() + i);
+    d.setDate(now.getDate() + cursor);
+    if (cursor === 0 && Number(sameDayMinLeadHours) > 0) {
+      const hour = d.getHours() + (d.getMinutes() / 60);
+      const hoursLeft = Math.max(0, 24 - hour);
+      if (hoursLeft < Number(sameDayMinLeadHours)) {
+        cursor += 1;
+        continue;
+      }
+    }
     const iso = toIsoDate(d);
     const label = dayLabelFromIso(iso);
-    if (!label) continue;
-    out.push({ iso, label });
+    if (label) out.push({ iso, label });
+    cursor += 1;
   }
   return out;
 }
@@ -1856,9 +1866,30 @@ app.get("/booking/:token", async (req, res) => {
     const lead = (await pool.query("SELECT * FROM leads WHERE from_phone = $1 LIMIT 1", [parsed.phone])).rows[0];
     if (!lead) return res.status(404).send("Lead not found.");
     const paymentMeta = await latestPaymentMetaForPhone(parsed.phone);
-    const days = bookingDayOptions(7);
-    const dayOptions = days.map((d) => `<option value="${escHtml(d.iso)}">${escHtml(d.label)}</option>`).join("");
-    const windowOptions = BOOKING_WINDOWS.map((w) => `<option value="${escHtml(w)}">${escHtml(w)}</option>`).join("");
+    const days = bookingDayOptions(5, { sameDayMinLeadHours: 4 });
+    const dayMatrix = await Promise.all(
+      days.map(async (d) => {
+        let booked = [];
+        try {
+          booked = await getBookedWindows(d.iso);
+        } catch {}
+        const bookedSet = new Set((Array.isArray(booked) ? booked : []).map((w) => String(w || "").trim()));
+        const windows = BOOKING_WINDOWS.map((w) => ({
+          label: w,
+          available: !bookedSet.has(w)
+        }));
+        return {
+          iso: d.iso,
+          label: d.label,
+          windows,
+          has_available: windows.some((w) => w.available)
+        };
+      })
+    );
+    const safeDayMatrixJson = JSON.stringify(dayMatrix)
+      .replace(/</g, "\\u003c")
+      .replace(/>/g, "\\u003e")
+      .replace(/&/g, "\\u0026");
     const confirmation = paymentMeta?.confirmation_id
       ? `<div class="pill">Confirmation #: <strong>${escHtml(paymentMeta.confirmation_id)}</strong></div>`
       : "";
@@ -1871,70 +1902,163 @@ app.get("/booking/:token", async (req, res) => {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ICL Booking</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f8fafc;margin:0;padding:18px;color:#0f172a}
-    .card{max-width:720px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden;box-shadow:0 8px 26px rgba(2,6,23,.08)}
-    .hero{background:linear-gradient(135deg,#0f766e,#134e4a);padding:18px 20px;color:#f0fdfa}
-    .brand{font-size:13px;opacity:.9;letter-spacing:.4px;text-transform:uppercase}
-    h1{margin:6px 0 4px;font-size:24px;line-height:1.2}
-    .hero p{margin:0;color:#ccfbf1}
-    .body{padding:18px 20px}
-    p{margin:8px 0;color:#334155}
-    .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0 12px}
-    .st{font-size:11px;border:1px solid #cbd5e1;border-radius:999px;padding:6px 8px;text-align:center;background:#fff;color:#334155}
-    .st.on{background:#dcfce7;border-color:#16a34a;color:#166534;font-weight:700}
-    .st.next{background:#ecfeff;border-color:#22d3ee;color:#155e75;font-weight:600}
-    .pill{display:inline-block;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:999px;padding:5px 10px;font-size:12px;color:#334155;margin:6px 0}
-    .meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0 2px}
-    .meta .m{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;font-size:13px}
-    label{display:block;margin:12px 0 4px;font-size:13px;color:#334155;font-weight:600}
-    select,button{width:100%;padding:12px;border-radius:10px;border:1px solid #cbd5e1;font-size:15px}
-    button{background:#0f766e;color:#fff;border:none;font-weight:700;cursor:pointer;margin-top:14px}
-    button:disabled{opacity:.6;cursor:not-allowed}
-    .ok{margin-top:12px;color:#065f46;font-weight:700}
-    .err{margin-top:12px;color:#b91c1c;font-weight:600}
-    .small{font-size:12px;color:#64748b}
-    .foot{margin-top:12px;padding-top:10px;border-top:1px solid #e2e8f0}
-    @media(max-width:720px){.steps{grid-template-columns:1fr 1fr}.meta{grid-template-columns:1fr}}
+    :root{
+      --icl-green:#1B5E20;
+      --icl-gold:#F9A825;
+      --slate-900:#0f172a;
+      --slate-700:#334155;
+      --slate-500:#64748b;
+      --slate-300:#cbd5e1;
+      --slate-200:#e2e8f0;
+      --slate-100:#f1f5f9;
+    }
+    *{box-sizing:border-box}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f8fafc;margin:0;padding:16px;color:var(--slate-900)}
+    .card{max-width:480px;margin:0 auto;background:#fff;border:1px solid var(--slate-200);border-radius:16px;overflow:hidden;box-shadow:0 12px 30px rgba(2,6,23,.1)}
+    .hero{background:linear-gradient(135deg,#0f766e,#134e4a);padding:16px;color:#f0fdfa}
+    .brand{display:flex;align-items:center;gap:10px}
+    .logo{width:34px;height:34px;border-radius:8px;object-fit:cover;border:1px solid rgba(255,255,255,.45);background:#fff}
+    .brand-text{font-size:12px;letter-spacing:.5px;text-transform:uppercase;opacity:.95}
+    h1{margin:8px 0 4px;font-size:34px;line-height:1.05;font-weight:900}
+    .hero p{margin:0;color:#d1fae5;font-size:17px}
+    .body{padding:14px}
+    .pill{display:inline-block;background:var(--slate-100);border:1px solid var(--slate-300);border-radius:999px;padding:6px 10px;font-size:12px;color:var(--slate-700);margin-bottom:10px}
+    .meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+    .meta .m{background:#f8fafc;border:1px solid var(--slate-200);border-radius:10px;padding:8px 10px;font-size:13px}
+    .small{font-size:12px;color:var(--slate-500);margin:0 0 10px}
+    .label{font-size:13px;color:var(--slate-700);font-weight:700;margin:8px 0 6px}
+    .day-row{display:flex;gap:8px;overflow:auto;padding-bottom:4px}
+    .day-card{min-width:86px;border:1px solid var(--slate-300);border-radius:12px;background:#fff;padding:10px 8px;text-align:center;color:var(--slate-700);cursor:pointer}
+    .day-card .d1{font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+    .day-card .d2{font-size:17px;font-weight:800;line-height:1.1;margin-top:3px}
+    .day-card.selected{border-color:var(--icl-green);background:#ecfdf3;color:var(--icl-green)}
+    .day-card.disabled{background:#f8fafc;color:#94a3b8;border-color:#e2e8f0;cursor:not-allowed}
+    .window-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+    .wbtn{border:1px solid var(--slate-300);border-radius:999px;padding:10px;background:#fff;color:var(--slate-700);font-size:14px;font-weight:600;cursor:pointer}
+    .wbtn.selected{border-color:var(--icl-green);background:#ecfdf3;color:var(--icl-green)}
+    .wbtn.disabled{background:#f1f5f9;border-color:#e2e8f0;color:#94a3b8;cursor:not-allowed}
+    .wbtn small{display:block;font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:.4px}
+    .cta{margin-top:12px;width:100%;padding:14px;border-radius:12px;border:none;background:var(--icl-green);color:#fff;font-weight:800;font-size:17px;cursor:pointer}
+    .cta:disabled{background:#94a3b8;cursor:not-allowed}
+    .ok{margin-top:10px;color:#166534;font-weight:800;font-size:15px}
+    .err{margin-top:10px;color:#b91c1c;font-weight:700}
+    .foot{margin-top:12px;padding-top:10px;border-top:1px solid var(--slate-200)}
+    .muted{font-size:12px;color:var(--slate-500)}
+    @media(max-width:430px){
+      h1{font-size:30px}
+      .window-grid{grid-template-columns:1fr}
+      .meta{grid-template-columns:1fr}
+    }
   </style>
 </head>
 <body>
   <div class="card">
     <div class="hero">
-      <div class="brand">ICL Junk Removal</div>
+      <div class="brand">
+        <img class="logo" src="/public/logo.jpg" alt="ICL logo" />
+        <div class="brand-text">ICL Junk Removal</div>
+      </div>
       <h1>Choose Your Arrival Window</h1>
       <p>You’re confirmed. This is the final step to lock your schedule.</p>
     </div>
     <div class="body">
       ${confirmation}
-      <div class="steps">
-        <div class="st on">Paid</div>
-        <div class="st next">Schedule</div>
-        <div class="st">Removed</div>
-        <div class="st">Complete</div>
-      </div>
       <div class="meta">
         <div class="m"><strong>Phone</strong><br>${escHtml(parsed.phone)}</div>
         <div class="m"><strong>Address</strong><br>${escHtml(lead.address_text || "On file")}</div>
       </div>
-      <p class="small">You should have received your Square receipt. Pick a day + window below.</p>
+      <p class="small">You should have received your Square receipt. Pick a day + arrival window below.</p>
       <form id="book-form">
         <input type="hidden" name="token" value="${escHtml(req.params.token)}" />
-        <label for="day_iso">Day</label>
-        <select id="day_iso" name="day_iso" required>${dayOptions}</select>
-        <label for="window">Arrival window</label>
-        <select id="window" name="window" required>${windowOptions}</select>
-        <button id="book-btn" type="submit">Confirm my appointment</button>
+        <input type="hidden" id="day_iso" name="day_iso" />
+        <input type="hidden" id="window" name="window" />
+        <div class="label">Choose day</div>
+        <div id="day-row" class="day-row"></div>
+        <div class="label" style="margin-top:10px">Choose arrival window</div>
+        <div id="window-row" class="window-grid"></div>
+        <button id="book-btn" class="cta" type="submit" disabled>Confirm my appointment</button>
         <div id="book-msg"></div>
       </form>
       <div class="foot">
-        <p class="small">Need help? Reply HELP to our text and we’ll assist.</p>
+        <p class="muted">Need help? Reply HELP to our text and we’ll assist.</p>
       </div>
     </div>
   </div>
   <script>
+    const DAY_MATRIX = ${safeDayMatrixJson};
     const form=document.getElementById('book-form');
     const msg=document.getElementById('book-msg');
     const btn=document.getElementById('book-btn');
+    const dayRow=document.getElementById('day-row');
+    const windowRow=document.getElementById('window-row');
+    const dayInput=document.getElementById('day_iso');
+    const winInput=document.getElementById('window');
+    let selectedDay=null;
+    let selectedWindow=null;
+
+    function dayParts(label){
+      const p=String(label||'').split(' ');
+      return { dow:(p[0]||'').toUpperCase(), md:[p[1],p[2]].filter(Boolean).join(' ') };
+    }
+    function currentDayObj(){ return DAY_MATRIX.find(d=>d.iso===selectedDay)||null; }
+    function updateCta(){
+      const dayObj=currentDayObj();
+      const hasAvail=!!(dayObj&&dayObj.windows&&dayObj.windows.some(w=>w.available));
+      btn.disabled=!(selectedDay&&selectedWindow&&hasAvail);
+      dayInput.value=selectedDay||'';
+      winInput.value=selectedWindow||'';
+    }
+    function renderDays(){
+      dayRow.innerHTML='';
+      DAY_MATRIX.forEach(d=>{
+        const parts=dayParts(d.label);
+        const b=document.createElement('button');
+        b.type='button';
+        b.className='day-card'+(d.iso===selectedDay?' selected':'')+(!d.has_available?' disabled':'');
+        b.innerHTML='<div class="d1">'+parts.dow+'</div><div class="d2">'+parts.md+'</div>';
+        if(!d.has_available){
+          const f=document.createElement('div');
+          f.style.cssText='font-size:10px;margin-top:4px;opacity:.8';
+          f.textContent='No slots';
+          b.appendChild(f);
+        }
+        b.addEventListener('click',()=>{
+          if(!d.has_available)return;
+          selectedDay=d.iso;
+          selectedWindow=null;
+          renderDays();
+          renderWindows();
+          updateCta();
+        });
+        dayRow.appendChild(b);
+      });
+    }
+    function renderWindows(){
+      windowRow.innerHTML='';
+      const dayObj=currentDayObj();
+      if(!dayObj){
+        windowRow.innerHTML='<div class="muted" style="grid-column:1/-1">Select a day to see available windows.</div>';
+        return;
+      }
+      dayObj.windows.forEach(w=>{
+        const b=document.createElement('button');
+        b.type='button';
+        b.className='wbtn'+(selectedWindow===w.label?' selected':'')+(!w.available?' disabled':'');
+        b.innerHTML='<span>'+w.label.replace('-', '–')+'</span>'+(w.available?'':'<small>BOOKED</small>');
+        b.addEventListener('click',()=>{
+          if(!w.available)return;
+          selectedWindow=w.label;
+          renderWindows();
+          updateCta();
+        });
+        windowRow.appendChild(b);
+      });
+    }
+    const firstAvailable = DAY_MATRIX.find(d=>d.has_available);
+    if(firstAvailable){ selectedDay=firstAvailable.iso; }
+    renderDays();
+    renderWindows();
+    updateCta();
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       msg.className=''; msg.textContent='';
@@ -1942,8 +2066,8 @@ app.get("/booking/:token", async (req, res) => {
       try{
         const payload={
           token: form.token.value,
-          day_iso: form.day_iso.value,
-          window: form.window.value
+          day_iso: dayInput.value,
+          window: winInput.value
         };
         const r=await fetch('/api/booking/confirm',{
           method:'POST',
@@ -1958,7 +2082,7 @@ app.get("/booking/:token", async (req, res) => {
         msg.className='err';
         msg.textContent=String(err.message||err);
       }finally{
-        btn.disabled=false;
+        updateCta();
       }
     });
   </script>
