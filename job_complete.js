@@ -224,8 +224,10 @@ async function handleOpsReply(body) {
         try {
           const sms = await sendSms(
             from_phone,
-            "Thank you for choosing ICL Junk Removal. If we earned it, would you mind leaving us a quick Google review? " +
-              GOOGLE_REVIEW_URL
+            "Thank you again for choosing ICL Junk Removal — it was a pleasure helping today.\n\n" +
+              "If we earned it, would you mind sharing a quick 5-star Google review? It helps local customers find us:\n" +
+              GOOGLE_REVIEW_URL +
+              "\n\nWe appreciate you.\n— ICL Junk Removal"
           );
           insertEvent.run({
             from_phone,
