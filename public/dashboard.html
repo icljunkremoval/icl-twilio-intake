@@ -109,6 +109,16 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .lead-actions{display:flex;align-items:center;gap:6px}
 .lead-act-btn{padding:3px 7px;font-size:8px;font-family:'DM Mono',monospace;border:1px solid var(--bd2);background:var(--bg4);color:var(--tx2);border-radius:4px;cursor:pointer}
 .lead-act-btn:hover{border-color:var(--blue);color:var(--blue)}
+.lead-filter-wrap{display:grid;gap:8px}
+.lead-filter-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.lead-filter-label{font-size:9px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase}
+.lf-chip{padding:4px 10px;font-size:9px;font-family:'DM Mono',monospace;background:var(--bg4);border:1px solid var(--bd2);color:var(--tx2);border-radius:999px;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+.lf-chip:hover,.lf-chip.on{background:rgba(59,130,246,.1);border-color:var(--blue);color:var(--blue)}
+.lf-count{font-size:8px;opacity:.85}
+.lf-select{height:24px;background:var(--bg4);border:1px solid var(--bd2);color:var(--tx2);border-radius:6px;padding:0 8px;font-size:10px;font-family:'DM Mono',monospace}
+.lf-search{height:24px;min-width:220px;background:var(--bg4);border:1px solid var(--bd2);color:var(--tx);border-radius:6px;padding:0 8px;font-size:10px;font-family:'DM Mono',monospace}
+.lf-search::placeholder{color:var(--tx3)}
+.lf-summary{font-size:9px;color:var(--tx3)}
 .sb{font-size:8px;letter-spacing:.4px;padding:2px 7px;border-radius:4px;text-transform:uppercase;white-space:nowrap}
 .sn{background:rgba(74,90,120,.3);color:var(--tx3);border:1px solid var(--tx3)}
 .sm{background:rgba(59,130,246,.1);color:var(--blue);border:1px solid rgba(59,130,246,.3)}
@@ -585,6 +595,71 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
         <button class="add-lead-btn" onclick="openAddLeadPanel()">＋ Add Lead</button>
         <span class="tag tag-live">Railway · PostgreSQL</span>
         <a href="/admin/leads" target="_blank" style="font-size:9px">Admin →</a>
+      </div>
+    </div>
+    <div class="cb" style="border-bottom:1px solid var(--bd);padding-bottom:12px">
+      <div class="lead-filter-wrap">
+        <div class="lead-filter-row">
+          <span class="lead-filter-label">Stage</span>
+          <button class="lf-chip lf-stage on" data-stage="all" onclick="toggleLeadsStageFilter('all',this)">All <span class="lf-count" id="lf-stage-all">0</span></button>
+          <button class="lf-chip lf-stage" data-stage="lead" onclick="toggleLeadsStageFilter('lead',this)">Lead <span class="lf-count" id="lf-stage-lead">0</span></button>
+          <button class="lf-chip lf-stage" data-stage="deposit" onclick="toggleLeadsStageFilter('deposit',this)">Deposit <span class="lf-count" id="lf-stage-deposit">0</span></button>
+          <button class="lf-chip lf-stage" data-stage="paid" onclick="toggleLeadsStageFilter('paid',this)">Paid <span class="lf-count" id="lf-stage-paid">0</span></button>
+          <button class="lf-chip lf-stage" data-stage="completed" onclick="toggleLeadsStageFilter('completed',this)">Completed <span class="lf-count" id="lf-stage-completed">0</span></button>
+        </div>
+        <div class="lead-filter-row">
+          <span class="lead-filter-label">Filters</span>
+          <select id="lf-sort" class="lf-select" onchange="setLeadsFilterField('sort',this.value)">
+            <option value="recent">Sort: Recent</option>
+            <option value="oldest">Sort: Oldest</option>
+            <option value="revenue_desc">Revenue: High → Low</option>
+            <option value="revenue_asc">Revenue: Low → High</option>
+            <option value="priority_desc">Priority score</option>
+          </select>
+          <select id="lf-revenue" class="lf-select" onchange="setLeadsFilterField('revenue',this.value)">
+            <option value="all">Revenue: All</option>
+            <option value="unquoted">Unquoted</option>
+            <option value="lt250">&lt; $250</option>
+            <option value="250_500">$250-$500</option>
+            <option value="500_1000">$500-$1k</option>
+            <option value="gt500">&gt; $500</option>
+            <option value="gt1000">$1k+</option>
+          </select>
+          <select id="lf-freshness" class="lf-select" onchange="setLeadsFilterField('freshness',this.value)">
+            <option value="all">Freshness: All</option>
+            <option value="today">New today</option>
+            <option value="24h">Last 24h</option>
+            <option value="3d">Last 3d</option>
+            <option value="7d">Last 7d</option>
+            <option value="stale">Stale (48h+)</option>
+          </select>
+          <select id="lf-source" class="lf-select" onchange="setLeadsFilterField('source',this.value)">
+            <option value="all">Source: All</option>
+            <option value="sms">SMS</option>
+            <option value="manual">Manual</option>
+          </select>
+          <select id="lf-schedule" class="lf-select" onchange="setLeadsFilterField('schedule',this.value)">
+            <option value="all">Schedule: All</option>
+            <option value="not_booked">Not booked</option>
+            <option value="booking_sent">Booking sent</option>
+            <option value="unbooked">Unbooked (sent + not booked)</option>
+            <option value="booked">Booked</option>
+            <option value="completed">Completed</option>
+          </select>
+          <input id="lf-search" class="lf-search" placeholder="Search name, phone, address, notes" oninput="setLeadsFilterField('search',this.value)" />
+        </div>
+        <div class="lead-filter-row">
+          <span class="lead-filter-label">Saved views</span>
+          <button class="lf-chip lf-preset on" data-preset="all" onclick="applyLeadsPreset('all',this)">All <span class="lf-count" id="lf-preset-all">0</span></button>
+          <button class="lf-chip lf-preset" data-preset="today_money" onclick="applyLeadsPreset('today_money',this)">Today's Money <span class="lf-count" id="lf-preset-today_money">0</span></button>
+          <button class="lf-chip lf-preset" data-preset="needs_follow_up" onclick="applyLeadsPreset('needs_follow_up',this)">Needs Follow-Up <span class="lf-count" id="lf-preset-needs_follow_up">0</span></button>
+          <button class="lf-chip lf-preset" data-preset="at_risk_revenue" onclick="applyLeadsPreset('at_risk_revenue',this)">At-Risk Revenue <span class="lf-count" id="lf-preset-at_risk_revenue">0</span></button>
+          <button class="lf-chip lf-preset" data-preset="unbooked_paid" onclick="applyLeadsPreset('unbooked_paid',this)">Unbooked Paid <span class="lf-count" id="lf-preset-unbooked_paid">0</span></button>
+          <button class="lf-chip lf-preset" data-preset="manual_pending_quote" onclick="applyLeadsPreset('manual_pending_quote',this)">Manual Pending Quote <span class="lf-count" id="lf-preset-manual_pending_quote">0</span></button>
+          <button class="lf-chip" onclick="resetLeadsFilters()">Clear</button>
+          <button class="lf-chip" onclick="exportFilteredLeadsCsv()">Export CSV</button>
+        </div>
+        <div id="leads-filter-summary" class="lf-summary">Showing 0 of 0 leads</div>
       </div>
     </div>
     <div class="cb"><div id="leads-full"><div class="skel" style="width:80%;margin:8px 0"></div><div class="skel" style="width:60%;margin:8px 0"></div><div class="skel" style="width:75%;margin:8px 0"></div></div></div>
@@ -1093,6 +1168,366 @@ async function generateLeadPaymentLink(phone){
   }
 }
 let leadFlowFilter='all';
+function leadsFilterDefaults(){
+  return {
+    stages:new Set(['all']),
+    sort:'recent',
+    revenue:'all',
+    freshness:'all',
+    source:'all',
+    schedule:'all',
+    search:'',
+    preset:'all'
+  };
+}
+const LEADS_FILTER_QUERY_KEYS=[
+  'lf_stages','lf_sort','lf_revenue','lf_freshness','lf_source','lf_schedule','lf_search','lf_preset'
+];
+const LEADS_PRESETS={
+  all:{},
+  today_money:{stages:['deposit','paid'],freshness:'today',revenue:'gt500',schedule:'all',source:'all',search:'',sort:'revenue_desc'},
+  needs_follow_up:{stages:['lead','deposit'],freshness:'stale',revenue:'all',schedule:'not_booked',source:'all',search:'',sort:'priority_desc'},
+  at_risk_revenue:{stages:['deposit','paid'],freshness:'stale',revenue:'gt500',schedule:'unbooked',source:'all',search:'',sort:'priority_desc'},
+  unbooked_paid:{stages:['paid'],freshness:'all',revenue:'all',schedule:'unbooked',source:'all',search:'',sort:'recent'},
+  manual_pending_quote:{stages:['lead','deposit'],freshness:'all',revenue:'unquoted',schedule:'all',source:'manual',search:'',sort:'recent'}
+};
+let LEADS_PAGE_FILTERS=leadsFilterDefaults();
+function leadQuoteDollars(lead){
+  const q=Number(lead?.quote_amount||0);
+  if(Number.isFinite(q)&&q>0)return q;
+  const cents=Number(lead?.quoted_amount_cents||lead?.quoted_amount||0);
+  if(Number.isFinite(cents)&&cents>0)return cents/100;
+  return 0;
+}
+function leadLastActivityTs(lead){
+  const ts=lead?.last_seen_at||lead?.created_at||lead?.createdAt||null;
+  const t=new Date(ts||0).getTime();
+  return Number.isFinite(t)&&t>0?t:0;
+}
+function leadAgeMinutes(lead){
+  const t=leadLastActivityTs(lead);
+  if(!t)return 0;
+  return Math.max(0,Math.floor((Date.now()-t)/60000));
+}
+function leadStageFromData(lead){
+  const direct=normalizePinStage(lead?.stage||'');
+  if(direct&&direct!=='lead')return direct;
+  const phone=String(lead?.phone||lead?.from_phone||'');
+  const pin=PIN_BY_PHONE.get(phone);
+  if(pin&&pin.stage)return normalizePinStage(pin.stage);
+  const stateU=String(lead?.state||lead?.conv_state||lead?.quote_status||'').toUpperCase();
+  if(stateU.includes('COMPLETED'))return 'completed';
+  if(Boolean(lead?.deposit_paid))return 'paid';
+  if(stateU.includes('QUOTE')||stateU.includes('DEPOSIT')||stateU.includes('BOOKING')||stateU.includes('DAY')||stateU.includes('WINDOW'))return 'deposit';
+  return 'lead';
+}
+function leadScheduleStatus(lead){
+  const stage=leadStageFromData(lead);
+  const u=String(lead?.state||lead?.conv_state||lead?.quote_status||'').toUpperCase();
+  if(stage==='completed'||u.includes('COMPLETED'))return 'completed';
+  const booked=u.includes('WINDOW_SELECTED')||u.includes('DAY_SELECTED')||u.includes('BOOKED')||u.includes('SCHEDULED');
+  if(booked)return 'booked';
+  const bookingSent=u.includes('BOOKING_SENT')||u.includes('WINDOW_SENT')||u.includes('DEPOSIT_PAID');
+  if(stage==='paid'&&!booked)return bookingSent?'booking_sent':'unbooked';
+  if(bookingSent)return 'booking_sent';
+  return 'not_booked';
+}
+function leadPriorityScore(lead){
+  const explicit=Number(lead?.priority_score||0);
+  if(Number.isFinite(explicit)&&explicit>0)return explicit;
+  const stage=leadStageFromData(lead);
+  const age=leadAgeMinutes(lead);
+  const stageWeight=stage==='lead'?90:stage==='deposit'?65:stage==='paid'?40:20;
+  return stageWeight+Math.min(120,Math.floor(age/5));
+}
+function ptDateKey(ts){
+  const d=new Date(ts||Date.now());
+  if(!Number.isFinite(d.getTime()))return '';
+  return new Intl.DateTimeFormat('en-CA',{
+    timeZone:'America/Los_Angeles',
+    year:'numeric',
+    month:'2-digit',
+    day:'2-digit'
+  }).format(d);
+}
+function isSamePtDate(tsA,tsB){
+  const a=ptDateKey(tsA);
+  const b=ptDateKey(tsB);
+  return !!a&&a===b;
+}
+function filtersForPreset(id){
+  const base=leadsFilterDefaults();
+  const p=LEADS_PRESETS[id];
+  if(!p)return base;
+  const stages=Array.isArray(p.stages)&&p.stages.length?p.stages:['all'];
+  base.stages=new Set(stages);
+  base.sort=String(p.sort||base.sort);
+  base.revenue=String(p.revenue||base.revenue);
+  base.freshness=String(p.freshness||base.freshness);
+  base.source=String(p.source||base.source);
+  base.schedule=String(p.schedule||base.schedule);
+  base.search=String(p.search||base.search);
+  base.preset=id;
+  return base;
+}
+function normalizeLeadsFilters(raw){
+  const out=leadsFilterDefaults();
+  const stagesRaw=raw?.stages;
+  if(stagesRaw instanceof Set){
+    out.stages=new Set(Array.from(stagesRaw).map(v=>String(v||'').toLowerCase()).filter(v=>['all','lead','deposit','paid','completed'].includes(v)));
+  }else if(Array.isArray(stagesRaw)){
+    out.stages=new Set(stagesRaw.map(v=>String(v||'').toLowerCase()).filter(v=>['all','lead','deposit','paid','completed'].includes(v)));
+  }else if(typeof stagesRaw==='string'){
+    out.stages=new Set(String(stagesRaw).split(',').map(v=>v.trim().toLowerCase()).filter(v=>['all','lead','deposit','paid','completed'].includes(v)));
+  }
+  if(!out.stages.size)out.stages=new Set(['all']);
+  if(out.stages.has('all')&&out.stages.size>1)out.stages=new Set(['all']);
+  const sort=String(raw?.sort||out.sort);
+  out.sort=['recent','oldest','revenue_desc','revenue_asc','priority_desc'].includes(sort)?sort:out.sort;
+  const revenue=String(raw?.revenue||out.revenue);
+  out.revenue=['all','unquoted','lt250','250_500','500_1000','gt500','gt1000'].includes(revenue)?revenue:out.revenue;
+  const freshness=String(raw?.freshness||out.freshness);
+  out.freshness=['all','today','24h','3d','7d','stale'].includes(freshness)?freshness:out.freshness;
+  const source=String(raw?.source||out.source);
+  out.source=['all','sms','manual'].includes(source)?source:out.source;
+  const schedule=String(raw?.schedule||out.schedule);
+  out.schedule=['all','not_booked','booking_sent','unbooked','booked','completed'].includes(schedule)?schedule:out.schedule;
+  out.search=String(raw?.search||'').trim();
+  const preset=String(raw?.preset||'all');
+  out.preset=(preset==='all'||preset==='custom'||LEADS_PRESETS[preset])?preset:'all';
+  return out;
+}
+function serializeLeadStages(stagesSet){
+  const arr=Array.from(stagesSet||[]);
+  if(!arr.length||arr.includes('all'))return '';
+  return arr.join(',');
+}
+function readLeadsFiltersFromUrl(){
+  try{
+    const sp=new URLSearchParams(window.location.search||'');
+    const preset=String(sp.get('lf_preset')||'').trim();
+    let out=(preset&&preset!=='all'&&LEADS_PRESETS[preset])?filtersForPreset(preset):leadsFilterDefaults();
+    out.preset=preset&&preset!=='all'&&(LEADS_PRESETS[preset]||preset==='custom')?preset:'all';
+    if(sp.has('lf_stages'))out.stages=new Set(String(sp.get('lf_stages')||'').split(',').map(v=>v.trim().toLowerCase()).filter(Boolean));
+    if(sp.has('lf_sort'))out.sort=String(sp.get('lf_sort')||'');
+    if(sp.has('lf_revenue'))out.revenue=String(sp.get('lf_revenue')||'');
+    if(sp.has('lf_freshness'))out.freshness=String(sp.get('lf_freshness')||'');
+    if(sp.has('lf_source'))out.source=String(sp.get('lf_source')||'');
+    if(sp.has('lf_schedule'))out.schedule=String(sp.get('lf_schedule')||'');
+    if(sp.has('lf_search'))out.search=String(sp.get('lf_search')||'');
+    return normalizeLeadsFilters(out);
+  }catch(e){
+    return leadsFilterDefaults();
+  }
+}
+function persistLeadsFiltersToUrl(){
+  try{
+    const url=new URL(window.location.href);
+    LEADS_FILTER_QUERY_KEYS.forEach(k=>url.searchParams.delete(k));
+    const f=normalizeLeadsFilters(LEADS_PAGE_FILTERS);
+    const stages=serializeLeadStages(f.stages);
+    if(stages)url.searchParams.set('lf_stages',stages);
+    if(f.sort!=='recent')url.searchParams.set('lf_sort',f.sort);
+    if(f.revenue!=='all')url.searchParams.set('lf_revenue',f.revenue);
+    if(f.freshness!=='all')url.searchParams.set('lf_freshness',f.freshness);
+    if(f.source!=='all')url.searchParams.set('lf_source',f.source);
+    if(f.schedule!=='all')url.searchParams.set('lf_schedule',f.schedule);
+    if(f.search)url.searchParams.set('lf_search',f.search);
+    if(f.preset&&f.preset!=='all'&&f.preset!=='custom')url.searchParams.set('lf_preset',f.preset);
+    const next=url.pathname+(url.searchParams.toString()?`?${url.searchParams.toString()}`:'')+url.hash;
+    window.history.replaceState({},'',next);
+  }catch(e){}
+}
+function syncLeadsFilterUi(){
+  const f=normalizeLeadsFilters(LEADS_PAGE_FILTERS);
+  LEADS_PAGE_FILTERS=f;
+  document.querySelectorAll('.lf-stage').forEach(b=>{
+    const id=String(b.dataset.stage||'');
+    const on=id==='all'?f.stages.has('all'):f.stages.has(id);
+    b.classList.toggle('on',on);
+  });
+  const setVal=(id,v)=>{const el=document.getElementById(id);if(el)el.value=String(v||'');};
+  setVal('lf-sort',f.sort);
+  setVal('lf-revenue',f.revenue);
+  setVal('lf-freshness',f.freshness);
+  setVal('lf-source',f.source);
+  setVal('lf-schedule',f.schedule);
+  const sEl=document.getElementById('lf-search');
+  if(sEl&&sEl.value!==f.search)sEl.value=f.search;
+  document.querySelectorAll('.lf-preset').forEach(b=>{
+    const id=String(b.dataset.preset||'');
+    b.classList.toggle('on',f.preset===id);
+  });
+}
+function isLeadVisibleForFilters(lead,filters){
+  const f=normalizeLeadsFilters(filters);
+  const stage=leadStageFromData(lead);
+  if(!f.stages.has('all')&&!f.stages.has(stage))return false;
+  const quote=leadQuoteDollars(lead);
+  if(f.revenue==='unquoted'&&quote>0)return false;
+  if(f.revenue==='lt250'&&!(quote>0&&quote<250))return false;
+  if(f.revenue==='250_500'&&!(quote>=250&&quote<=500))return false;
+  if(f.revenue==='500_1000'&&!(quote>500&&quote<=1000))return false;
+  if(f.revenue==='gt500'&&!(quote>500))return false;
+  if(f.revenue==='gt1000'&&!(quote>=1000))return false;
+  const ageMin=leadAgeMinutes(lead);
+  if(f.freshness==='today'&&!isSamePtDate(lead?.created_at||lead?.createdAt,Date.now()))return false;
+  if(f.freshness==='24h'&&ageMin>24*60)return false;
+  if(f.freshness==='3d'&&ageMin>3*24*60)return false;
+  if(f.freshness==='7d'&&ageMin>7*24*60)return false;
+  if(f.freshness==='stale'&&ageMin<48*60)return false;
+  if(f.source!=='all'&&String(lead?.lead_source||'sms').toLowerCase()!==f.source)return false;
+  const sched=leadScheduleStatus(lead);
+  if(f.schedule==='not_booked'&&sched!=='not_booked')return false;
+  if(f.schedule==='booking_sent'&&sched!=='booking_sent')return false;
+  if(f.schedule==='booked'&&sched!=='booked')return false;
+  if(f.schedule==='completed'&&sched!=='completed')return false;
+  if(f.schedule==='unbooked'){
+    const unbooked=sched==='unbooked'||sched==='booking_sent';
+    if(!unbooked)return false;
+  }
+  const q=String(f.search||'').trim().toLowerCase();
+  if(q){
+    const hay=[
+      lead?.lead_name,lead?.phone,lead?.from_phone,lead?.address,lead?.notes,lead?.item_list,lead?.lead_email
+    ].map(v=>String(v||'').toLowerCase()).join(' | ');
+    if(!hay.includes(q))return false;
+  }
+  return true;
+}
+function sortLeadsForFilters(leads,filters){
+  const f=normalizeLeadsFilters(filters);
+  const out=[...(Array.isArray(leads)?leads:[])];
+  out.sort((a,b)=>{
+    const ta=leadLastActivityTs(a),tb=leadLastActivityTs(b);
+    if(f.sort==='oldest')return ta-tb;
+    if(f.sort==='revenue_desc')return leadQuoteDollars(b)-leadQuoteDollars(a)||tb-ta;
+    if(f.sort==='revenue_asc')return leadQuoteDollars(a)-leadQuoteDollars(b)||tb-ta;
+    if(f.sort==='priority_desc')return leadPriorityScore(b)-leadPriorityScore(a)||tb-ta;
+    return tb-ta;
+  });
+  return out;
+}
+function applyLeadsPageFilters(leads,overrideFilters){
+  const f=normalizeLeadsFilters(overrideFilters||LEADS_PAGE_FILTERS);
+  const base=Array.isArray(leads)?leads:[];
+  const filtered=base.filter(l=>isLeadVisibleForFilters(l,f));
+  return sortLeadsForFilters(filtered,f);
+}
+function countLeadsForPreset(baseLeads,presetId){
+  if(presetId==='all')return (Array.isArray(baseLeads)?baseLeads.length:0);
+  const preset=filtersForPreset(presetId);
+  return applyLeadsPageFilters(baseLeads,preset).length;
+}
+function updateLeadsPageFilterCounts(baseLeads,filteredLeads){
+  const base=Array.isArray(baseLeads)?baseLeads:[];
+  const shown=Array.isArray(filteredLeads)?filteredLeads:[];
+  const stageCounts={all:base.length,lead:0,deposit:0,paid:0,completed:0};
+  base.forEach(l=>{
+    const s=leadStageFromData(l);
+    if(stageCounts[s]!=null)stageCounts[s]+=1;
+  });
+  Object.entries(stageCounts).forEach(([k,v])=>{
+    const el=document.getElementById(`lf-stage-${k}`);
+    if(el)el.textContent=String(v);
+  });
+  const presetIds=['all','today_money','needs_follow_up','at_risk_revenue','unbooked_paid','manual_pending_quote'];
+  presetIds.forEach(id=>{
+    const el=document.getElementById(`lf-preset-${id}`);
+    if(el)el.textContent=String(countLeadsForPreset(base,id));
+  });
+  const sumQuoted=shown.reduce((s,l)=>s+leadQuoteDollars(l),0);
+  const active=[];
+  const f=normalizeLeadsFilters(LEADS_PAGE_FILTERS);
+  if(!f.stages.has('all'))active.push(`stage:${Array.from(f.stages).join(',')}`);
+  if(f.revenue!=='all')active.push(`rev:${f.revenue}`);
+  if(f.freshness!=='all')active.push(`time:${f.freshness}`);
+  if(f.source!=='all')active.push(`source:${f.source}`);
+  if(f.schedule!=='all')active.push(`schedule:${f.schedule}`);
+  if(f.search)active.push(`search:"${f.search}"`);
+  const summary=document.getElementById('leads-filter-summary');
+  if(summary){
+    summary.textContent=`Showing ${shown.length} of ${base.length} leads${sumQuoted>0?` · quoted ${f$(Math.round(sumQuoted))}`:''}${active.length?` · ${active.join(' · ')}`:''}`;
+  }
+}
+function renderLeadsForCurrentFilters(){
+  renderLeadPanels(CURRENT_LEADS);
+}
+function toggleLeadsStageFilter(stage,_btn,opts={}){
+  const id=String(stage||'').toLowerCase();
+  const next=new Set(LEADS_PAGE_FILTERS.stages||['all']);
+  if(id==='all'){
+    next.clear();next.add('all');
+  }else{
+    next.delete('all');
+    if(next.has(id))next.delete(id);else next.add(id);
+    if(!next.size)next.add('all');
+  }
+  LEADS_PAGE_FILTERS.stages=next;
+  if(!opts.keepPreset)LEADS_PAGE_FILTERS.preset='custom';
+  syncLeadsFilterUi();
+  persistLeadsFiltersToUrl();
+  renderLeadsForCurrentFilters();
+}
+function setLeadsFilterField(field,value,opts={}){
+  const key=String(field||'').trim();
+  if(!key)return;
+  LEADS_PAGE_FILTERS[key]=key==='search'?String(value||'').trimStart():String(value||'');
+  if(!opts.keepPreset)LEADS_PAGE_FILTERS.preset='custom';
+  syncLeadsFilterUi();
+  persistLeadsFiltersToUrl();
+  renderLeadsForCurrentFilters();
+}
+function applyLeadsPreset(presetId,_btn){
+  const id=String(presetId||'all');
+  LEADS_PAGE_FILTERS=normalizeLeadsFilters(filtersForPreset(id));
+  syncLeadsFilterUi();
+  persistLeadsFiltersToUrl();
+  renderLeadsForCurrentFilters();
+}
+function resetLeadsFilters(){
+  LEADS_PAGE_FILTERS=leadsFilterDefaults();
+  syncLeadsFilterUi();
+  persistLeadsFiltersToUrl();
+  renderLeadsForCurrentFilters();
+}
+function csvEscape(v){
+  const s=String(v??'');
+  if(/[",\n]/.test(s))return `"${s.replace(/"/g,'""')}"`;
+  return s;
+}
+function exportFilteredLeadsCsv(){
+  const base=getFlowFilteredLeads(CURRENT_LEADS);
+  const filtered=applyLeadsPageFilters(base);
+  const headers=['name','phone','stage','schedule','source','quote_usd','state','next_action','address','created_at','last_seen_at'];
+  const rows=filtered.map(l=>[
+    l.lead_name||'',
+    l.phone||l.from_phone||'',
+    leadStageFromData(l),
+    leadScheduleStatus(l),
+    l.lead_source||'sms',
+    leadQuoteDollars(l)>0?Math.round(leadQuoteDollars(l)):'',
+    l.state||'',
+    l.next_action||'',
+    l.address||'',
+    l.created_at||l.createdAt||'',
+    l.last_seen_at||''
+  ]);
+  const csv=[headers.join(','),...rows.map(r=>r.map(csvEscape).join(','))].join('\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  const stamp=new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+  a.href=url;
+  a.download=`icl-leads-${stamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(()=>{try{a.remove();URL.revokeObjectURL(url);}catch(e){}},0);
+}
+function initLeadsFilters(){
+  LEADS_PAGE_FILTERS=readLeadsFiltersFromUrl();
+  syncLeadsFilterUi();
+}
 function flowBucketFromState(state){
   const u=String(state||'').toUpperCase();
   if(u==='NEW')return 'new';
@@ -1411,9 +1846,18 @@ function getFlowFilteredLeads(leads){
   return arr.filter(l=>leadFlowBucket(l)===leadFlowFilter);
 }
 function renderLeadPanels(leads){
-  const filtered=getFlowFilteredLeads(leads);
-  document.getElementById('leads-mini').innerHTML=filtered.slice(0,5).map(leadHtml).join('')||'<div style="padding:8px;font-size:10px;color:var(--tx3)">No leads for this filter.</div>';
-  document.getElementById('leads-full').innerHTML=filtered.map(leadHtml).join('')||'<div style="padding:8px;font-size:10px;color:var(--tx3)">No leads for this filter.</div>';
+  const base=Array.isArray(leads)?leads:[];
+  const flowFiltered=getFlowFilteredLeads(base);
+  const leadsPageFiltered=applyLeadsPageFilters(flowFiltered);
+  updateLeadsPageFilterCounts(flowFiltered,leadsPageFiltered);
+  const miniHtml=flowFiltered.slice(0,5).map(leadHtml).join('')
+    ||'<div style="padding:8px;font-size:10px;color:var(--tx3)">No leads for this filter.</div>';
+  const fullHtml=leadsPageFiltered.map(leadHtml).join('')
+    ||'<div style="padding:8px;font-size:10px;color:var(--tx3)">No leads for this filter.</div>';
+  const mini=document.getElementById('leads-mini');
+  const full=document.getElementById('leads-full');
+  if(mini)mini.innerHTML=miniHtml;
+  if(full)full.innerHTML=fullHtml;
 }
 function setPipe(leads){
   const t=leads.length||1,c={n:0,m:0,q:0,d:0,b:0};
@@ -3414,6 +3858,7 @@ function delCard(id,colId){
 window.addEventListener('DOMContentLoaded',()=>{
   try{document.addEventListener('fullscreenchange',syncMapFullscreenUi);}catch(e){}
   try{syncMapFullscreenUi();}catch(e){}
+  try{initLeadsFilters();}catch(e){}
   try{applyPageVisibility('overview');}catch(e){}
   try{applyMapDefaultState();}catch(e){}
   try{fetchLeads();}catch(e){}
