@@ -3,6 +3,7 @@ const { pool, insertEvent } = require("./db");
 const { sendSms } = require("./twilio_sms");
 
 const OPS_PHONE = "+12138806318";
+const GOOGLE_REVIEW_URL = "https://g.page/r/CchfNXDhqlYIEAI/review";
 const CREW_ITEM_COMMANDS = new Set(["RESELL", "SCRAP", "DONATE", "DUMP", "PLATES"]);
 
 function centsFromMaybeDollars(v) {
@@ -204,6 +205,46 @@ async function handleOpsReply(body) {
         payload_json: JSON.stringify({ donated, scrap, dumpLbs, junkFee, diversionRate }),
         created_at: new Date().toISOString(),
       });
+
+      // One-time post-completion review ask to customer.
+      let alreadySentReview = false;
+      try {
+        const existing = await pool.query(
+          `SELECT id
+           FROM events
+           WHERE from_phone = $1
+             AND event_type = 'sms_sent_review_request'
+           ORDER BY id DESC
+           LIMIT 1`,
+          [from_phone]
+        );
+        alreadySentReview = !!existing.rows[0];
+      } catch {}
+      if (!alreadySentReview) {
+        try {
+          const sms = await sendSms(
+            from_phone,
+            "Thank you for choosing ICL Junk Removal. If we earned it, would you mind leaving us a quick Google review? " +
+              GOOGLE_REVIEW_URL
+          );
+          insertEvent.run({
+            from_phone,
+            event_type: "sms_sent_review_request",
+            payload_json: JSON.stringify({ review_url: GOOGLE_REVIEW_URL, twilio: sms }),
+            created_at: new Date().toISOString(),
+          });
+        } catch (reviewErr) {
+          insertEvent.run({
+            from_phone,
+            event_type: "sms_failed_review_request",
+            payload_json: JSON.stringify({
+              review_url: GOOGLE_REVIEW_URL,
+              error: String(reviewErr?.message || reviewErr)
+            }),
+            created_at: new Date().toISOString(),
+          });
+        }
+      }
     }
 
     const savings = Math.max(0, 360 - junkFee);

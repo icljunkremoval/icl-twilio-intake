@@ -232,11 +232,8 @@ async function handleConversation(payload) {
             runVisionAsync(from_phone,b.mediaUrl0,[b.mediaUrl0]);
             sendSms(from_phone,"Got it — quick safety check: any paint, chemicals, fuel, batteries, asbestos, or medical waste?\n\nReply YES or NO").catch(()=>{});
           } else {
-            pool.query("SELECT COUNT(*) as cnt FROM events WHERE from_phone=$1", [from_phone]).then(evtR => {
-              const isCaller = parseInt(evtR.rows[0].cnt) <= 1;
-              const msg = isCaller
-                ? "Hey! You just called us — glad you reached out. Go ahead and send up to 10 photos of what needs to go — different angles help us give you the most accurate quote. 📦\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote."
-                : "Hi! Thanks for texting ICL Junk Removal.\n\nSend us up to 10 photos of what you need removed — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.";
+            pool.query("SELECT COUNT(*) as cnt FROM events WHERE from_phone=$1", [from_phone]).then(() => {
+              const msg = "Hi! Thanks for texting ICL Junk Removal.\n\nSend us up to 10 photos of what you need removed — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.";
               sendSms(from_phone, msg).then(() => {
               sendSms(from_phone, "Save our contact card: " + APP_BASE_URL + "/contact.vcf").catch(()=>{});
             }).catch(()=>{});
@@ -477,17 +474,7 @@ async function handleConversation(payload) {
 
     default: {
       setState(from_phone,STATES.NEW);
-      // Check if caller followup
-    try {
-      const evtCheck2 = await pool.query("SELECT COUNT(*) as cnt FROM events WHERE from_phone=$1", [from_phone]);
-      const isCallerFollowup2 = parseInt(evtCheck2.rows[0].cnt) <= 1;
-      const greeting2 = isCallerFollowup2
-        ? "Hey! You just called us — glad you reached out. Go ahead and send up to 10 photos of what needs to go — different angles help us give you the most accurate quote. 📦\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote."
-        : "Hi! Thanks for texting ICL Junk Removal. Send us up to 10 photos of what needs to go — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.";
-      await sendSms(from_phone, greeting2);
-    } catch(e) {
       await sendSms(from_phone,"Hi! Thanks for texting ICL Junk Removal. Send us up to 10 photos of what needs to go — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.");
-    }
     }
   }
 }
