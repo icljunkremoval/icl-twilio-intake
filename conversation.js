@@ -468,7 +468,7 @@ async function handleConversation(payload) {
         await sendSms("+12138806318", "HELP FOLLOW-UP\nPhone: " + from_phone + "\nCall them back ASAP.");
         break;
       }
-      await sendSms(from_phone, "We're here! You can:\n\nSend a photo to get a quote\nCall 855-578-5014\nReply HELP to reach our team");
+      await sendSms(from_phone, "We're here! You can:\n\nSend up to 10 photos of what you need removed (the more information we have, the more accurate the quote)\nCall 855-578-5014\nReply HELP to reach our team");
       break;
     }
 
