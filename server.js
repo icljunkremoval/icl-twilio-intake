@@ -26,6 +26,9 @@ const fetch = (...args) => import("node-fetch").then(({default: f}) => f(...args
 
 const BASE_LOCATION = "506 E Brett St, Inglewood, CA 90301";
 const BASE_COORD = { lat: 33.9776848, lng: -118.3523303 };
+const OPS_ALERT_PHONE = String(process.env.OPS_ALERT_PHONE || "+12138806318").trim();
+const CALL_FOLLOWUP_SMS =
+  "Thanks for calling ICL Junk Removal. Send up to 10 photos of what you need removed (the more information we have, the more accurate the quote).";
 const ZIP_CENTROIDS = {
   "90008": { lat: 34.011, lng: -118.336 },
   "90043": { lat: 33.985, lng: -118.343 },
@@ -776,6 +779,185 @@ function normalizeLeadSource(raw) {
   if (["manual", "in_person", "inperson", "consult"].includes(s)) return "manual";
   if (s === "sms") return "sms";
   return s.slice(0, 24);
+}
+
+function looksLikeVoiceWebhook(payload) {
+  const p = payload && typeof payload === "object" ? payload : {};
+  const callSid = String(p.CallSid || p.CallSidFallback || "").trim();
+  const direction = String(p.Direction || "").toLowerCase();
+  const hasVoiceFields =
+    !!callSid ||
+    !!String(p.Called || "").trim() ||
+    !!String(p.Caller || "").trim() ||
+    !!String(p.CallStatus || "").trim() ||
+    direction.includes("voice");
+  return hasVoiceFields;
+}
+
+function voiceFromPhone(payload) {
+  const p = payload && typeof payload === "object" ? payload : {};
+  return normalizePhoneE164(p.From || p.Caller || p.from || "") || String(p.From || p.Caller || p.from || "").trim() || null;
+}
+
+function voiceToPhone(payload) {
+  const p = payload && typeof payload === "object" ? payload : {};
+  return normalizePhoneE164(p.To || p.Called || p.to || "") || String(p.To || p.Called || p.to || "").trim() || null;
+}
+
+async function captureInboundCallLead(payload, eventType = "inbound_call_received") {
+  const fromPhone = voiceFromPhone(payload);
+  if (!fromPhone) return null;
+  const toPhone = voiceToPhone(payload);
+  const ts = new Date().toISOString();
+  const callSid = String(payload?.CallSid || payload?.CallSidFallback || "").trim() || null;
+  const callStatus = String(payload?.CallStatus || payload?.CallStatusFallback || "").trim().toLowerCase() || null;
+  try {
+    upsertLead.run({
+      from_phone: fromPhone,
+      to_phone: toPhone,
+      ts,
+      last_event: callStatus ? `call_${callStatus}` : "call_inbound",
+      last_body: callSid || null,
+      num_media: 0,
+      media_url0: null,
+      status: "call"
+    });
+  } catch {}
+  try {
+    insertEvent.run({
+      from_phone: fromPhone,
+      event_type: eventType,
+      payload_json: JSON.stringify({
+        call_sid: callSid,
+        call_status: callStatus,
+        direction: String(payload?.Direction || "").toLowerCase() || null,
+        from: fromPhone,
+        to: toPhone,
+        payload
+      }),
+      created_at: ts
+    });
+  } catch {}
+  try {
+    await pool.query(
+      `UPDATE leads
+         SET last_seen_at = NOW(),
+             status = COALESCE(status, 'call')
+       WHERE from_phone = $1`,
+      [fromPhone]
+    );
+  } catch {}
+  return { fromPhone, toPhone, callSid, callStatus };
+}
+
+function escapeXml(text) {
+  return String(text || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function callVoicemailTwiml() {
+  const l1 = "Hi, you've reached ICL Junk Removal.";
+  const l2 = "Please leave a short message with your name, address, and what you need removed.";
+  const l3 = "We'll text you right after this call so you can send photos for an accurate quote.";
+  return (
+    `<?xml version="1.0" encoding="UTF-8"?>` +
+    `<Response>` +
+    `<Say voice="alice">${escapeXml(l1)}</Say>` +
+    `<Say voice="alice">${escapeXml(l2)}</Say>` +
+    `<Say voice="alice">${escapeXml(l3)}</Say>` +
+    `<Record maxLength="120" playBeep="true" trim="trim-silence" />` +
+    `<Say voice="alice">Thanks. We'll be in touch shortly.</Say>` +
+    `<Hangup/>` +
+    `</Response>`
+  );
+}
+
+async function hasRecentCallFollowupEvent(fromPhone, callSid, maxAgeMs = 30 * 60 * 1000) {
+  if (!fromPhone) return false;
+  try {
+    const rows = (
+      await pool.query(
+        `SELECT payload_json, created_at
+         FROM events
+         WHERE from_phone = $1
+           AND event_type = 'call_text_followup_sent'
+         ORDER BY id DESC
+         LIMIT 8`,
+        [fromPhone]
+      )
+    ).rows;
+    const now = Date.now();
+    for (const row of rows) {
+      const createdMs = new Date(row.created_at || 0).getTime();
+      let payload = {};
+      try { payload = JSON.parse(row.payload_json || "{}"); } catch {}
+      if (callSid && String(payload.call_sid || "") === String(callSid)) return true;
+      if (Number.isFinite(createdMs) && now - createdMs < maxAgeMs) return true;
+    }
+  } catch {}
+  return false;
+}
+
+async function sendCallFollowupSms(payload, source = "voice_webhook") {
+  const fromPhone = voiceFromPhone(payload);
+  if (!fromPhone) return { ok: false, reason: "missing_from" };
+  const callSid = String(payload?.CallSid || payload?.CallSidFallback || "").trim() || null;
+  if (await hasRecentCallFollowupEvent(fromPhone, callSid)) {
+    return { ok: true, skipped: true };
+  }
+  const sms = await sendSms(fromPhone, CALL_FOLLOWUP_SMS);
+  try {
+    insertEvent.run({
+      from_phone: fromPhone,
+      event_type: "call_text_followup_sent",
+      payload_json: JSON.stringify({
+        call_sid: callSid,
+        source,
+        twilio: sms
+      }),
+      created_at: new Date().toISOString()
+    });
+  } catch {}
+  return { ok: true, skipped: false, twilio: sms };
+}
+
+async function notifyOpsNewCall(captured, source = "voice_webhook") {
+  const fromPhone = String(captured?.fromPhone || "").trim();
+  if (!fromPhone) return;
+  try {
+    const existing = (
+      await pool.query(
+        `SELECT id
+         FROM events
+         WHERE from_phone = $1
+           AND event_type = 'ops_notified_inbound_call'
+         ORDER BY id DESC
+         LIMIT 1`,
+        [fromPhone]
+      )
+    ).rows[0];
+    if (existing) return;
+  } catch {}
+  try {
+    await sendSms(
+      OPS_ALERT_PHONE,
+      `📞 NEW INBOUND CALL\n${fromPhone}\nSource: ${source}\nLead captured in WorldView.`
+    );
+    insertEvent.run({
+      from_phone: fromPhone,
+      event_type: "ops_notified_inbound_call",
+      payload_json: JSON.stringify({
+        source,
+        call_sid: captured?.callSid || null,
+        to: captured?.toPhone || null
+      }),
+      created_at: new Date().toISOString()
+    });
+  } catch {}
 }
 
 function parseJsonArrayText(v) {
@@ -2232,8 +2414,46 @@ app.post("/api/booking/confirm", async (req, res) => {
 
 app.post("/twilio/inbound", (req, res) => {
   const payload = req.body || {};
-  const fromPhone = payload.From || payload.from || "unknown";
+  const fromPhone = payload.From || payload.from || payload.Caller || "unknown";
   const ts = new Date().toISOString();
+
+  // Some deployments still point Twilio Voice to /twilio/inbound.
+  // Detect voice payloads here so call-first leads are still captured.
+  if (looksLikeVoiceWebhook(payload)) {
+    res.set("Content-Type", "text/xml");
+    res.send(callVoicemailTwiml());
+    (async () => {
+      try {
+        const captured = await captureInboundCallLead(payload, "inbound_call_received");
+        if (captured?.fromPhone) {
+          try {
+            await sendCallFollowupSms(payload, "inbound_voice_fallback");
+          } catch (smsErr) {
+            insertEvent.run({
+              from_phone: captured.fromPhone,
+              event_type: "call_text_followup_failed",
+              payload_json: JSON.stringify({
+                source: "inbound_voice_fallback",
+                call_sid: captured.callSid || null,
+                error: String(smsErr?.message || smsErr)
+              }),
+              created_at: new Date().toISOString()
+            });
+          }
+        }
+      } catch (e) {
+        try {
+          insertEvent.run({
+            from_phone: voiceFromPhone(payload) || "unknown",
+            event_type: "twilio_voice_capture_error",
+            payload_json: JSON.stringify({ error: String(e?.message || e), payload }),
+            created_at: new Date().toISOString()
+          });
+        } catch {}
+      }
+    })();
+    return;
+  }
 
   // Always respond immediately to Twilio
   res.set("Content-Type", "text/xml");
@@ -2260,6 +2480,77 @@ app.post("/twilio/inbound", (req, res) => {
       });
     } catch (e2) {}
   });
+});
+
+app.post("/twilio/voice", async (req, res) => {
+  const payload = req.body || {};
+  res.set("Content-Type", "text/xml");
+  res.send(callVoicemailTwiml());
+
+  try {
+    const captured = await captureInboundCallLead(payload, "inbound_call_received");
+    if (captured?.fromPhone) {
+      try {
+        await sendCallFollowupSms(payload, "voice_webhook");
+      } catch (smsErr) {
+        insertEvent.run({
+          from_phone: captured.fromPhone,
+          event_type: "call_text_followup_failed",
+          payload_json: JSON.stringify({
+            source: "voice_webhook",
+            call_sid: captured.callSid || null,
+            error: String(smsErr?.message || smsErr)
+          }),
+          created_at: new Date().toISOString()
+        });
+      }
+    }
+  } catch (e) {
+    try {
+      insertEvent.run({
+        from_phone: voiceFromPhone(payload) || "unknown",
+        event_type: "twilio_voice_capture_error",
+        payload_json: JSON.stringify({ error: String(e?.message || e), payload }),
+        created_at: new Date().toISOString()
+      });
+    } catch {}
+  }
+});
+
+app.post("/twilio/voice/status", async (req, res) => {
+  const payload = req.body || {};
+  res.set("Content-Type", "text/xml");
+  res.send("<Response></Response>");
+  try {
+    const captured = await captureInboundCallLead(payload, "inbound_call_status");
+    const callStatus = String(payload?.CallStatus || "").toLowerCase();
+    if (captured?.fromPhone && ["no-answer", "busy", "failed", "canceled"].includes(callStatus)) {
+      try {
+        await sendCallFollowupSms(payload, "voice_status_callback");
+      } catch (smsErr) {
+        insertEvent.run({
+          from_phone: captured.fromPhone,
+          event_type: "call_text_followup_failed",
+          payload_json: JSON.stringify({
+            source: "voice_status_callback",
+            call_sid: captured.callSid || null,
+            call_status: callStatus,
+            error: String(smsErr?.message || smsErr)
+          }),
+          created_at: new Date().toISOString()
+        });
+      }
+    }
+  } catch (e) {
+    try {
+      insertEvent.run({
+        from_phone: voiceFromPhone(payload) || "unknown",
+        event_type: "twilio_voice_status_error",
+        payload_json: JSON.stringify({ error: String(e?.message || e), payload }),
+        created_at: new Date().toISOString()
+      });
+    } catch {}
+  }
 });
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
