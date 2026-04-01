@@ -1,0 +1,703 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Board Presentation Practice</title>
+  <link rel="icon" type="image/svg+xml" href="/public/favicon.svg">
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0f172a;
+      --card: #111827;
+      --soft: #1f2937;
+      --ink: #e5e7eb;
+      --muted: #9ca3af;
+      --accent: #22c55e;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --line: #374151;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8fafc;
+        --card: #ffffff;
+        --soft: #f3f4f6;
+        --ink: #111827;
+        --muted: #4b5563;
+        --accent: #15803d;
+        --warn: #b45309;
+        --danger: #b91c1c;
+        --line: #d1d5db;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.45;
+    }
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    h1, h2, h3 { margin: 0 0 10px; }
+    .muted { color: var(--muted); }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+    }
+    .span-12 { grid-column: span 12; }
+    .span-8 { grid-column: span 8; }
+    .span-6 { grid-column: span 6; }
+    .span-4 { grid-column: span 4; }
+    @media (max-width: 900px) {
+      .span-8, .span-6, .span-4 { grid-column: span 12; }
+    }
+    label {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      display: block;
+      margin-bottom: 6px;
+    }
+    input, select, textarea, button {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: var(--soft);
+      color: var(--ink);
+      padding: 10px 12px;
+      font: inherit;
+    }
+    textarea { min-height: 140px; resize: vertical; }
+    .row { display: grid; gap: 10px; grid-template-columns: repeat(12, 1fr); }
+    .row > .col { grid-column: span 12; }
+    .row .col-6 { grid-column: span 6; }
+    .row .col-4 { grid-column: span 4; }
+    @media (max-width: 900px) {
+      .row .col-6, .row .col-4 { grid-column: span 12; }
+    }
+    .btns { display: flex; gap: 10px; flex-wrap: wrap; }
+    .btns button { width: auto; cursor: pointer; }
+    .btn-primary { background: #166534; color: #f0fdf4; border-color: #14532d; }
+    .btn-secondary { background: #1d4ed8; color: #eff6ff; border-color: #1e40af; }
+    .btn-ghost { background: transparent; }
+    .pill {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      font-size: 12px;
+      color: var(--muted);
+      margin-right: 6px;
+      margin-bottom: 6px;
+    }
+    .question-box {
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      padding: 12px;
+      background: rgba(34, 197, 94, 0.06);
+    }
+    .timer {
+      font-variant-numeric: tabular-nums;
+      font-weight: 700;
+      font-size: 20px;
+    }
+    .score-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .score {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px;
+      background: var(--soft);
+    }
+    .score .k { font-size: 12px; color: var(--muted); }
+    .score .v { font-size: 20px; font-weight: 700; }
+    .danger { color: var(--danger); }
+    .warn { color: var(--warn); }
+    .good { color: var(--accent); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      text-align: left;
+      border-bottom: 1px solid var(--line);
+      padding: 8px;
+      vertical-align: top;
+    }
+    .tiny { font-size: 12px; color: var(--muted); }
+    .member-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    @media (max-width: 900px) {
+      .member-list { grid-template-columns: repeat(1, minmax(0, 1fr)); }
+    }
+    .member-card {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px;
+      background: var(--soft);
+    }
+    .member-card input { width: auto; margin-top: 4px; }
+    .member-card .name { font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Board Presentation Practice Simulator</h1>
+    <p class="muted">
+      Run realistic board-style Q&amp;A drills with Jamie Diamond, Oprah Winfrey, Steve Jobs, and Brianna Montgomery.
+    </p>
+
+    <div class="grid">
+      <section class="card span-12">
+        <h2>Session Setup</h2>
+        <div class="row">
+          <div class="col col-6">
+            <label for="topic">Presentation Topic</label>
+            <input id="topic" placeholder="e.g., 2026 growth strategy and operating plan" />
+          </div>
+          <div class="col col-6">
+            <label for="ask">Core Ask to the Board</label>
+            <input id="ask" placeholder="e.g., Approve investment in expansion + talent" />
+          </div>
+          <div class="col col-4">
+            <label for="difficulty">Difficulty</label>
+            <select id="difficulty">
+              <option value="easy">Easy</option>
+              <option value="medium" selected>Medium</option>
+              <option value="hard">Hard</option>
+            </select>
+          </div>
+          <div class="col col-4">
+            <label for="timeLimitSec">Answer Timer (seconds)</label>
+            <input id="timeLimitSec" type="number" min="30" max="600" step="15" value="120" />
+          </div>
+          <div class="col col-4">
+            <label for="targetMinutes">Target Presentation Length (minutes)</label>
+            <input id="targetMinutes" type="number" min="3" max="120" value="20" />
+          </div>
+        </div>
+      </section>
+
+      <section class="card span-6">
+        <h2>Board Personas</h2>
+        <div id="memberList" class="member-list"></div>
+      </section>
+
+      <section class="card span-6">
+        <h2>Controls</h2>
+        <div class="btns" style="margin-bottom: 10px;">
+          <button id="btnNewQuestion" class="btn-primary">Generate Board Question</button>
+          <button id="btnFollowup" class="btn-secondary">Generate Follow-up</button>
+          <button id="btnReset" class="btn-ghost">Reset Session</button>
+          <button id="btnExport" class="btn-ghost">Export Session JSON</button>
+        </div>
+        <div>
+          <span class="pill">Questions asked: <strong id="qCount">0</strong></span>
+          <span class="pill">Average score: <strong id="avgScore">0.0</strong>/10</span>
+          <span class="pill">Latest member: <strong id="latestMember">N/A</strong></span>
+        </div>
+      </section>
+
+      <section class="card span-12">
+        <h2>Live Drill</h2>
+        <div class="row">
+          <div class="col col-6">
+            <div id="questionBox" class="question-box muted">Click "Generate Board Question" to begin.</div>
+            <div style="margin-top: 8px;">
+              <span class="pill">Current board member: <strong id="currentMember">N/A</strong></span>
+              <span class="pill">Difficulty: <strong id="currentDifficulty">N/A</strong></span>
+              <span class="pill">Timer: <span id="timer" class="timer">--:--</span></span>
+            </div>
+          </div>
+          <div class="col col-6">
+            <label for="answer">Your Answer (type key points while practicing aloud)</label>
+            <textarea id="answer" placeholder="Structure tip: Decision -> Why now -> Evidence -> Risks -> Ask"></textarea>
+            <div class="btns" style="margin-top: 10px;">
+              <button id="btnEvaluate" class="btn-primary">Evaluate My Answer</button>
+              <button id="btnStartTimer" class="btn-ghost">Start / Restart Timer</button>
+              <button id="btnStopTimer" class="btn-ghost">Stop Timer</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card span-8">
+        <h2>Feedback</h2>
+        <div id="feedbackHint" class="muted">Evaluate an answer to get a scorecard and coaching.</div>
+        <div id="scoreGrid" class="score-grid"></div>
+        <div id="feedbackList"></div>
+      </section>
+
+      <section class="card span-4">
+        <h2>Strong Answer Framework</h2>
+        <ol class="tiny" style="padding-left: 18px;">
+          <li>State your recommendation in one sentence.</li>
+          <li>Quantify business impact (baseline, target, timing).</li>
+          <li>Address top 2 risks and your mitigations.</li>
+          <li>Tie to people/customer impact, not only metrics.</li>
+          <li>Close with a crisp board ask and decision deadline.</li>
+        </ol>
+      </section>
+
+      <section class="card span-12">
+        <h2>Session History</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Board Member</th>
+              <th>Question</th>
+              <th>Overall</th>
+              <th>Improvement Focus</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody">
+            <tr><td colspan="5" class="muted">No attempts yet.</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const MEMBERS = [
+      {
+        id: "jamie",
+        name: "Jamie Diamond",
+        lens: "Capital allocation, downside protection, and risk-adjusted return",
+        priorities: ["ROI", "cash flow", "risk controls", "execution confidence"],
+        questions: {
+          easy: [
+            "What is the expected return on this initiative and when do we break even?",
+            "What is the downside case if demand drops 20%?",
+            "Which KPI tells us this strategy is working within one quarter?"
+          ],
+          medium: [
+            "If we can only fund one-third of this plan, which pieces survive and why?",
+            "Where are you most exposed operationally, and how fast can we correct course?",
+            "What assumptions in your model are most fragile, and what is your trigger to pivot?"
+          ],
+          hard: [
+            "Give me your risk-adjusted IRR logic. Why should we prefer this over alternatives today?",
+            "What would make this board regret approving your ask in 12 months?",
+            "Show me the governance model: who owns decisions, escalation, and stop-loss rules?"
+          ]
+        },
+        followups: [
+          "What did you cut to protect free cash flow?",
+          "How does this hold in a recession scenario?",
+          "What is your kill criterion?"
+        ],
+        coaching: [
+          "Lead with economics first: value creation, time-to-value, and downside protection.",
+          "State explicit trigger points where you will slow, stop, or double down."
+        ]
+      },
+      {
+        id: "oprah",
+        name: "Oprah Winfrey",
+        lens: "Human impact, trust, narrative clarity, and values alignment",
+        priorities: ["customer story", "team impact", "authenticity", "social value"],
+        questions: {
+          easy: [
+            "Who is most positively affected by this plan, and how will their experience improve?",
+            "What story would help people emotionally understand why this matters?",
+            "How will this decision build trust with your team and customers?"
+          ],
+          medium: [
+            "What groups might be harmed or left behind, and what are you doing about it?",
+            "How do you keep this initiative values-led under pressure?",
+            "What message should frontline teams hear from leadership on day one?"
+          ],
+          hard: [
+            "Where is the tension between profit and principle, and how will you resolve it publicly?",
+            "If this succeeds financially but damages culture, would you still call it success?",
+            "What hard truth have you not yet told this board?"
+          ]
+        },
+        followups: [
+          "Make that answer more human and specific.",
+          "What would one customer say in their own words?",
+          "How do you preserve trust if things go wrong?"
+        ],
+        coaching: [
+          "Pair each metric with a human consequence to show leadership depth.",
+          "Use one vivid customer or employee example to anchor credibility."
+        ]
+      },
+      {
+        id: "steve",
+        name: "Steve Jobs",
+        lens: "Product excellence, simplicity, differentiation, and bold focus",
+        priorities: ["clarity", "craft", "user experience", "focus"],
+        questions: {
+          easy: [
+            "What is the one sentence that explains this strategy?",
+            "Why is this meaningfully better for the user, not just cheaper for us?",
+            "What are you saying no to so this can be excellent?"
+          ],
+          medium: [
+            "What is the non-obvious insight competitors are missing?",
+            "Where is the experience currently broken, and what is your bold fix?",
+            "If we had to ship something iconic in 90 days, what would it be?"
+          ],
+          hard: [
+            "This sounds complex. Strip it to its essence in 20 seconds.",
+            "What would make this unforgettable to customers, not merely acceptable?",
+            "Why should this exist at all if we cannot make it 10x better in one core dimension?"
+          ]
+        },
+        followups: [
+          "That was too complicated. Simplify.",
+          "What does great look like from the customer's point of view?",
+          "What are the 3 things you will stop doing?"
+        ],
+        coaching: [
+          "Drive ruthless prioritization: one core promise, fewer moving parts.",
+          "Replace vague language with concrete user outcomes and design choices."
+        ]
+      },
+      {
+        id: "brianna",
+        name: "Brianna Montgomery",
+        lens: "Operational rigor, talent readiness, inclusion, and long-term execution",
+        priorities: ["operating cadence", "ownership", "team capability", "sustainable scale"],
+        questions: {
+          easy: [
+            "Who is accountable for each milestone and what is the weekly review rhythm?",
+            "Do we have the talent and capability to execute this reliably?",
+            "How will you keep teams aligned as priorities shift?"
+          ],
+          medium: [
+            "Where can execution drift occur, and what safeguards are built in?",
+            "How does this plan strengthen inclusion and leadership bench depth?",
+            "What signals tell you teams are overloaded before performance drops?"
+          ],
+          hard: [
+            "What operating mechanism prevents strategy from dying in middle management?",
+            "If one key leader exits tomorrow, what continuity plan keeps momentum?",
+            "How will you scale this without culture erosion and quality decline?"
+          ]
+        },
+        followups: [
+          "Be specific about owners, dates, and escalation paths.",
+          "What talent risks are you not naming?",
+          "How are you measuring execution health weekly?"
+        ],
+        coaching: [
+          "Show the operating system: cadence, owners, dependencies, and escalation.",
+          "Demonstrate leadership depth by naming continuity and capability plans."
+        ]
+      }
+    ];
+
+    const state = {
+      selected: new Set(MEMBERS.map((m) => m.id)),
+      current: null,
+      timer: null,
+      remainingSec: 0,
+      history: []
+    };
+
+    const el = {
+      topic: document.getElementById("topic"),
+      ask: document.getElementById("ask"),
+      difficulty: document.getElementById("difficulty"),
+      timeLimitSec: document.getElementById("timeLimitSec"),
+      targetMinutes: document.getElementById("targetMinutes"),
+      memberList: document.getElementById("memberList"),
+      questionBox: document.getElementById("questionBox"),
+      answer: document.getElementById("answer"),
+      currentMember: document.getElementById("currentMember"),
+      currentDifficulty: document.getElementById("currentDifficulty"),
+      timer: document.getElementById("timer"),
+      historyBody: document.getElementById("historyBody"),
+      qCount: document.getElementById("qCount"),
+      avgScore: document.getElementById("avgScore"),
+      latestMember: document.getElementById("latestMember"),
+      feedbackHint: document.getElementById("feedbackHint"),
+      scoreGrid: document.getElementById("scoreGrid"),
+      feedbackList: document.getElementById("feedbackList")
+    };
+
+    function renderMembers() {
+      el.memberList.innerHTML = MEMBERS.map((m) => `
+        <label class="member-card">
+          <input type="checkbox" data-member="${m.id}" checked />
+          <div>
+            <div class="name">${m.name}</div>
+            <div class="tiny">${m.lens}</div>
+          </div>
+        </label>
+      `).join("");
+      el.memberList.querySelectorAll("input[type=checkbox]").forEach((cb) => {
+        cb.addEventListener("change", () => {
+          const id = cb.getAttribute("data-member");
+          if (cb.checked) state.selected.add(id);
+          else state.selected.delete(id);
+        });
+      });
+    }
+
+    function randomFrom(arr) {
+      return arr[Math.floor(Math.random() * arr.length)];
+    }
+
+    function getActiveMembers() {
+      return MEMBERS.filter((m) => state.selected.has(m.id));
+    }
+
+    function buildQuestion({ isFollowup = false } = {}) {
+      const active = getActiveMembers();
+      if (!active.length) {
+        alert("Select at least one board persona.");
+        return null;
+      }
+      const member = state.current && isFollowup ? state.current.member : randomFrom(active);
+      const difficulty = el.difficulty.value;
+      let question = isFollowup
+        ? randomFrom(member.followups)
+        : randomFrom(member.questions[difficulty] || member.questions.medium);
+      const topic = el.topic.value.trim();
+      const ask = el.ask.value.trim();
+      if (!isFollowup && (topic || ask)) {
+        const context = [topic ? `Topic: ${topic}.` : "", ask ? `Board ask: ${ask}.` : ""].filter(Boolean).join(" ");
+        question = `${question} ${context}`.trim();
+      }
+      const round = {
+        at: new Date().toISOString(),
+        member,
+        difficulty,
+        question,
+        isFollowup
+      };
+      state.current = round;
+      el.questionBox.textContent = question;
+      el.questionBox.classList.remove("muted");
+      el.currentMember.textContent = member.name;
+      el.currentDifficulty.textContent = difficulty + (isFollowup ? " (follow-up)" : "");
+      el.latestMember.textContent = member.name;
+      startTimer();
+      return round;
+    }
+
+    function formatClock(totalSec) {
+      const s = Math.max(0, Math.floor(totalSec));
+      const mm = String(Math.floor(s / 60)).padStart(2, "0");
+      const ss = String(s % 60).padStart(2, "0");
+      return `${mm}:${ss}`;
+    }
+
+    function stopTimer() {
+      if (state.timer) clearInterval(state.timer);
+      state.timer = null;
+    }
+
+    function startTimer() {
+      stopTimer();
+      const raw = Number(el.timeLimitSec.value);
+      const limit = Number.isFinite(raw) ? Math.min(600, Math.max(30, Math.round(raw))) : 120;
+      state.remainingSec = limit;
+      el.timer.textContent = formatClock(state.remainingSec);
+      state.timer = setInterval(() => {
+        state.remainingSec -= 1;
+        el.timer.textContent = formatClock(state.remainingSec);
+        if (state.remainingSec <= 0) {
+          stopTimer();
+          el.timer.innerHTML = `<span class="danger">${formatClock(0)}</span>`;
+        } else if (state.remainingSec <= 15) {
+          el.timer.innerHTML = `<span class="warn">${formatClock(state.remainingSec)}</span>`;
+        }
+      }, 1000);
+    }
+
+    function scoreAnswer(answer, member) {
+      const words = answer.trim().split(/\s+/).filter(Boolean);
+      const text = answer.toLowerCase();
+      const wc = words.length;
+      const hasNumber = /\b\d+([.,]\d+)?(%|x|k|m|b)?\b/.test(text);
+      const hasStructure = /(first|second|third|finally|in summary|therefore|because)/.test(text);
+      const hasDecision = /(recommend|decision|approve|ask|commit)/.test(text);
+      const hasRisk = /(risk|downside|mitigation|contingency|trade[- ]?off)/.test(text);
+      const hasKpi = /(kpi|metric|target|baseline|roi|margin|revenue|cost|cash|payback)/.test(text);
+      const hasPeople = /(customer|employee|team|community|trust|culture|experience)/.test(text);
+      const hasOwner = /(owner|accountable|cadence|milestone|timeline|weekly|quarter)/.test(text);
+
+      const clamp = (n) => Math.max(1, Math.min(10, n));
+      const clarity = clamp(3 + (wc >= 60 && wc <= 220 ? 3 : wc > 30 ? 2 : 1) + (hasStructure ? 2 : 0) + (hasDecision ? 1 : 0));
+      const strategy = clamp(2 + (hasDecision ? 2 : 0) + (hasRisk ? 2 : 0) + (hasKpi ? 2 : 0) + (wc > 80 ? 1 : 0));
+      const evidence = clamp(2 + (hasNumber ? 3 : 0) + (hasKpi ? 3 : 0) + (/(source|data|benchmark)/.test(text) ? 1 : 0));
+      const story = clamp(2 + (hasPeople ? 3 : 0) + (/(example|story|case|client|user)/.test(text) ? 2 : 0) + (/(why now|urgency)/.test(text) ? 1 : 0));
+      const presence = clamp(2 + (hasDecision ? 3 : 0) + (hasOwner ? 2 : 0) + (wc >= 45 ? 1 : 0) + (/(next step|by q|by month|by week)/.test(text) ? 1 : 0));
+
+      // Persona weighting
+      const personaBoost = {
+        jamie: [0, 1, 1, -1, 1],
+        oprah: [0, 0, -1, 2, 0],
+        steve: [2, 1, 0, 0, 1],
+        brianna: [0, 1, 0, 1, 2]
+      }[member.id] || [0, 0, 0, 0, 0];
+
+      const final = {
+        clarity: clamp(clarity + personaBoost[0]),
+        strategy: clamp(strategy + personaBoost[1]),
+        evidence: clamp(evidence + personaBoost[2]),
+        story: clamp(story + personaBoost[3]),
+        presence: clamp(presence + personaBoost[4])
+      };
+      const overall = ((final.clarity + final.strategy + final.evidence + final.story + final.presence) / 5);
+      return { ...final, overall: Number(overall.toFixed(1)), wc };
+    }
+
+    function buildFeedback(sc, member) {
+      const tips = [];
+      if (sc.wc < 45) tips.push("Answer was short. Expand with concrete numbers and one risk mitigation.");
+      if (sc.evidence < 7) tips.push("Add evidence: baseline, target, timeline, and expected ROI/cost impact.");
+      if (sc.strategy < 7) tips.push("Name trade-offs and explain what you will deprioritize.");
+      if (sc.story < 7) tips.push("Add one customer/team story so the board feels the impact.");
+      if (sc.presence < 7) tips.push("Close with a crisp board decision request and an owner/date.");
+      tips.push(...member.coaching);
+      return tips.slice(0, 5);
+    }
+
+    function renderScore(sc) {
+      const cells = [
+        ["Clarity", sc.clarity],
+        ["Strategy", sc.strategy],
+        ["Evidence", sc.evidence],
+        ["Story", sc.story],
+        ["Presence", sc.presence]
+      ];
+      el.scoreGrid.innerHTML = cells.map(([k, v]) => `
+        <div class="score">
+          <div class="k">${k}</div>
+          <div class="v">${v}/10</div>
+        </div>
+      `).join("");
+      el.feedbackHint.innerHTML = `Overall score: <strong class="${sc.overall >= 8 ? "good" : sc.overall >= 6 ? "warn" : "danger"}">${sc.overall}/10</strong>`;
+    }
+
+    function renderHistory() {
+      if (!state.history.length) {
+        el.historyBody.innerHTML = `<tr><td colspan="5" class="muted">No attempts yet.</td></tr>`;
+        el.qCount.textContent = "0";
+        el.avgScore.textContent = "0.0";
+        return;
+      }
+      const avg = state.history.reduce((s, h) => s + h.score.overall, 0) / state.history.length;
+      el.qCount.textContent = String(state.history.length);
+      el.avgScore.textContent = avg.toFixed(1);
+      el.historyBody.innerHTML = state.history.map((h, i) => `
+        <tr>
+          <td>${i + 1}</td>
+          <td>${h.member}</td>
+          <td>${h.question}</td>
+          <td><strong>${h.score.overall}</strong>/10</td>
+          <td>${h.focus}</td>
+        </tr>
+      `).join("");
+    }
+
+    function evaluateCurrent() {
+      if (!state.current) {
+        alert("Generate a board question first.");
+        return;
+      }
+      const answer = el.answer.value.trim();
+      if (!answer) {
+        alert("Type notes from your spoken answer before evaluating.");
+        return;
+      }
+      const sc = scoreAnswer(answer, state.current.member);
+      const tips = buildFeedback(sc, state.current.member);
+      renderScore(sc);
+      el.feedbackList.innerHTML = `
+        <h3 style="margin-top:12px;">Coaching for ${state.current.member.name}</h3>
+        <ul>${tips.map((t) => `<li>${t}</li>`).join("")}</ul>
+      `;
+      state.history.unshift({
+        at: new Date().toISOString(),
+        member: state.current.member.name,
+        question: state.current.question.slice(0, 160),
+        score: sc,
+        focus: tips[0] || "Sharpen structure and evidence."
+      });
+      renderHistory();
+    }
+
+    function resetSession() {
+      stopTimer();
+      state.current = null;
+      state.history = [];
+      el.answer.value = "";
+      el.questionBox.textContent = 'Click "Generate Board Question" to begin.';
+      el.questionBox.classList.add("muted");
+      el.currentMember.textContent = "N/A";
+      el.currentDifficulty.textContent = "N/A";
+      el.latestMember.textContent = "N/A";
+      el.timer.textContent = "--:--";
+      el.scoreGrid.innerHTML = "";
+      el.feedbackHint.textContent = "Evaluate an answer to get a scorecard and coaching.";
+      el.feedbackList.innerHTML = "";
+      renderHistory();
+    }
+
+    function exportSession() {
+      const payload = {
+        generated_at: new Date().toISOString(),
+        topic: el.topic.value.trim(),
+        ask: el.ask.value.trim(),
+        difficulty: el.difficulty.value,
+        target_minutes: Number(el.targetMinutes.value) || null,
+        rounds: state.history
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "board-practice-session.json";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    document.getElementById("btnNewQuestion").addEventListener("click", () => buildQuestion());
+    document.getElementById("btnFollowup").addEventListener("click", () => {
+      if (!state.current) return alert("Generate a primary question first.");
+      buildQuestion({ isFollowup: true });
+    });
+    document.getElementById("btnEvaluate").addEventListener("click", evaluateCurrent);
+    document.getElementById("btnStartTimer").addEventListener("click", startTimer);
+    document.getElementById("btnStopTimer").addEventListener("click", stopTimer);
+    document.getElementById("btnReset").addEventListener("click", resetSession);
+    document.getElementById("btnExport").addEventListener("click", exportSession);
+
+    renderMembers();
+    renderHistory();
+  </script>
+</body>
+</html>
