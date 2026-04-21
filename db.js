@@ -175,7 +175,8 @@ async function initDb() {
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS quote_status TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS quote_ready INTEGER DEFAULT 0",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS load_bucket TEXT",
-    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS access_level TEXT"
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS access_level TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS status TEXT"
   ];
 
   for (const sql of migrations) {
