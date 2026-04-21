@@ -812,16 +812,23 @@ async function captureInboundCallLead(payload, eventType = "inbound_call_receive
   const callSid = String(payload?.CallSid || payload?.CallSidFallback || "").trim() || null;
   const callStatus = String(payload?.CallStatus || payload?.CallStatusFallback || "").trim().toLowerCase() || null;
   try {
-    upsertLead.run({
-      from_phone: fromPhone,
-      to_phone: toPhone,
-      ts,
-      last_event: callStatus ? `call_${callStatus}` : "call_inbound",
-      last_body: callSid || null,
-      num_media: 0,
-      media_url0: null,
-      status: "call"
-    });
+    await pool.query(
+      `INSERT INTO leads (
+         from_phone, to_phone, first_seen_at, last_seen_at,
+         last_event, last_body, num_media, media_url0, status, lead_source
+       ) VALUES ($1,$2,$3,$3,$4,$5,0,NULL,'call','call')
+       ON CONFLICT(from_phone) DO UPDATE SET
+         to_phone = COALESCE(EXCLUDED.to_phone, leads.to_phone),
+         last_seen_at = EXCLUDED.last_seen_at,
+         last_event = COALESCE(EXCLUDED.last_event, leads.last_event),
+         last_body = COALESCE(EXCLUDED.last_body, leads.last_body),
+         status = 'call',
+         lead_source = CASE
+           WHEN LOWER(COALESCE(leads.lead_source,'')) IN ('', 'sms') THEN 'call'
+           ELSE leads.lead_source
+         END`,
+      [fromPhone, toPhone, ts, callStatus ? `call_${callStatus}` : "call_inbound", callSid || null]
+    );
   } catch {}
   try {
     insertEvent.run({
