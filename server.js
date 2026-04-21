@@ -842,7 +842,11 @@ async function captureInboundCallLead(payload, eventType = "inbound_call_receive
     await pool.query(
       `UPDATE leads
          SET last_seen_at = NOW(),
-             status = COALESCE(status, 'call')
+             status = COALESCE(status, 'call'),
+             lead_source = CASE
+               WHEN LOWER(COALESCE(lead_source, '')) IN ('', 'sms') THEN 'call'
+               ELSE lead_source
+             END
        WHERE from_phone = $1`,
       [fromPhone]
     );

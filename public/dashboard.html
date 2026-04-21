@@ -106,6 +106,7 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:'DM Mono'
 .av{width:28px;height:28px;border-radius:50%;background:var(--bg3);border:1px solid var(--bd2);display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--tx2)}
 .lead-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .manual-badge{font-size:8px;letter-spacing:.4px;padding:2px 6px;border-radius:999px;background:#fbbf24;color:#111;border:1px solid #f59e0b;font-weight:700;text-transform:uppercase}
+.call-badge{font-size:8px;letter-spacing:.4px;padding:2px 6px;border-radius:999px;background:#dbeafe;color:#1e3a8a;border:1px solid #93c5fd;font-weight:700;text-transform:uppercase}
 .lead-actions{display:flex;align-items:center;gap:6px}
 .lead-act-btn{padding:3px 7px;font-size:8px;font-family:'DM Mono',monospace;border:1px solid var(--bd2);background:var(--bg4);color:var(--tx2);border-radius:4px;cursor:pointer}
 .lead-act-btn:hover{border-color:var(--blue);color:var(--blue)}
@@ -636,6 +637,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
           <select id="lf-source" class="lf-select" onchange="setLeadsFilterField('source',this.value)">
             <option value="all">Source: All</option>
             <option value="sms">SMS</option>
+            <option value="call">Call</option>
             <option value="manual">Manual</option>
           </select>
           <select id="lf-schedule" class="lf-select" onchange="setLeadsFilterField('schedule',this.value)">
@@ -1289,7 +1291,7 @@ function normalizeLeadsFilters(raw){
   const freshness=String(raw?.freshness||out.freshness);
   out.freshness=['all','today','24h','3d','7d','stale'].includes(freshness)?freshness:out.freshness;
   const source=String(raw?.source||out.source);
-  out.source=['all','sms','manual'].includes(source)?source:out.source;
+  out.source=['all','sms','call','manual'].includes(source)?source:out.source;
   const schedule=String(raw?.schedule||out.schedule);
   out.schedule=['all','not_booked','booking_sent','unbooked','booked','completed'].includes(schedule)?schedule:out.schedule;
   out.search=String(raw?.search||'').trim();
@@ -1804,7 +1806,12 @@ function leadHtml(l){
   const init=(l.phone||'??').replace(/\D/g,'').slice(-4,-2);
   const amt=l.quote_amount?f$(l.quote_amount):(l.load_bucket||'—');
   const sla=l.sla||{label:'—',color:'var(--tx3)'};
-  const manual=String(l.lead_source||'sms').toLowerCase()==='manual';
+  const source=String(l.lead_source||'sms').toLowerCase();
+  const manual=source==='manual';
+  const callLead=source==='call';
+  const sourceBadge=manual
+    ? '<span class="manual-badge">Manual</span>'
+    : (callLead?'<span class="call-badge">Call</span>':'');
   const title=h(l.lead_name||fPhone(l.phone));
   const depositLink=String(l.square_payment_link_url||'').trim();
   const vision=leadVisionSummary(l);
@@ -1821,7 +1828,7 @@ function leadHtml(l){
     : '';
   return`<div class="lead">
     <div class="av">${init}</div>
-    <div><div class="lead-meta"><div style="font-size:11px;color:var(--tx)">${title}</div>${manual?'<span class="manual-badge">Manual</span>':''}</div>
+    <div><div class="lead-meta"><div style="font-size:11px;color:var(--tx)">${title}</div>${sourceBadge}</div>
     <div style="font-size:10px;color:var(--tx2)">${h(fPhone(l.phone))}</div>
     <div style="font-size:9px;color:var(--tx3)">${fAgo(l.created_at||l.createdAt)} · ${h(l.address||'No address')}</div>
     <div style="font-size:8px;color:var(--tx2);margin-top:2px">${h(l.next_action||'—')} · <span style="color:${sla.color}">${h(sla.label)}</span></div>
@@ -1941,8 +1948,14 @@ async function fetchLeads(){
       };
     });
     leadsEnriched.sort((a,b)=>{
-      const ma=String(a.lead_source||'sms')==='manual'?0:1;
-      const mb=String(b.lead_source||'sms')==='manual'?0:1;
+      const sourceRank=(v)=>{
+        const s=String(v||'sms').toLowerCase();
+        if(s==='manual')return 0;
+        if(s==='call')return 1;
+        return 2;
+      };
+      const ma=sourceRank(a.lead_source);
+      const mb=sourceRank(b.lead_source);
       if(ma!==mb)return ma-mb;
       const ta=new Date(a.last_seen_at||a.created_at||0).getTime();
       const tb=new Date(b.last_seen_at||b.created_at||0).getTime();
