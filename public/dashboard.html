@@ -3456,6 +3456,9 @@ function setDumpSiteFilter(filter,btn){
 function toggleChristmasLights(btn){
   showChristmasLights=!showChristmasLights;
   btn.classList.toggle('on',showChristmasLights);
+  if(showChristmasLights){
+    fetchChristmasLights().catch(()=>{});
+  }
   if(streetMap)renderStreetChristmasLights();
   renderChristmasLightsList();
   renderMapSourceTable({pins:getVisiblePins().length});
