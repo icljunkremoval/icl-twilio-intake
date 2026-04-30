@@ -545,6 +545,10 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
           <button class="mc mc-dump-filter" onclick="setDumpSiteFilter('open',this)">Open Now</button>
           <button class="mc mc-dump-filter" onclick="setDumpSiteFilter('all',this)">All</button>
         </div>
+        <div class="map-ctrl-g" style="grid-column:1/-1">
+          <span class="mc-lbl">Christmas Lights</span>
+          <button class="mc" id="christmas-lights-toggle" onclick="toggleChristmasLights(this)">On</button>
+        </div>
       </div>
     </div>
     <div class="cb0" id="street-map-wrap" style="position:relative;background:#0d1422;min-height:520px">
@@ -565,13 +569,20 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
             <div class="dr"><span class="dl">Loading dumpsites…</span><span class="dv">—</span></div>
           </div>
         </div>
+        <div style="flex:1;min-width:200px">
+          <div style="font-size:9px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Christmas Lights Customers</div>
+          <div id="map-christmas-lights-list">
+            <div class="dr"><span class="dl">Loading customers…</span><span class="dv">—</span></div>
+          </div>
+        </div>
         <div style="flex:1;min-width:180px">
           <div style="font-size:9px;color:var(--tx3);letter-spacing:.5px;text-transform:uppercase;margin-bottom:8px">Stack</div>
           <div style="font-size:9px;color:var(--tx3);line-height:1.8">
             Demographics: ACS 2023<br>
             Routing: Google/OSRM<br>
             City projects: permits/housing/transit<br>
-            Disposal reference: ICL Disposal Sites Master (Mar 2026)
+            Disposal reference: ICL Disposal Sites Master (Mar 2026)<br>
+            Holiday service CRM: Squarespace CSV import
           </div>
         </div>
       </div>
@@ -1717,6 +1728,28 @@ function renderVenueList(){
   }
   el.innerHTML=rows.map(v=>`<div class="dr"><span class="dl">${v.group==='whales'?'⭐':'🤝'} ${v.name}</span><span class="dv ${v.group==='whales'?'a':'b'}">${v.note||''}</span></div>`).join('');
 }
+function getVisibleChristmasLights(){
+  if(!showChristmasLights)return [];
+  const pts=Array.isArray(CHRISTMAS_LIGHTS_POINTS)?CHRISTMAS_LIGHTS_POINTS:[];
+  return pts.filter(p=>Number.isFinite(Number(p.lat))&&Number.isFinite(Number(p.lng)));
+}
+function renderChristmasLightsList(){
+  const el=document.getElementById('map-christmas-lights-list');
+  if(!el)return;
+  const rows=getVisibleChristmasLights().slice(0,8);
+  if(!rows.length){
+    el.innerHTML='<div class="dr"><span class="dl">No holiday customers selected</span><span class="dv">—</span></div>';
+    return;
+  }
+  el.innerHTML=rows.map(c=>{
+    const name=(String(c.name||'').trim()||String(c.first_name||'').trim()||'Customer');
+    const zip=String(c.zip||'').trim();
+    const rank=String(c.rank||'').trim()||'—';
+    const score=Number(c.sort_score||0);
+    const loc=[String(c.city||'').trim(),zip].filter(Boolean).join(' ');
+    return `<div class="dr"><span class="dl">🎄 ${h(name)}</span><span class="dv b">R${h(rank)} · ${loc?h(loc):'LA'} · score ${score}</span></div>`;
+  }).join('');
+}
 function renderMapSourceTable(meta){
   const body=document.getElementById('map-source-body');
   if(!body)return;
@@ -1729,11 +1762,17 @@ function renderMapSourceTable(meta){
   const dumpOverrides=Number(dumpSitesMeta.override_count||0);
   const dumpStatus=dumpSitesMeta.source==='api'?'Live':'Fallback';
   const dumpStatusCls=dumpSitesMeta.source==='api'?'sig-live':'sig-plan';
+  const xmasTotal=Number(christmasLightsMeta.total_rows||0);
+  const xmasMapped=Number(christmasLightsMeta.mapped_points||0);
+  const xmasCsv=String(christmasLightsMeta.csv_file||'');
+  const xmasStatus=xmasTotal>0?'Live':'Pending';
+  const xmasStatusCls=xmasTotal>0?'sig-live':'sig-plan';
   body.innerHTML=`
     <tr><td>Live Leads</td><td class="sig-live">Live</td><td>${leadCt}</td><td>Pipeline + SLA risk</td></tr>
     <tr><td>ACS Demographics</td><td class="sig-live">Live</td><td>${Object.keys(CD||{}).length}</td><td>Neighborhood context</td></tr>
     <tr><td>City Opportunities API</td><td class="${(permitCt+housingCt+transitCt)>0?'sig-live':'sig-plan'}">${(permitCt+housingCt+transitCt)>0?'Live':'Pending'}</td><td>${permitCt+housingCt+transitCt}</td><td>Permits/housing/transit</td></tr>
     <tr><td>Dumpsite Layer (MSW)</td><td class="${dumpStatusCls}">${dumpStatus}</td><td>${dumpOpen}/${dumpTotal} open now · ${dumpOverrides} overrides</td><td>Ops drop timing + route optimization</td></tr>
+    <tr><td>Christmas Lights CSV</td><td class="${xmasStatusCls}">${xmasStatus}</td><td>${xmasMapped}/${xmasTotal} mapped${xmasCsv?` · ${h(xmasCsv)}`:''}</td><td>Holiday repeat-customer coverage</td></tr>
     <tr><td>Probate / Death / Obituaries</td><td class="sig-plan">Planned</td><td>—</td><td>Household transition triggers</td></tr>
     <tr><td>Partner Directory Imports</td><td class="sig-private">Planned</td><td>${KEY_VENUES.filter(v=>v.group==='partners').length}</td><td>Attorneys, mortuaries, move managers, realtors</td></tr>`;
 }
@@ -2320,6 +2359,9 @@ const DUMP_SITES_FALLBACK=[
 ];
 let DUMP_SITES=[...DUMP_SITES_FALLBACK];
 let dumpSitesMeta={source:'fallback',generated_at:null,override_count:0};
+let CHRISTMAS_LIGHTS_CUSTOMERS=[];
+let CHRISTMAS_LIGHTS_POINTS=[];
+let christmasLightsMeta={source:'missing',csv_file:null,total_rows:0,mapped_points:0};
 
 // Stylized basemap context so the choropleth isn't floating on a blank background.
 const BASEMAP_AREAS=[
@@ -2367,6 +2409,7 @@ let showMapLegend=true;
 let showVenues=false;
 let showSignals=false;
 let showDumpSites=false;
+let showChristmasLights=false;
 let venueFilter='all';
 let dumpSiteFilter='msw';
 let leadFilter='all';
@@ -2378,6 +2421,7 @@ function applyMapDefaultState(){
   showVenues=false;
   showSignals=false;
   showDumpSites=false;
+  showChristmasLights=false;
   leadFilter='all';
   leadFlowFilter='all';
   const setOn=(id,on)=>{
@@ -2390,6 +2434,7 @@ function applyMapDefaultState(){
   setOn('signals-toggle',false);
   setOn('venues-toggle',false);
   setOn('dumpsites-toggle',false);
+  setOn('christmas-lights-toggle',false);
   const leadBtns=[...document.querySelectorAll('.mc-lead-filter')];
   leadBtns.forEach(b=>b.classList.remove('on'));
   if(leadBtns[0])leadBtns[0].classList.add('on');
@@ -2774,7 +2819,7 @@ let curLayer='income';
 let hoveredZip=null;
 let mapMode='street';
 let streetMap=null;
-let streetLayers={territory:null,zips:null,leads:null,venues:null,dumpsites:null,signals:null};
+let streetLayers={territory:null,zips:null,leads:null,venues:null,dumpsites:null,signals:null,christmas:null};
 let selectedStreetLatLng=null;
 
 function toLatLng(coords){return coords.map(([lng,lat])=>[lat,lng]);}
@@ -2817,8 +2862,10 @@ function ensureStreetMap(){
   renderStreetVenues();
   renderStreetDumpSites();
   renderStreetSignals();
+  renderStreetChristmasLights();
   renderVenueList();
   renderDumpSiteList();
+  renderChristmasLightsList();
   renderLegend(curLayer);
   setTimeout(()=>{try{streetMap.invalidateSize();fitStreetToTerritory();}catch(e){}},70);
 }
@@ -2977,6 +3024,45 @@ function renderStreetSignals(){
   grp.addTo(streetMap);
   streetLayers.signals=grp;
 }
+function renderStreetChristmasLights(){
+  if(!streetMap||typeof L==='undefined')return;
+  if(streetLayers.christmas){streetMap.removeLayer(streetLayers.christmas);}
+  const vis=getVisibleChristmasLights();
+  if(!vis.length){streetLayers.christmas=null;return;}
+  const grp=(typeof L.markerClusterGroup==='function')
+    ? L.markerClusterGroup({showCoverageOnHover:false,spiderfyOnMaxZoom:true,maxClusterRadius:38})
+    : L.layerGroup();
+  vis.forEach(c=>{
+    const lat=Number(c.lat),lng=Number(c.lng);
+    if(!Number.isFinite(lat)||!Number.isFinite(lng))return;
+    const name=String(c.name||c.first_name||'Christmas customer').trim();
+    const city=String(c.city||'').trim();
+    const zip=String(c.zip||'').trim();
+    const rank=String(c.rank||'').trim()||'—';
+    const score=Number(c.sort_score||0);
+    const bank=(Number(c.in_bank_cents||0)>0)?f$(Number(c.in_bank_cents||0)):'—';
+    const marker=L.marker([lat,lng],{
+      icon:L.divIcon({
+        className:'',
+        html:'<div style="width:14px;height:14px;border-radius:3px;background:#dc2626;border:1.4px solid #fecaca;box-shadow:0 0 0 1px rgba(127,29,29,.35)"></div>',
+        iconSize:[14,14],
+        iconAnchor:[7,7]
+      })
+    });
+    marker.bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px;line-height:1.5">
+      <strong>🎄 ${h(name)}</strong><br>
+      Rank: ${h(rank)} · Score: ${score}<br>
+      ${h([city,zip].filter(Boolean).join(' ')||'Los Angeles')}<br>
+      Banked: ${h(bank)}<br>
+      ${c.phone_raw?`Phone: ${h(c.phone_raw)}<br>`:''}
+      ${c.address?`${h(c.address)}<br>`:''}
+      <span style="opacity:.72">${h(c.notes||'Holiday customer from CSV import')}</span>
+    </div>`);
+    marker.addTo(grp);
+  });
+  grp.addTo(streetMap);
+  streetLayers.christmas=grp;
+}
 async function fetchMapSignals(){
   try{
     const r=await fetch('/api/dashboard/opportunities',{headers:{'Accept':'application/json'}});
@@ -3014,6 +3100,28 @@ async function fetchDumpSites(){
   }
   if(streetMap)renderStreetDumpSites();
   renderDumpSiteList();
+  renderMapSourceTable({pins:getVisiblePins().length});
+}
+async function fetchChristmasLights(){
+  try{
+    const r=await fetch('/api/dashboard/christmas-lights?limit=240&geocode_budget=30',{headers:{'Accept':'application/json'}});
+    if(!r.ok)throw new Error(r.status);
+    const raw=await r.json();
+    CHRISTMAS_LIGHTS_CUSTOMERS=Array.isArray(raw?.customers)?raw.customers:[];
+    CHRISTMAS_LIGHTS_POINTS=Array.isArray(raw?.points)?raw.points:[];
+    christmasLightsMeta={
+      source:String(raw?.meta?.source||'csv'),
+      csv_file:String(raw?.meta?.csv_file||''),
+      total_rows:Number(raw?.meta?.total_rows||CHRISTMAS_LIGHTS_CUSTOMERS.length||0),
+      mapped_points:Number(raw?.meta?.mapped_points||CHRISTMAS_LIGHTS_POINTS.length||0)
+    };
+  }catch(e){
+    CHRISTMAS_LIGHTS_CUSTOMERS=[];
+    CHRISTMAS_LIGHTS_POINTS=[];
+    christmasLightsMeta={source:'missing',csv_file:null,total_rows:0,mapped_points:0};
+  }
+  if(streetMap)renderStreetChristmasLights();
+  renderChristmasLightsList();
   renderMapSourceTable({pins:getVisiblePins().length});
 }
 function openStreetView(){
@@ -3345,6 +3453,13 @@ function setDumpSiteFilter(filter,btn){
   renderDumpSiteList();
   renderMapSourceTable({pins:getVisiblePins().length});
 }
+function toggleChristmasLights(btn){
+  showChristmasLights=!showChristmasLights;
+  btn.classList.toggle('on',showChristmasLights);
+  if(streetMap)renderStreetChristmasLights();
+  renderChristmasLightsList();
+  renderMapSourceTable({pins:getVisiblePins().length});
+}
 function toggleSignals(btn){
   showSignals=!showSignals;
   btn.classList.toggle('on',showSignals);
@@ -3399,6 +3514,7 @@ function renderLegend(metric){
     <div class="leg-item"><div class="leg-sw" style="background:#10b981;border-radius:99px"></div>Primary MSW dumpsites</div>
     <div class="leg-item"><div class="leg-sw" style="background:#f59e0b;border-radius:99px"></div>Regional dump options</div>
     <div class="leg-item"><div class="leg-sw" style="background:#ef4444;border-radius:99px"></div>Closed/restricted sites</div>
+    <div class="leg-item"><div class="leg-sw" style="background:#dc2626;border-radius:2px"></div>Christmas lights customers</div>
     <div class="leg-item"><div class="leg-sw" style="background:#8b5cf6;border-radius:99px"></div>Permit signals</div>
     <div class="leg-item"><div class="leg-sw" style="background:#10b981;border-radius:99px"></div>Housing signals</div>
     <div class="leg-item"><div class="leg-sw" style="background:#ef4444;border-radius:99px"></div>Transit/project lines</div>`;
@@ -3878,6 +3994,7 @@ window.addEventListener('DOMContentLoaded',()=>{
   try{fetchCensus();}catch(e){}
   try{fetchMapSignals();}catch(e){}
   try{fetchDumpSites();}catch(e){}
+  try{fetchChristmasLights();}catch(e){}
   try{buildRefs();}catch(e){}
   try{
     loadK();
@@ -3924,6 +4041,7 @@ window.addEventListener('DOMContentLoaded',()=>{
   setInterval(()=>{try{fetchLeads();}catch(e){}},60000);
   setInterval(()=>{try{fetchMapSignals();}catch(e){}},300000);
   setInterval(()=>{try{fetchDumpSites();}catch(e){}},180000);
+  setInterval(()=>{try{fetchChristmasLights();}catch(e){}},300000);
 });
 </script>
 </body>

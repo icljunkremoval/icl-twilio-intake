@@ -617,6 +617,16 @@ const DASHBOARD_DUMPSITES_FALLBACK = [
     availability: { state: "closed", label: "Closed" }
   }
 ];
+const CHRISTMAS_LIGHTS_CSV_CANDIDATES = [
+  path.join(__dirname, "data", "christmas_lights_customers.csv"),
+  "/home/ubuntu/.cursor/projects/workspace/uploads/2025_ICL_Squarespace_Leads_-_Jobs_Done__2_.csv"
+];
+const CHRISTMAS_LIGHTS_GEO_CACHE = new Map();
+const CHRISTMAS_LIGHTS_DATA_CACHE = {
+  path: null,
+  mtimeMs: 0,
+  rows: []
+};
 
 function resolveBuildInfo() {
   const envSha = String(
@@ -779,6 +789,209 @@ function normalizeLeadSource(raw) {
   if (["manual", "in_person", "inperson", "consult"].includes(s)) return "manual";
   if (s === "sms") return "sms";
   return s.slice(0, 24);
+}
+
+function csvTruthy(raw) {
+  const v = String(raw || "").trim().toLowerCase();
+  return v === "yes" || v === "y" || v === "true" || v === "1";
+}
+
+function parseCsvText(text) {
+  const out = [];
+  const src = String(text || "");
+  let row = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (ch === '"') {
+      if (inQuotes && src[i + 1] === '"') {
+        cur += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (!inQuotes && ch === ",") {
+      row.push(cur);
+      cur = "";
+      continue;
+    }
+    if (!inQuotes && (ch === "\n" || ch === "\r")) {
+      row.push(cur);
+      cur = "";
+      if (row.some((cell) => String(cell || "").trim() !== "")) out.push(row);
+      row = [];
+      if (ch === "\r" && src[i + 1] === "\n") i += 1;
+      continue;
+    }
+    cur += ch;
+  }
+  row.push(cur);
+  if (row.some((cell) => String(cell || "").trim() !== "")) out.push(row);
+  return out;
+}
+
+function normalizeCsvHeader(raw) {
+  const s = String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return s;
+}
+
+function christmasRankScore(rankRaw) {
+  const rank = String(rankRaw || "").trim().toUpperCase();
+  if (!rank) return 0;
+  if (rank.startsWith("A1")) return 120;
+  if (rank.startsWith("A")) return 110;
+  if (rank.startsWith("B")) return 90;
+  if (rank.startsWith("C")) return 70;
+  if (rank.startsWith("D")) return 50;
+  if (rank.startsWith("F")) return 20;
+  return 40;
+}
+
+function christmasCustomerSortScore(customer) {
+  const rankPoints = christmasRankScore(customer.rank);
+  const bankPoints = Math.max(0, Math.min(200, Math.round((Number(customer.in_bank_cents || 0) || 0) / 1000)));
+  const jobsPoints = Math.max(0, Math.min(30, Number(customer.jobs || 0) || 0));
+  const cardPoints = customer.christmas_card ? 10 : 0;
+  return rankPoints + bankPoints + jobsPoints + cardPoints;
+}
+
+function resolveChristmasLightsCsvPath() {
+  for (const p of CHRISTMAS_LIGHTS_CSV_CANDIDATES) {
+    try {
+      if (p && fs.existsSync(p)) return p;
+    } catch {}
+  }
+  return null;
+}
+
+function parseChristmasLightsCsv(rawText) {
+  const rows = parseCsvText(rawText);
+  if (!rows.length) return [];
+  const headerIdx = rows.findIndex((r) => {
+    const joined = r.map((v) => String(v || "").toLowerCase()).join(" | ");
+    return joined.includes("first name") && joined.includes("address");
+  });
+  if (headerIdx < 0) return [];
+  const headers = (rows[headerIdx] || []).map((h, i) => normalizeCsvHeader(h) || `col_${i}`);
+  const out = [];
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const rawRow = rows[i] || [];
+    const rowObj = {};
+    for (let c = 0; c < headers.length; c++) {
+      rowObj[headers[c]] = String(rawRow[c] || "").trim();
+    }
+    const firstName = String(rowObj.first_name || "").trim();
+    const lastName = String(rowObj.last_name || "").trim();
+    const name = [firstName, lastName].filter(Boolean).join(" ").trim();
+    const address = String(rowObj.address || "").trim();
+    let city = String(rowObj.city || "").trim();
+    let zip = String(rowObj.zip || "").replace(/[^\d]/g, "").slice(0, 5);
+    if (!zip) {
+      const mCity = city.match(/\b(\d{5})(?:-\d{4})?\b/);
+      if (mCity) zip = mCity[1];
+    }
+    if (!zip) {
+      const mAddr = address.match(/\b(\d{5})(?:-\d{4})?\b/);
+      if (mAddr) zip = mAddr[1];
+    }
+    city = city
+      .replace(/\b\d{5}(?:-\d{4})?\b/g, "")
+      .replace(/,\s*$/, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+    if (!address && !(city && zip)) continue;
+    const phoneRaw = String(rowObj.number || "").trim();
+    const inBankCents = parseQuotedAmountToCents(rowObj.in_the_bank);
+    const jobs = Number(String(rowObj.jobs || "").replace(/[^\d.-]/g, ""));
+    const customer = {
+      id: `xmas_${i + 1}`,
+      source_row: i + 1,
+      name: name || null,
+      first_name: firstName || null,
+      last_name: lastName || null,
+      phone_raw: phoneRaw || null,
+      phone_e164: normalizePhoneE164(phoneRaw),
+      email: String(rowObj.email || "").trim() || null,
+      address: address || null,
+      city: city || null,
+      zip: zip || null,
+      rank: String(rowObj.rank || "").trim() || null,
+      jobs: Number.isFinite(jobs) ? jobs : null,
+      removal_date: String(rowObj.removal_date || "").trim() || null,
+      service: String(rowObj.service || "").trim() || null,
+      removal_status: String(rowObj.removal || "").trim() || null,
+      notes: String(rowObj.notes || "").trim() || null,
+      christmas_card: csvTruthy(rowObj.christmas_card),
+      in_bank_cents: inBankCents
+    };
+    customer.sort_score = christmasCustomerSortScore(customer);
+    const locationParts = [customer.address, customer.city, customer.zip].filter(Boolean);
+    customer.location_query = [...locationParts, "CA"].join(", ");
+    out.push(customer);
+  }
+  out.sort((a, b) => Number(b.sort_score || 0) - Number(a.sort_score || 0));
+  return out;
+}
+
+function readChristmasLightsCustomers() {
+  const csvPath = resolveChristmasLightsCsvPath();
+  if (!csvPath) return { rows: [], path: null, source: "missing" };
+  try {
+    const stat = fs.statSync(csvPath);
+    if (
+      CHRISTMAS_LIGHTS_DATA_CACHE.path === csvPath &&
+      Number(CHRISTMAS_LIGHTS_DATA_CACHE.mtimeMs) === Number(stat.mtimeMs)
+    ) {
+      return {
+        rows: Array.isArray(CHRISTMAS_LIGHTS_DATA_CACHE.rows) ? CHRISTMAS_LIGHTS_DATA_CACHE.rows : [],
+        path: csvPath,
+        source: "cache"
+      };
+    }
+    const text = fs.readFileSync(csvPath, "utf8");
+    const rows = parseChristmasLightsCsv(text);
+    CHRISTMAS_LIGHTS_DATA_CACHE.path = csvPath;
+    CHRISTMAS_LIGHTS_DATA_CACHE.mtimeMs = Number(stat.mtimeMs);
+    CHRISTMAS_LIGHTS_DATA_CACHE.rows = rows;
+    return { rows, path: csvPath, source: "csv" };
+  } catch (e) {
+    return { rows: [], path: csvPath, source: "error", error: String(e?.message || e) };
+  }
+}
+
+async function resolveChristmasLightsCoordinates(customer, { allowGeocode = true } = {}) {
+  const address = String(customer?.address || "").trim();
+  const city = String(customer?.city || "").trim();
+  const zip = String(customer?.zip || "").trim();
+  const cacheKey = `${address}|${city}|${zip}`;
+  const cached = CHRISTMAS_LIGHTS_GEO_CACHE.get(cacheKey);
+  if (cached && Number.isFinite(Number(cached.lat)) && Number.isFinite(Number(cached.lng))) {
+    return { ...cached, from_cache: true };
+  }
+  if (allowGeocode && (address || city || zip)) {
+    try {
+      const q = [address, city, zip, "CA"].filter(Boolean).join(", ");
+      const geo = await geocodeOSM(q);
+      if (geo && Number.isFinite(geo.lat) && Number.isFinite(geo.lon)) {
+        const out = { lat: Number(geo.lat), lng: Number(geo.lon), source: "osm" };
+        CHRISTMAS_LIGHTS_GEO_CACHE.set(cacheKey, out);
+        return { ...out, from_cache: false };
+      }
+    } catch {}
+  }
+  if (zip && ZIP_CENTROIDS[zip]) {
+    const out = { lat: Number(ZIP_CENTROIDS[zip].lat), lng: Number(ZIP_CENTROIDS[zip].lng), source: "zip_fallback" };
+    CHRISTMAS_LIGHTS_GEO_CACHE.set(cacheKey, out);
+    return { ...out, from_cache: false };
+  }
+  return null;
 }
 
 function looksLikeVoiceWebhook(payload) {
@@ -2045,6 +2258,47 @@ app.get("/api/dashboard/dumpsites", async (req, res) => {
         generated_at: new Date().toISOString(),
         source: "server_fallback",
         override_count: overrideCount
+      }
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+app.get("/api/dashboard/christmas-lights", async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit || 240) || 240));
+    const geocodeBudget = Math.max(0, Math.min(120, Number(req.query.geocode_budget || 30) || 30));
+    const loaded = readChristmasLightsCustomers();
+    const baseRows = Array.isArray(loaded.rows) ? loaded.rows : [];
+    const rows = baseRows.slice(0, limit);
+    const points = [];
+    let geocodedFresh = 0;
+    for (const customer of rows) {
+      const canGeocode = geocodedFresh < geocodeBudget;
+      const coords = await resolveChristmasLightsCoordinates(customer, { allowGeocode: canGeocode });
+      if (!coords) continue;
+      if (!coords.from_cache && coords.source === "osm") geocodedFresh += 1;
+      points.push({
+        ...customer,
+        lat: Number(coords.lat),
+        lng: Number(coords.lng),
+        geo_source: coords.source
+      });
+    }
+    return res.json({
+      ok: true,
+      customers: rows,
+      points,
+      meta: {
+        generated_at: new Date().toISOString(),
+        source: loaded.path ? "csv" : "missing",
+        csv_file: loaded.path ? path.basename(loaded.path) : null,
+        total_rows: baseRows.length,
+        returned_rows: rows.length,
+        mapped_points: points.length,
+        geocode_budget: geocodeBudget,
+        geocoded_fresh: geocodedFresh
       }
     });
   } catch (e) {
