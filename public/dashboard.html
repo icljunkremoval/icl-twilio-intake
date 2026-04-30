@@ -3029,9 +3029,7 @@ function renderStreetChristmasLights(){
   if(streetLayers.christmas){streetMap.removeLayer(streetLayers.christmas);}
   const vis=getVisibleChristmasLights();
   if(!vis.length){streetLayers.christmas=null;return;}
-  const grp=(typeof L.markerClusterGroup==='function')
-    ? L.markerClusterGroup({showCoverageOnHover:false,spiderfyOnMaxZoom:true,maxClusterRadius:38})
-    : L.layerGroup();
+  const grp=L.layerGroup();
   vis.forEach(c=>{
     const lat=Number(c.lat),lng=Number(c.lng);
     if(!Number.isFinite(lat)||!Number.isFinite(lng))return;
@@ -3041,13 +3039,12 @@ function renderStreetChristmasLights(){
     const rank=String(c.rank||'').trim()||'—';
     const score=Number(c.sort_score||0);
     const bank=(Number(c.in_bank_cents||0)>0)?f$(Number(c.in_bank_cents||0)):'—';
-    const marker=L.marker([lat,lng],{
-      icon:L.divIcon({
-        className:'',
-        html:'<div style="width:14px;height:14px;border-radius:3px;background:#dc2626;border:1.4px solid #fecaca;box-shadow:0 0 0 1px rgba(127,29,29,.35)"></div>',
-        iconSize:[14,14],
-        iconAnchor:[7,7]
-      })
+    const marker=L.circleMarker([lat,lng],{
+      radius:5.5,
+      color:'#dc2626',
+      weight:1.2,
+      fillColor:'#ef4444',
+      fillOpacity:.9
     });
     marker.bindPopup(`<div style="font-family:DM Mono,monospace;font-size:11px;line-height:1.5">
       <strong>🎄 ${h(name)}</strong><br>
