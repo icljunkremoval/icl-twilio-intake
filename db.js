@@ -64,7 +64,12 @@ async function initDb() {
       vision_access_level TEXT,
       actual_load_bucket TEXT,
       last_error TEXT,
-      status TEXT
+      status TEXT,
+      property_sqft INTEGER,
+      property_sqft_source TEXT,
+      pricing_strategy TEXT,
+      clearout_detected INTEGER DEFAULT 0,
+      clearout_reason TEXT
     );
 
     CREATE TABLE IF NOT EXISTS events (
@@ -176,7 +181,12 @@ async function initDb() {
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS quote_ready INTEGER DEFAULT 0",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS load_bucket TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS access_level TEXT",
-    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS status TEXT"
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS status TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS property_sqft INTEGER",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS property_sqft_source TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS pricing_strategy TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS clearout_detected INTEGER DEFAULT 0",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS clearout_reason TEXT"
   ];
 
   for (const sql of migrations) {

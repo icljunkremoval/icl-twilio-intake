@@ -13,7 +13,7 @@ const { analyzeBase64Images } = require("./vision_analyzer");
 const { parseBookingToken } = require("./booking_link");
 const { createJobEvent, getBookedWindows } = require("./calendar");
 const { createSquarePaymentOptions } = require("./square_quote");
-const { priceQuoteV1 } = require("./pricing_v1");
+const { derivePricingForLead } = require("./quote_worker");
 const { sendSms } = require("./twilio_sms");
 const express = require("express");
 const fs = require("fs");
@@ -3180,13 +3180,8 @@ app.post("/admin/leads/:from/generate-quote", async (req, res) => {
     if (!fromPhone) return res.status(400).json({ ok: false, error: "invalid lead phone" });
     const lead = (await pool.query("SELECT * FROM leads WHERE from_phone=$1 LIMIT 1", [fromPhone])).rows[0];
     if (!lead) return res.status(404).json({ ok: false, error: "lead not found" });
-    if (!lead.load_bucket) return res.status(400).json({ ok: false, error: "lead load_bucket required before quote generation" });
-
-    const pricing = priceQuoteV1({
-      load_bucket: lead.load_bucket,
-      distance_miles: Number(lead.distance_miles || 0),
-      access_level: lead.access_level
-    });
+    const decision = await derivePricingForLead(lead);
+    const pricing = decision.pricing;
     const quotedCents = Number(pricing.total_cents || 0);
     if (!quotedCents) return res.status(500).json({ ok: false, error: "pricing failed" });
 
@@ -3208,18 +3203,28 @@ app.post("/admin/leads/:from/generate-quote", async (req, res) => {
              quoted_amount=$1,
              quote_status='AWAITING_DEPOSIT',
              conv_state=CASE WHEN conv_state IS NULL OR conv_state='' OR conv_state='NEW' THEN 'QUOTE_READY' ELSE conv_state END,
-             square_payment_link_id=$2,
-             square_payment_link_url=$3,
-             square_order_id=$4,
-             square_upfront_payment_link_id=$5,
-             square_upfront_payment_link_url=$6,
-             square_upfront_order_id=$7,
-             upfront_total_cents=$8,
-             upfront_discount_pct=$9,
+             pricing_strategy=$2,
+             clearout_detected=$3,
+             clearout_reason=$4,
+             property_sqft=COALESCE($5,property_sqft),
+             property_sqft_source=COALESCE($6,property_sqft_source),
+             square_payment_link_id=$7,
+             square_payment_link_url=$8,
+             square_order_id=$9,
+             square_upfront_payment_link_id=$10,
+             square_upfront_payment_link_url=$11,
+             square_upfront_order_id=$12,
+             upfront_total_cents=$13,
+             upfront_discount_pct=$14,
              last_seen_at=NOW()
-         WHERE from_phone=$10`,
+         WHERE from_phone=$15`,
         [
           quotedCents,
+          decision.strategy,
+          decision.clearout_detected ? 1 : 0,
+          (decision.clearout_reasons || []).join(", ") || null,
+          decision.property_sqft || null,
+          decision.property_sqft_source || null,
           payment.deposit.payment_link_id,
           payment.deposit.payment_link_url,
           payment.deposit.order_id,
@@ -3238,16 +3243,36 @@ app.post("/admin/leads/:from/generate-quote", async (req, res) => {
              quoted_amount=$1,
              quote_status='QUOTE_READY',
              conv_state=CASE WHEN conv_state IS NULL OR conv_state='' OR conv_state='NEW' THEN 'QUOTE_READY' ELSE conv_state END,
+             pricing_strategy=$2,
+             clearout_detected=$3,
+             clearout_reason=$4,
+             property_sqft=COALESCE($5,property_sqft),
+             property_sqft_source=COALESCE($6,property_sqft_source),
              last_seen_at=NOW()
-         WHERE from_phone=$2`,
-        [quotedCents, fromPhone]
+         WHERE from_phone=$7`,
+        [
+          quotedCents,
+          decision.strategy,
+          decision.clearout_detected ? 1 : 0,
+          (decision.clearout_reasons || []).join(", ") || null,
+          decision.property_sqft || null,
+          decision.property_sqft_source || null,
+          fromPhone
+        ]
       );
     }
 
     insertEvent.run({
       from_phone: fromPhone,
       event_type: "pricing_v1",
-      payload_json: JSON.stringify(pricing),
+      payload_json: JSON.stringify({
+        ...pricing,
+        pricing_strategy: decision.strategy,
+        clearout_detected: decision.clearout_detected,
+        clearout_reasons: decision.clearout_reasons || [],
+        property_sqft: decision.property_sqft || null,
+        property_sqft_source: decision.property_sqft_source || null
+      }),
       created_at: new Date().toISOString()
     });
     if (payment) {
@@ -3272,6 +3297,9 @@ app.post("/admin/leads/:from/generate-quote", async (req, res) => {
       ok: true,
       quote_total_cents: quotedCents,
       quote_total_dollars: Math.round((quotedCents / 100) * 100) / 100,
+      pricing_strategy: decision.strategy,
+      clearout_detected: decision.clearout_detected,
+      property_sqft: decision.property_sqft || null,
       payment_link_url: payment?.deposit?.payment_link_url || null,
       upfront_payment_link_url: payment?.upfront?.payment_link_url || null,
       updated_lead: updated
