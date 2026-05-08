@@ -29,7 +29,7 @@ const ACCESS_UPLIFT_LEVELS = new Set([
 ]);
 
 const CLEAROUT_BASE_CENTS = 35000; // $350 baseline mobilization for clearouts
-const CLEAROUT_RATE_PER_SQFT_CENTS = 55; // $0.55 per sqft
+const CLEAROUT_RATE_PER_SQFT_CENTS = 85; // $0.85 per sqft
 const CLEAROUT_MIN_CENTS = 65000; // guardrail floor: $650
 const CLEAROUT_MAX_CENTS = 399700; // guardrail ceiling: $3,997
 const CLEAROUT_LOAD_MULTIPLIER = {
