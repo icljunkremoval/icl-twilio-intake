@@ -1,4 +1,6 @@
-const fetch = require("node-fetch");
+const fetchFn = typeof fetch === "function"
+  ? fetch.bind(globalThis)
+  : (...args) => import("node-fetch").then(({ default: f }) => f(...args));
 
 function asInt(raw) {
   const n = Math.round(Number(raw || 0));
@@ -57,15 +59,19 @@ async function lookupSqftByAddress({ address, zip, timeout_ms = 8000 } = {}) {
   }
 
   const url = `https://api.rentcast.io/v1/properties?address=${encodeURIComponent(normalizedAddress)}&limit=1`;
+  const timeoutMs = Math.max(1000, Number(timeout_ms || 8000));
+  const ac = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timeoutHandle = ac ? setTimeout(() => ac.abort(), timeoutMs) : null;
   try {
-    const res = await fetch(url, {
+    const res = await fetchFn(url, {
       method: "GET",
       headers: {
         "X-Api-Key": rentcastKey,
         "Accept": "application/json",
       },
-      timeout: Math.max(1000, Number(timeout_ms || 8000)),
+      ...(ac ? { signal: ac.signal } : {}),
     });
+    if (timeoutHandle) clearTimeout(timeoutHandle);
     if (!res.ok) {
       return {
         ok: false,
@@ -100,6 +106,7 @@ async function lookupSqftByAddress({ address, zip, timeout_ms = 8000 } = {}) {
       matched_address: first.formattedAddress || null,
     };
   } catch (e) {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
     return {
       ok: false,
       sqft: null,
