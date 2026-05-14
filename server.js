@@ -1076,6 +1076,10 @@ app.use(express.json({ limit: "2mb" }))
 app.get('/dashboard', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
+// Board presentation practice simulator
+app.get('/board-practice', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'board_practice.html'));
+});
 ;
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
