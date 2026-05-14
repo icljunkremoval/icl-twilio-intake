@@ -6,6 +6,8 @@ const { analyzeJobMedia, analyzeAllMedia } = require("./vision_analyzer");
 const { backfillLatestMedia } = require("./twilio_media_backfill");
 const { recomputeDerived } = require("./recompute");
 const { createJobEvent } = require("./calendar");
+const { ADDON_PRICING } = require("./pricing_v1");
+const { notifyRealtorAssist } = require("./utils/notify_partner");
 
 const STATES = {
   NEW: "NEW", AWAITING_MEDIA: "AWAITING_MEDIA", AWAITING_HAZMAT: "AWAITING_HAZMAT",
@@ -13,6 +15,8 @@ const STATES = {
   AWAITING_LOAD: "AWAITING_LOAD", QUOTE_READY: "QUOTE_READY",
   AWAITING_DEPOSIT: "AWAITING_DEPOSIT", BOOKING_SENT: "BOOKING_SENT",
   WINDOW_SELECTED: "WINDOW_SELECTED", AWAITING_DAY: "AWAITING_DAY", ESCALATED: "ESCALATED",
+  AWAITING_REFERRAL_SOURCE: "AWAITING_REFERRAL_SOURCE",
+  AWAITING_ADDON_SELECTION: "AWAITING_ADDON_SELECTION",
 };
 
 const ACCESS_MAP = {
@@ -34,6 +38,21 @@ const WINDOW_MAP = {
 
 const APP_BASE_URL = String(process.env.APP_BASE_URL || "https://icl-twilio-intake-production.up.railway.app").replace(/\/+$/, "");
 const CONTACT_CARD_URL = `${APP_BASE_URL}/contact.vcf`;
+const REFERRAL_TIMEOUT_MS = 10 * 60 * 1000;
+const REALTOR_ADDON_SELECTION_PROMPT =
+  "Which would you like to add? Reply the number(s):\n" +
+  "1) Deep Clean $150\n" +
+  "2) Pressure Wash $125\n" +
+  "3) Paint Touch-Ups $175\n" +
+  "4) Minor Repairs (on-site quote)\n\n" +
+  "Example: reply 1 2 to add both";
+const REALTOR_ADDON_CODE_MAP = {
+  1: { code: "DEEP_CLEAN", label: "Deep Clean" },
+  2: { code: "PRESSURE_WASH", label: "Pressure Wash" },
+  3: { code: "PAINT_TOUCHUP", label: "Paint Touch-Ups" },
+  4: { code: "MINOR_REPAIRS", label: "Minor Repairs (on-site quote)" },
+};
+const referralTimers = new Map();
 
 function getConvState(lead) { return (lead && lead.conv_state) || STATES.NEW; }
 
@@ -43,6 +62,77 @@ function logEvent(from_phone, event_type, data) {
 
 function setState(from_phone, state) {
   pool.query('UPDATE leads SET conv_state = $1, last_seen_at = NOW() WHERE from_phone = $2', [state, from_phone]).catch(e => console.error('[setState]', e.message));
+}
+
+async function sendPhotoPrompt(from_phone) {
+  await sendSms(
+    from_phone,
+    "Perfect — send us up to 10 photos of what you need removed. Different angles help us give you the most accurate quote."
+  );
+}
+
+function clearReferralTimeout(from_phone) {
+  const key = String(from_phone || "");
+  const t = referralTimers.get(key);
+  if (t) clearTimeout(t);
+  referralTimers.delete(key);
+}
+
+function scheduleReferralTimeout(from_phone) {
+  clearReferralTimeout(from_phone);
+  const key = String(from_phone || "");
+  const timer = setTimeout(async () => {
+    try {
+      const cur = await getLead.get(from_phone);
+      if (!cur) return;
+      if (String(cur.conv_state || "") !== STATES.AWAITING_REFERRAL_SOURCE) return;
+      await pool.query(
+        `UPDATE leads
+         SET lead_source=CASE WHEN lead_source IS NULL OR lead_source='' THEN 'sms' ELSE lead_source END,
+             conv_state=$1,
+             last_seen_at=NOW()
+         WHERE from_phone=$2`,
+        [STATES.AWAITING_MEDIA, from_phone]
+      );
+      await sendPhotoPrompt(from_phone);
+      logEvent(from_phone, "referral_source_timeout_defaulted", {
+        lead_source: String(cur.lead_source || "sms"),
+      });
+    } catch (_) {}
+    clearReferralTimeout(from_phone);
+  }, REFERRAL_TIMEOUT_MS);
+  referralTimers.set(key, timer);
+}
+
+function formatAddonSelections(addons) {
+  const src = Array.isArray(addons) ? addons : [];
+  return src
+    .map((a) => String(a?.label || a?.code || "").trim())
+    .filter(Boolean)
+    .join(", ");
+}
+
+async function notifyReferralPartner(from_phone) {
+  try {
+    const lead = await getLead.get(from_phone);
+    if (!lead || String(lead.referral_partner || "") !== "realtor_assist") return;
+    const result = await notifyRealtorAssist(lead);
+    if (result.ok) {
+      await pool.query(
+        "UPDATE leads SET referral_notified_at=$1, last_seen_at=NOW() WHERE from_phone=$2",
+        [result.sent_at || new Date().toISOString(), from_phone]
+      );
+      logEvent(from_phone, "referral_partner_notified", { partner: "realtor_assist" });
+    } else {
+      await pool.query(
+        "UPDATE leads SET referral_notified_at=NULL, last_seen_at=NOW() WHERE from_phone=$1",
+        [from_phone]
+      );
+      logEvent(from_phone, "referral_partner_notify_failed", { partner: "realtor_assist", error: result.error || result.reason || "unknown" });
+    }
+  } catch (_) {
+    // must never break SMS flow
+  }
 }
 
 function suggestedLoadFromVision(lead) {
@@ -199,7 +289,87 @@ async function handleConversation(payload) {
   }
 
   switch(state) {
-    case STATES.NEW:
+    case STATES.NEW: {
+      setState(from_phone, STATES.AWAITING_REFERRAL_SOURCE);
+      scheduleReferralTimeout(from_phone);
+      await sendSms(
+        from_phone,
+        "Hi! Thanks for texting ICL Junk Removal. We’re ready when you are."
+      );
+      await sendSms(from_phone, "Save our contact card: " + CONTACT_CARD_URL);
+      await sendSms(
+        from_phone,
+        "Quick question before we get started — were you referred by a real estate agent or property manager?\n\nReply YES or NO."
+      );
+      break;
+    }
+
+    case STATES.AWAITING_REFERRAL_SOURCE: {
+      try {
+        const leadNow = await getLead.get(from_phone);
+        const isRealtor = String(leadNow?.lead_source || "") === "realtor_referral";
+        const needsAgentName = isRealtor && !String(leadNow?.referral_agent_name || "").trim();
+
+        if (needsAgentName) {
+          const agentName = bodyUpper === "SKIP" ? null : String(body || "").trim().slice(0, 140);
+          if (bodyUpper !== "SKIP" && !agentName) {
+            await sendSms(from_phone, "Got it — what's the agent's name or brokerage? (You can skip this by replying SKIP)");
+            break;
+          }
+          await pool.query(
+            `UPDATE leads
+             SET referral_agent_name=$1,
+                 conv_state=$2,
+                 last_seen_at=NOW()
+             WHERE from_phone=$3`,
+            [agentName || null, STATES.AWAITING_MEDIA, from_phone]
+          );
+          clearReferralTimeout(from_phone);
+          await notifyReferralPartner(from_phone);
+          await sendPhotoPrompt(from_phone);
+          break;
+        }
+
+        if (bodyUpper === "YES" || bodyUpper === "Y") {
+          await pool.query(
+            `UPDATE leads
+             SET lead_source='realtor_referral',
+                 referral_partner='realtor_assist',
+                 conv_state=$1,
+                 last_seen_at=NOW()
+             WHERE from_phone=$2`,
+            [STATES.AWAITING_REFERRAL_SOURCE, from_phone]
+          );
+          clearReferralTimeout(from_phone);
+          scheduleReferralTimeout(from_phone);
+          await notifyReferralPartner(from_phone);
+          await sendSms(from_phone, "Got it — what's the agent's name or brokerage? (You can skip this by replying SKIP)");
+          break;
+        }
+
+        if (bodyUpper === "NO" || bodyUpper === "N" || bodyUpper === "SKIP") {
+          await pool.query(
+            `UPDATE leads
+             SET lead_source='sms',
+                 conv_state=$1,
+                 last_seen_at=NOW()
+             WHERE from_phone=$2`,
+            [STATES.AWAITING_MEDIA, from_phone]
+          );
+          clearReferralTimeout(from_phone);
+          await sendPhotoPrompt(from_phone);
+          break;
+        }
+
+        await sendSms(from_phone, "Quick question before we get started — were you referred by a real estate agent or property manager?\n\nReply YES or NO.");
+      } catch (_) {
+        clearReferralTimeout(from_phone);
+        setState(from_phone, STATES.AWAITING_MEDIA);
+        await sendPhotoPrompt(from_phone);
+      }
+      break;
+    }
+
     case STATES.AWAITING_MEDIA: {
       const isVideo = (payload.MediaContentType0||"").includes("video");
       if (isVideo) { await sendSms(from_phone, "Got it! Videos don't come through our system — can you send still photos instead? Different angles help us give you the most accurate quote."); break; }
@@ -337,6 +507,16 @@ async function handleConversation(payload) {
     }
 
     case STATES.AWAITING_DEPOSIT: {
+      const isRealtorLead = String(lead?.lead_source || "") === "realtor_referral";
+      if (isRealtorLead && bodyUpper === "ADD") {
+        setState(from_phone, STATES.AWAITING_ADDON_SELECTION);
+        await sendSms(from_phone, REALTOR_ADDON_SELECTION_PROMPT);
+        break;
+      }
+      if (isRealtorLead && bodyUpper === "SKIP") {
+        await sendSms(from_phone, "Perfect — we'll proceed with your current quote. Reply RESEND if you need your checkout links again.");
+        break;
+      }
       let loadBucket=null;
       for(const [key,val] of Object.entries(LOAD_MAP)){if(bodyUpper.includes(key)){loadBucket=val;break;}}
       if (loadBucket) {
@@ -350,6 +530,64 @@ async function handleConversation(payload) {
         break;
       }
       await sendSms(from_phone,"Your checkout links are ready — use either the $50 deposit or upfront-save option to lock your arrival window. Reply HELP if you need links resent.");
+      break;
+    }
+
+    case STATES.AWAITING_ADDON_SELECTION: {
+      try {
+        if (bodyUpper === "SKIP") {
+          setState(from_phone, STATES.AWAITING_DEPOSIT);
+          await sendSms(from_phone, "No problem — we’ll keep your current quote. Reply RESEND if you need the payment links again.");
+          break;
+        }
+        const matches = (body.match(/\b[1-4]\b/g) || []).map((v) => Number(v));
+        const unique = [...new Set(matches)].filter((n) => REALTOR_ADDON_CODE_MAP[n]);
+        if (!unique.length) {
+          await sendSms(from_phone, "Reply with the number(s) you want to add, or SKIP.\n\n" + REALTOR_ADDON_SELECTION_PROMPT);
+          break;
+        }
+        const addons = unique.map((n) => REALTOR_ADDON_CODE_MAP[n]);
+        const addonTotalCents = addons.reduce((sum, a) => {
+          const cents = ADDON_PRICING[a.code];
+          return sum + (Number.isFinite(cents) ? Number(cents) : 0);
+        }, 0);
+        const existingAddonTotal = Math.max(0, Math.round(Number(lead?.prelisting_addon_total_cents || 0)));
+        const baseQuoteCents = Math.max(0, Math.round(Number(lead?.quote_total_cents || 0)) - existingAddonTotal);
+        const updatedTotalCents = baseQuoteCents + addonTotalCents;
+
+        await pool.query(
+          `UPDATE leads
+           SET prelisting_addons=$1,
+               prelisting_addon_total_cents=$2,
+               conv_state=$3,
+               quote_status='READY',
+               quote_ready=1,
+               square_payment_link_id=NULL,
+               square_payment_link_url=NULL,
+               square_order_id=NULL,
+               square_upfront_payment_link_id=NULL,
+               square_upfront_payment_link_url=NULL,
+               square_upfront_order_id=NULL,
+               quote_total_cents=NULL,
+               upfront_total_cents=NULL,
+               upfront_discount_pct=NULL,
+               last_seen_at=NOW()
+           WHERE from_phone=$4`,
+          [JSON.stringify(addons), addonTotalCents, STATES.QUOTE_READY, from_phone]
+        );
+        logEvent(from_phone, "prelisting_addons_selected", {
+          addons,
+          prelisting_addon_total_cents: addonTotalCents,
+        });
+        await sendSms(
+          from_phone,
+          "Updated total: $" + (updatedTotalCents / 100).toFixed(0) + ". Your payment link will reflect this."
+        );
+        await triggerQuote(from_phone);
+      } catch (_) {
+        setState(from_phone, STATES.AWAITING_DEPOSIT);
+        await sendSms(from_phone, "Got it — we’ll keep the current quote for now. Reply ADD anytime if you want to include pre-listing add-ons.");
+      }
       break;
     }
 

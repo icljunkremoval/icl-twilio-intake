@@ -152,6 +152,34 @@ async function handleSquareWebhook(req, res) {
       });
     }
 
+    const isReferralLead =
+      String(lead.lead_source || "") === "realtor_referral" ||
+      String(lead.referral_partner || "") === "realtor_assist";
+    const settledRevenueCents = Number.isFinite(amountCents) && amountCents > 0
+      ? amountCents
+      : Math.max(0, Math.round(Number(lead.settled_revenue_cents || 0)));
+    if (isReferralLead && settledRevenueCents > 0) {
+      try {
+        const payoutCents = Math.max(0, Math.round(settledRevenueCents * 0.10));
+        await pool.query(
+          "UPDATE leads SET referral_payout_cents=$1, last_seen_at=NOW() WHERE from_phone=$2",
+          [payoutCents, lead.from_phone]
+        );
+        insertEvent.run({
+          from_phone: lead.from_phone,
+          event_type: "referral_payout_calculated",
+          payload_json: JSON.stringify({
+            settled_revenue_cents: settledRevenueCents,
+            referral_payout_cents: payoutCents,
+            partner: "realtor_assist",
+          }),
+          created_at: new Date().toISOString(),
+        });
+      } catch (_) {
+        // payout tracking should never block webhook completion
+      }
+    }
+
     // Booking workflow should only fire from direct order match.
     const isOrderPayment = match === "order_deposit" || match === "order_upfront";
     if (lead.deposit_paid || !isOrderPayment) {
@@ -161,8 +189,14 @@ async function handleSquareWebhook(req, res) {
 
     const paymentKind = match === "order_upfront" ? "upfront" : "deposit";
     await pool.query(
-      "UPDATE leads SET deposit_paid=1, deposit_paid_at=NOW(), quote_status='DEPOSIT_PAID', last_seen_at=NOW() WHERE from_phone=$1",
-      [lead.from_phone]
+      `UPDATE leads
+       SET deposit_paid=1,
+           deposit_paid_at=NOW(),
+           quote_status='DEPOSIT_PAID',
+           aerial_media_requested=CASE WHEN $2::int = 1 THEN 1 ELSE COALESCE(aerial_media_requested,0) END,
+           last_seen_at=NOW()
+       WHERE from_phone=$1`,
+      [lead.from_phone, isReferralLead ? 1 : 0]
     );
 
     try {
@@ -183,7 +217,9 @@ async function handleSquareWebhook(req, res) {
     // Send window picker SMS
     const sms = await sendSms(lead.from_phone, buildWindowPickerSms(paymentKind));
     console.log("[square_webhook] window picker sent to:", lead.from_phone);
-    sendCrewBrief(lead).catch(()=>{});
+    const leadForBrief = { ...lead };
+    if (isReferralLead) leadForBrief.aerial_media_requested = 1;
+    sendCrewBrief(leadForBrief).catch(()=>{});
     processSalvage(lead).catch(()=>{});
 
     await pool.query(

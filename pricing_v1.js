@@ -28,6 +28,13 @@ const ACCESS_UPLIFT_LEVELS = new Set([
   "GATED_FRICTION",
 ]);
 
+const ADDON_PRICING = {
+  DEEP_CLEAN: 15000,
+  PRESSURE_WASH: 12500,
+  PAINT_TOUCHUP: 17500,
+  MINOR_REPAIRS: null,
+};
+
 function priceQuoteV1({ load_bucket, distance_miles, access_level }) {
   const bucket = String(load_bucket || "").toUpperCase();
   if (!BASE_BY_BUCKET_CENTS[bucket]) throw new Error(`Unknown load_bucket: ${bucket}`);
@@ -60,5 +67,6 @@ module.exports = {
   DISTANCE_RATE_CENTS_PER_MILE_ONE_WAY,
   ACCESS_UPLIFT_CENTS,
   ACCESS_UPLIFT_LEVELS,
+  ADDON_PRICING,
   priceQuoteV1,
 };

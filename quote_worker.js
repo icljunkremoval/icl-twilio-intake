@@ -8,10 +8,11 @@ const UPFRONT_DISCOUNT_PCT = 10;
 
 function buildQuoteSms(lead, pricing, payment) {
   const bucket = pricing.bucket;
-  const total = (pricing.total_cents / 100).toFixed(0);
+  const total = (Number(payment?.quoteTotalCents || pricing.total_cents || 0) / 100).toFixed(0);
   const deposit = (DEPOSIT_CENTS / 100).toFixed(0);
   const upfrontTotal = (payment.upfrontTotalCents / 100).toFixed(0);
-  const upfrontSavings = ((pricing.total_cents - payment.upfrontTotalCents) / 100).toFixed(0);
+  const upfrontSavings = ((payment.quoteTotalCents - payment.upfrontTotalCents) / 100).toFixed(0);
+  const addonTotal = Math.max(0, Math.round(Number(pricing?.addon_total_cents || 0)));
 
   let itemLines = "";
   try {
@@ -27,6 +28,10 @@ function buildQuoteSms(lead, pricing, payment) {
     "Load: " + bucket + "  |  Total: $" + total,
     ""
   ];
+  if (addonTotal > 0) {
+    parts.push("Pre-listing add-ons: $" + (addonTotal / 100).toFixed(0));
+    parts.push("");
+  }
   if (itemLines) { parts.push(itemLines); parts.push(""); }
   parts.push("Pick your checkout option:");
   parts.push("1) Reserve with $" + deposit + " deposit:");
@@ -90,6 +95,46 @@ function writePricing(from_phone, pricing) {
   } catch (e) {}
 }
 
+function addonTotalFromLead(lead) {
+  const n = Math.round(Number(lead?.prelisting_addon_total_cents || 0));
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return n;
+}
+
+async function maybeSendRealtorAddonOffer(from_phone, lead, addonTotalCents) {
+  try {
+    if (String(lead?.lead_source || "") !== "realtor_referral") return;
+    if (addonTotalCents > 0) return;
+    const already = await pool.query(
+      `SELECT 1 FROM events
+       WHERE from_phone=$1
+         AND event_type='sms_sent_addon_offer'
+       ORDER BY id DESC
+       LIMIT 1`,
+      [from_phone]
+    );
+    if (already.rows[0]) return;
+    const msg =
+      "One more thing — since this is a pre-listing property, we also offer:\n\n" +
+      "🧹 Deep Clean — $150\n" +
+      "🚿 Pressure Wash — $125\n" +
+      "🎨 Paint Touch-Ups — $175\n" +
+      "🔧 Minor Repairs — quote on-site\n\n" +
+      "Reply ADD to include any of these, or SKIP to proceed with your quote.";
+    const sms = await sendSms(from_phone, msg);
+    try {
+      insertEvent.run({
+        from_phone,
+        event_type: "sms_sent_addon_offer",
+        payload_json: JSON.stringify({ from_phone, twilio: sms }),
+        created_at: new Date().toISOString(),
+      });
+    } catch (_) {}
+  } catch (_) {
+    // must never block core flow
+  }
+}
+
 async function maybeCreateQuote(from_phone) {
   const lead0 = await getLead(from_phone);
   if (!lead0) return { ok: false, reason: "no_lead" };
@@ -106,11 +151,18 @@ async function maybeCreateQuote(from_phone) {
       distance_miles: lead.distance_miles || 0,
       access_level: lead.access_level,
     });
+    const addonTotalCents = addonTotalFromLead(lead);
+    const quoteTotalWithAddons = Number(pricing.total_cents || 0) + addonTotalCents;
+    const pricingWithAddons = {
+      ...pricing,
+      addon_total_cents: addonTotalCents,
+      total_with_addons_cents: quoteTotalWithAddons,
+    };
 
-    writePricing(from_phone, pricing);
+    writePricing(from_phone, pricingWithAddons);
 
     const payment = await createSquarePaymentOptions(lead, {
-      quoteTotalCents: pricing.total_cents,
+      quoteTotalCents: quoteTotalWithAddons,
       depositCents: DEPOSIT_CENTS,
       upfrontDiscountPct: UPFRONT_DISCOUNT_PCT
     });
@@ -159,7 +211,7 @@ async function maybeCreateQuote(from_phone) {
       });
     } catch (e) {}
 
-    const smsBody = buildQuoteSms(lead, pricing, payment);
+    const smsBody = buildQuoteSms(lead, pricingWithAddons, payment);
     const sms = await sendSms(from_phone, smsBody);
 
     try {
@@ -170,6 +222,8 @@ async function maybeCreateQuote(from_phone) {
         created_at: new Date().toISOString(),
       });
     } catch (e) {}
+
+    await maybeSendRealtorAddonOffer(from_phone, lead, addonTotalCents);
 
     pool.query("UPDATE leads SET quote_status='AWAITING_DEPOSIT', last_seen_at=NOW() WHERE from_phone=$1", [from_phone]).catch(()=>{});
 

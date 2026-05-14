@@ -72,7 +72,17 @@ async function initDb() {
       next_action_last_kind TEXT,
       next_action_last_error TEXT,
       archived_at TEXT,
-      archived_reason TEXT
+      archived_reason TEXT,
+      lead_source TEXT DEFAULT 'sms',
+      referral_partner TEXT,
+      referral_agent_name TEXT,
+      referral_notified_at TEXT,
+      referral_payout_cents INTEGER DEFAULT 0,
+      referral_payout_sent_at TEXT,
+      prelisting_addons TEXT,
+      prelisting_addon_total_cents INTEGER DEFAULT 0,
+      aerial_media_requested INTEGER DEFAULT 0,
+      aerial_media_delivered_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS events (
@@ -166,7 +176,17 @@ async function initDb() {
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_action_last_kind TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_action_last_error TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS archived_at TEXT",
-    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS archived_reason TEXT"
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS archived_reason TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_source TEXT DEFAULT 'sms'",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS referral_partner TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS referral_agent_name TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS referral_notified_at TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS referral_payout_cents INTEGER DEFAULT 0",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS referral_payout_sent_at TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS prelisting_addons TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS prelisting_addon_total_cents INTEGER DEFAULT 0",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS aerial_media_requested INTEGER DEFAULT 0",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS aerial_media_delivered_at TEXT"
   ];
 
   for (const sql of migrations) {

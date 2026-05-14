@@ -43,6 +43,22 @@ function parseVision(vision_analysis) {
   } catch { return {}; }
 }
 
+function parseAddons(raw) {
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((row) => {
+        if (!row) return "";
+        if (typeof row === "string") return row;
+        return String(row.label || row.code || "").trim();
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 async function getEventCount(from_phone) {
   try {
     const r = await pool.query("SELECT COUNT(*) as cnt FROM events WHERE from_phone=$1", [from_phone]);
@@ -60,6 +76,10 @@ function buildCrewBrief(lead, eventCount) {
   const window = lead.timing_pref || "TBD";
   const isRepeat = eventCount > 15;
   const responseSpeed = eventCount < 8 ? "Quick responder" : "Took their time";
+  const isRealtorReferral = String(lead.referral_partner || "") === "realtor_assist" || String(lead.lead_source || "") === "realtor_referral";
+  const addons = parseAddons(lead.prelisting_addons);
+  const addonTotal = Math.max(0, Math.round(Number(lead.prelisting_addon_total_cents || 0)));
+  const aerialRequested = Number(lead.aerial_media_requested) === 1;
 
   const lines = [
     "🚛 ICL JOB BRIEF",
@@ -72,6 +92,19 @@ function buildCrewBrief(lead, eventCount) {
     `${spaceLabel} • ${loadLabel}`,
     `Access: ${accessLabel}`,
   ];
+
+  if (isRealtorReferral) {
+    lines.push("");
+    lines.push("🏠 PRE-LISTING JOB — Realtor Referral");
+    if (addons.length) {
+      lines.push(`📋 Add-ons confirmed: ${addons.join(", ")}`);
+      lines.push(`💰 Add-on total: $${(addonTotal / 100).toFixed(0)}`);
+    } else {
+      lines.push("📋 Add-ons confirmed: none preselected");
+      lines.push("💰 Add-on total: $0");
+    }
+    lines.push("⚠️ Treat this property as listing-ready standard — photo documentation required on every room.");
+  }
 
   if (items.length > 0) {
     lines.push("");
@@ -98,6 +131,15 @@ function buildCrewBrief(lead, eventCount) {
     lines.push("📋 CREW NOTES:");
     const sentences = v.crew_notes.split(/[.!?]+/).filter(s => s.trim().length > 10);
     lines.push(sentences.slice(0, 2).join(". ").trim() + ".");
+  }
+
+  if (aerialRequested) {
+    lines.push("");
+    lines.push("📸 AERIAL MEDIA — Complimentary for partner agent");
+    lines.push("✓ 8–12 high-res stills");
+    lines.push("✓ 30–60 second video");
+    lines.push("✓ Vertical social reel cut");
+    lines.push("Deliver watermark-free files to agent within 24 hours of job completion.");
   }
 
   lines.push("");

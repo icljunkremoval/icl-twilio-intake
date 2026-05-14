@@ -9,6 +9,7 @@ const { evaluateQuoteReadyRow } = require("./quote_gate");
 const { handleConversation } = require("./conversation");
 const { sendSms } = require("./twilio_sms");
 const { recordJobCosts } = require("./finance_pipeline");
+const { retryPendingRealtorAssistNotifications } = require("./utils/notify_partner");
 const { BASE_COORD: DUMPSITE_BASE_COORD, listDumpSites, recommendDumpSites } = require("./dumpsite_feed");
 const express = require("express");
 const fs = require("fs");
@@ -1733,12 +1734,58 @@ app.get("/media-proxy", async (req, res) => {
   }
 });
 
+app.get("/admin/referral-report", async (req, res) => {
+  try {
+    const partner = String(req.query.partner || "realtor_assist").trim() || "realtor_assist";
+    const monthRaw = String(req.query.month || "").trim();
+    const month = /^\d{4}-\d{2}$/.test(monthRaw) ? monthRaw : new Date().toISOString().slice(0, 7);
+    const rows = (
+      await pool.query(
+        `SELECT
+           from_phone,
+           address_text,
+           COALESCE(settled_revenue_cents, quote_total_cents, 0) AS gross_revenue_cents,
+           COALESCE(referral_payout_cents, ROUND(COALESCE(settled_revenue_cents, quote_total_cents, 0) * 0.10)::int) AS payout_cents,
+           referral_payout_sent_at,
+           COALESCE(NULLIF(square_settled_at,''), NULLIF(deposit_paid_at,''), NULLIF(last_seen_at,''), '') AS reference_at
+         FROM leads
+         WHERE referral_partner = $1
+           AND substring(COALESCE(NULLIF(square_settled_at,''), NULLIF(deposit_paid_at,''), NULLIF(last_seen_at,''), '') from 1 for 7) = $2
+         ORDER BY reference_at DESC`,
+        [partner, month]
+      )
+    ).rows;
+    const totalGrossCents = rows.reduce((sum, r) => sum + Math.max(0, Math.round(Number(r.gross_revenue_cents || 0))), 0);
+    const totalPayoutCents = rows.reduce((sum, r) => sum + Math.max(0, Math.round(Number(r.payout_cents || 0))), 0);
+    return res.json({
+      ok: true,
+      partner,
+      month,
+      jobs: rows.map((r) => ({
+        from_phone: r.from_phone,
+        address: r.address_text || "",
+        gross_revenue_cents: Math.max(0, Math.round(Number(r.gross_revenue_cents || 0))),
+        payout_cents: Math.max(0, Math.round(Number(r.payout_cents || 0))),
+        payout_sent_at: r.referral_payout_sent_at || null,
+      })),
+      totals: {
+        gross_revenue_cents: totalGrossCents,
+        payout_cents: totalPayoutCents,
+      },
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
 app.get("/admin/leads", async (req, res) => {
   try {
     const mode = String(req.query.show || "active").toLowerCase();
     const where =
       mode === "archived"
         ? "WHERE l.archived_at IS NOT NULL"
+        : mode === "realtor"
+          ? "WHERE l.archived_at IS NULL AND l.lead_source = 'realtor_referral'"
         : mode === "all"
           ? ""
           : "WHERE l.archived_at IS NULL";
@@ -1754,7 +1801,12 @@ app.get("/admin/leads", async (req, res) => {
         l.media_url0,
         l.distance_miles,
         l.last_seen_at,
-        l.archived_at
+        l.archived_at,
+        l.lead_source,
+        l.referral_partner,
+        l.referral_agent_name,
+        l.referral_payout_cents,
+        l.referral_payout_sent_at
       FROM leads l
       ${where}
       ORDER BY l.last_seen_at DESC
@@ -1775,15 +1827,28 @@ app.get("/admin/leads", async (req, res) => {
         ? "<span style='display:inline-block;padding:2px 8px;border-radius:999px;background:#e7f7ef;border:1px solid #8fd3ac;color:#166534;font-size:11px'>Yes (" + mediaCount + ")</span>"
         : "<span style='display:inline-block;padding:2px 8px;border-radius:999px;background:#f4f4f5;border:1px solid #d4d4d8;color:#52525b;font-size:11px'>No</span>";
       const encodedPhone = encodeURIComponent(String(r.from_phone));
-      const returnTo = "/admin/leads?show=" + (mode === "archived" ? "archived" : mode === "all" ? "all" : "active");
+      const returnTo = "/admin/leads?show=" + (mode === "archived" ? "archived" : mode === "all" ? "all" : mode === "realtor" ? "realtor" : "active");
       const actionCell = r.archived_at
         ? "<form method='POST' action='/admin/lead/" + encodedPhone + "/unarchive' style='margin:0'><input type='hidden' name='return_to' value='" + esc(returnTo) + "'/><button type='submit' style='font-size:11px;padding:5px 8px;border:1px solid #0ea5e9;border-radius:6px;background:#f0f9ff;color:#0369a1;cursor:pointer'>Unarchive</button></form>"
         : "<form method='POST' action='/admin/lead/" + encodedPhone + "/archive' style='margin:0' onsubmit='return confirm(\"Archive this lead?\")'><input type='hidden' name='return_to' value='" + esc(returnTo) + "'/><button type='submit' style='font-size:11px;padding:5px 8px;border:1px solid #f59e0b;border-radius:6px;background:#fffbeb;color:#92400e;cursor:pointer'>Archive</button></form>";
-      return "<tr><td><a href='/admin/lead/" + encodedPhone + "'>" + esc(r.from_phone) + "</a></td><td>" + esc(r.last_event) + "</td><td>" + esc(r.last_body_80) + "</td><td>" + esc(r.address_60) + "</td><td>" + esc(r.zip_text) + "</td><td>" + mediaSentCell + "</td><td>" + esc(r.num_media) + "</td><td>" + previewCell + "</td><td>" + mediaCell + "</td><td>" + esc(r.distance_miles) + "</td><td>" + esc(r.last_seen_at) + "</td><td>" + actionCell + "</td></tr>";
+      const source = String(r.lead_source || "sms");
+      const isReferral = source === "realtor_referral" || String(r.referral_partner || "") === "realtor_assist";
+      const sourceBadge = isReferral
+        ? "<span style='display:inline-block;padding:2px 8px;border-radius:999px;background:#fef3c7;border:1px solid #eab308;color:#854d0e;font-size:11px;font-weight:700'>REALTOR</span>"
+        : "<span style='display:inline-block;padding:2px 8px;border-radius:999px;background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;font-size:11px'>" + esc(source.toUpperCase()) + "</span>";
+      const fromCell = "<a href='/admin/lead/" + encodedPhone + "'>" + esc(r.from_phone) + "</a>" + (isReferral ? "<div style='margin-top:4px'>" + sourceBadge + "</div>" : "") + (r.referral_agent_name ? "<div style='margin-top:4px;color:#475569;font-size:11px'>Agent: " + esc(r.referral_agent_name) + "</div>" : "");
+      const payoutCents = Math.max(0, Math.round(Number(r.referral_payout_cents || 0)));
+      const payoutCell = !isReferral
+        ? "—"
+        : (r.referral_payout_sent_at
+          ? ("<span style='color:#166534;font-weight:600'>✓ $" + (payoutCents / 100).toFixed(0) + " sent</span>")
+          : ("<span style='color:#92400e;font-weight:600'>● $" + (payoutCents / 100).toFixed(0) + " pending</span>"));
+      return "<tr><td>" + fromCell + "</td><td>" + esc(r.last_event) + "</td><td>" + esc(r.last_body_80) + "</td><td>" + esc(r.address_60) + "</td><td>" + esc(r.zip_text) + "</td><td>" + sourceBadge + "</td><td>" + payoutCell + "</td><td>" + mediaSentCell + "</td><td>" + esc(r.num_media) + "</td><td>" + previewCell + "</td><td>" + mediaCell + "</td><td>" + esc(r.distance_miles) + "</td><td>" + esc(r.last_seen_at) + "</td><td>" + actionCell + "</td></tr>";
     }).join("");
-    const modeActive = mode === "active" || (mode !== "archived" && mode !== "all");
+    const modeActive = mode === "active" || (mode !== "archived" && mode !== "all" && mode !== "realtor");
     const modeArchived = mode === "archived";
     const modeAll = mode === "all";
+    const modeRealtor = mode === "realtor";
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end(
       "<html><head><title>ICL Leads</title><link rel='icon' type='image/svg+xml' href='/public/favicon.svg'><style>body{font-family:system-ui;padding:16px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;font-size:13px;vertical-align:top}th{background:#f6f6f6}.tabs{display:flex;gap:8px;margin:8px 0 14px}.tab{padding:6px 10px;border:1px solid #ddd;border-radius:8px;background:#fff;color:#333;text-decoration:none;font-size:12px}.tab.on{background:#111827;color:#fff;border-color:#111827}</style></head><body>" +
@@ -1792,8 +1857,9 @@ app.get("/admin/leads", async (req, res) => {
       "<a class='tab " + (modeActive ? "on" : "") + "' href='/admin/leads?show=active'>Active</a>" +
       "<a class='tab " + (modeArchived ? "on" : "") + "' href='/admin/leads?show=archived'>Archived</a>" +
       "<a class='tab " + (modeAll ? "on" : "") + "' href='/admin/leads?show=all'>All</a>" +
+      "<a class='tab " + (modeRealtor ? "on" : "") + "' href='/admin/leads?show=realtor'>Realtor Referrals</a>" +
       "</div>" +
-      "<table><thead><tr><th>From</th><th>Last Event</th><th>Last Message</th><th>Address</th><th>ZIP</th><th>Media Sent</th><th>Media#</th><th>Media Preview</th><th>Media</th><th>Miles</th><th>Last Seen</th><th>Action</th></tr></thead><tbody>" +
+      "<table><thead><tr><th>From</th><th>Last Event</th><th>Last Message</th><th>Address</th><th>ZIP</th><th>Source</th><th>Payout</th><th>Media Sent</th><th>Media#</th><th>Media Preview</th><th>Media</th><th>Miles</th><th>Last Seen</th><th>Action</th></tr></thead><tbody>" +
       rowsHtml +
       "</tbody></table></body></html>"
     );
@@ -1876,6 +1942,13 @@ setInterval(() => checkDropoffs().catch(e => console.error('[dropoff]', e.messag
 setTimeout(() => checkDropoffs().catch(()=>{}), 60*1000);
 setInterval(() => fireNextBestActionAutomation().catch(e => console.error("[next_action_auto]", e?.message || e)), 10 * 60 * 1000);
 setTimeout(() => fireNextBestActionAutomation().catch(() => {}), 90 * 1000);
+setTimeout(() => {
+  retryPendingRealtorAssistNotifications(pool, insertEvent)
+    .then((r) => {
+      if (r?.ok) console.log("[referral_notify_retry]", r);
+    })
+    .catch(() => {});
+}, 15 * 1000);
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log("icl-twilio-intake listening on :" + PORT);
