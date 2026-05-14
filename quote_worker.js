@@ -139,17 +139,21 @@ async function derivePricingForLead(lead) {
       lookup = await lookupSqftByAddress({
         address: lead?.address_text,
         zip: lead?.zip || lead?.zip_text,
+        load_bucket: selectedBucket,
       });
       if (lookup && lookup.ok && Number(lookup.sqft) > 0) {
         propertySqft = Math.round(Number(lookup.sqft));
         propertySqftSource = String(lookup.source || "rentcast");
+      } else if (lookup && Number(lookup.fallback_sqft) > 0) {
+        propertySqft = Math.round(Number(lookup.fallback_sqft));
+        propertySqftSource = "fallback";
       }
     }
   }
 
   let pricing;
   if (propertySqft && clearout.use) {
-    strategy = "SQFT_CLEAROUT";
+    strategy = propertySqftSource === "fallback" ? "SQFT_CLEAROUT_FALLBACK" : "SQFT_CLEAROUT";
     pricing = priceClearoutBySqftV1({
       property_sqft: propertySqft,
       load_bucket: selectedBucket,

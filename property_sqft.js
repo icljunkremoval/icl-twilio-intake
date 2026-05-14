@@ -2,20 +2,41 @@ const fetchFn = typeof fetch === "function"
   ? fetch.bind(globalThis)
   : (...args) => import("node-fetch").then(({ default: f }) => f(...args));
 
+const LOAD_BUCKET_SQFT_FALLBACK = {
+  MIN: 700,
+  QTR: 1000,
+  HALF: 1500,
+  "3Q": 2100,
+  FULL: 2800,
+};
+
 function asInt(raw) {
   const n = Math.round(Number(raw || 0));
   if (!Number.isFinite(n) || n <= 0) return null;
   return n;
 }
 
+function normalizeLoadBucket(raw) {
+  const v = String(raw || "").toUpperCase().trim();
+  if (v === "SMALL") return "MIN";
+  if (v === "MEDIUM") return "HALF";
+  if (v === "LARGE") return "FULL";
+  if (v === "MIN" || v === "QTR" || v === "HALF" || v === "3Q" || v === "FULL") return v;
+  return "";
+}
+
+function estimateSqftFromLoadBucket(load_bucket) {
+  const b = normalizeLoadBucket(load_bucket);
+  return LOAD_BUCKET_SQFT_FALLBACK[b] || null;
+}
+
 function normalizeAddress(address, zip) {
   const base = String(address || "").replace(/\s+/g, " ").trim();
   const zipText = String(zip || "").trim();
   if (!base) return "";
-  let out = base;
-  if (zipText && !new RegExp(`\\b${zipText}\\b`).test(out)) out = `${out}, ${zipText}`;
-  if (!/,\s*CA\b/i.test(out)) out = `${out}, CA`;
-  return out;
+  if (!zipText) return base;
+  if (new RegExp(`\\b${zipText}\\b`).test(base)) return base;
+  return `${base}, ${zipText}`;
 }
 
 function extractSqft(record) {
@@ -47,15 +68,26 @@ function extractSqft(record) {
   return null;
 }
 
-async function lookupSqftByAddress({ address, zip, timeout_ms = 8000 } = {}) {
+function failureResult(reason, load_bucket, extra) {
+  return {
+    ok: false,
+    sqft: null,
+    source: "fallback",
+    reason: String(reason || "lookup_failed"),
+    fallback_sqft: estimateSqftFromLoadBucket(load_bucket),
+    ...(extra && typeof extra === "object" ? extra : {}),
+  };
+}
+
+async function lookupSqftByAddress({ address, zip, load_bucket, timeout_ms = 8000 } = {}) {
   const normalizedAddress = normalizeAddress(address, zip);
   if (!normalizedAddress) {
-    return { ok: false, sqft: null, source: "none", reason: "missing_address" };
+    return failureResult("missing_address", load_bucket);
   }
 
   const rentcastKey = String(process.env.RENTCAST_API_KEY || "").trim();
   if (!rentcastKey) {
-    return { ok: false, sqft: null, source: "none", reason: "provider_not_configured", normalized_address: normalizedAddress };
+    return failureResult("provider_not_configured", load_bucket, { normalized_address: normalizedAddress });
   }
 
   const url = `https://api.rentcast.io/v1/properties?address=${encodeURIComponent(normalizedAddress)}&limit=1`;
@@ -73,51 +105,36 @@ async function lookupSqftByAddress({ address, zip, timeout_ms = 8000 } = {}) {
     });
     if (timeoutHandle) clearTimeout(timeoutHandle);
     if (!res.ok) {
-      return {
-        ok: false,
-        sqft: null,
-        source: "rentcast",
-        reason: `http_${res.status}`,
-        normalized_address: normalizedAddress,
-      };
+      return failureResult(`rentcast_http_${res.status}`, load_bucket, { normalized_address: normalizedAddress });
     }
     const rows = await res.json();
     const first = Array.isArray(rows) ? rows[0] : null;
     if (!first) {
-      return { ok: false, sqft: null, source: "rentcast", reason: "not_found", normalized_address: normalizedAddress };
+      return failureResult("rentcast_not_found", load_bucket, { normalized_address: normalizedAddress });
     }
     const sqft = extractSqft(first);
     if (!sqft) {
-      return {
-        ok: false,
-        sqft: null,
-        source: "rentcast",
-        reason: "sqft_missing",
+      return failureResult("rentcast_sqft_missing", load_bucket, {
         normalized_address: normalizedAddress,
         matched_address: first.formattedAddress || null,
-      };
+      });
     }
     return {
       ok: true,
       sqft,
       source: "rentcast",
-      reason: "ok",
-      normalized_address: normalizedAddress,
       matched_address: first.formattedAddress || null,
     };
   } catch (e) {
     if (timeoutHandle) clearTimeout(timeoutHandle);
-    return {
-      ok: false,
-      sqft: null,
-      source: "rentcast",
-      reason: "request_failed",
-      error: String((e && e.message) || e),
+    return failureResult("rentcast_request_failed", load_bucket, {
       normalized_address: normalizedAddress,
-    };
+      error: String((e && e.message) || e),
+    });
   }
 }
 
 module.exports = {
   lookupSqftByAddress,
+  estimateSqftFromLoadBucket,
 };
