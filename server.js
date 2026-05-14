@@ -1080,6 +1080,22 @@ app.get('/dashboard', (req, res) => {
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
+app.get("/admin/test-sqft", async (req, res) => {
+  try {
+    const pass = String(req.headers["x-admin-password"] || "");
+    if (!ADMIN_PASSWORD) return res.status(500).json({ ok: false, error: "admin password not set" });
+    if (!pass || pass !== ADMIN_PASSWORD) return res.status(401).json({ ok: false, error: "unauthorized" });
+
+    const address = String(req.query.address || "").trim();
+    if (!address) return res.status(400).json({ ok: false, error: "address query param required" });
+
+    const { lookupSqftByAddress } = require("./property_sqft");
+    const result = await lookupSqftByAddress({ address: req.query.address });
+    return res.json(result);
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
 app.use("/admin", (req, res, next) => {
   if (!ADMIN_PASSWORD) return res.status(500).send("Admin password not set.");
   const h = req.headers.authorization || "";
