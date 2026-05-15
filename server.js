@@ -8,6 +8,7 @@ const { handleWindowReply } = require("./window_reply");
 const { evaluateQuoteReadyRow } = require("./quote_gate");
 const { handleConversation } = require("./conversation");
 const { sendSms } = require("./twilio_sms");
+const { createSquarePaymentOptions } = require("./square_quote");
 const { recordJobCosts } = require("./finance_pipeline");
 const { retryPendingRealtorAssistNotifications } = require("./utils/notify_partner");
 const { BASE_COORD: DUMPSITE_BASE_COORD, listDumpSites, recommendDumpSites } = require("./dumpsite_feed");
@@ -1780,12 +1781,16 @@ app.get("/admin/referral-report", async (req, res) => {
 
 app.get("/admin/leads", async (req, res) => {
   try {
-    const mode = String(req.query.show || "active").toLowerCase();
+    const mode = String(req.query.show || "all").toLowerCase();
     const where =
       mode === "archived"
         ? "WHERE l.archived_at IS NOT NULL"
         : mode === "realtor"
           ? "WHERE l.archived_at IS NULL AND l.lead_source = 'realtor_referral'"
+      : mode === "escalated"
+          ? "WHERE l.archived_at IS NULL AND l.conv_state = 'ESCALATED'"
+      : mode === "full_home"
+          ? "WHERE l.archived_at IS NULL AND l.job_scope = 'full_home'"
         : mode === "all"
           ? ""
           : "WHERE l.archived_at IS NULL";
@@ -1806,7 +1811,13 @@ app.get("/admin/leads", async (req, res) => {
         l.referral_partner,
         l.referral_agent_name,
         l.referral_payout_cents,
-        l.referral_payout_sent_at
+        l.referral_payout_sent_at,
+        l.job_scope,
+        l.conv_state,
+        l.escalation_reason,
+        l.low_confidence_retry,
+        l.soft_flag,
+        l.quote_total_cents
       FROM leads l
       ${where}
       ORDER BY l.last_seen_at DESC
@@ -1827,16 +1838,35 @@ app.get("/admin/leads", async (req, res) => {
         ? "<span style='display:inline-block;padding:2px 8px;border-radius:999px;background:#e7f7ef;border:1px solid #8fd3ac;color:#166534;font-size:11px'>Yes (" + mediaCount + ")</span>"
         : "<span style='display:inline-block;padding:2px 8px;border-radius:999px;background:#f4f4f5;border:1px solid #d4d4d8;color:#52525b;font-size:11px'>No</span>";
       const encodedPhone = encodeURIComponent(String(r.from_phone));
-      const returnTo = "/admin/leads?show=" + (mode === "archived" ? "archived" : mode === "all" ? "all" : mode === "realtor" ? "realtor" : "active");
-      const actionCell = r.archived_at
+      const modeSafe = ["all", "escalated", "full_home", "realtor", "archived"].includes(mode) ? mode : "all";
+      const returnTo = "/admin/leads?show=" + modeSafe;
+      const archiveAction = r.archived_at
         ? "<form method='POST' action='/admin/lead/" + encodedPhone + "/unarchive' style='margin:0'><input type='hidden' name='return_to' value='" + esc(returnTo) + "'/><button type='submit' style='font-size:11px;padding:5px 8px;border:1px solid #0ea5e9;border-radius:6px;background:#f0f9ff;color:#0369a1;cursor:pointer'>Unarchive</button></form>"
         : "<form method='POST' action='/admin/lead/" + encodedPhone + "/archive' style='margin:0' onsubmit='return confirm(\"Archive this lead?\")'><input type='hidden' name='return_to' value='" + esc(returnTo) + "'/><button type='submit' style='font-size:11px;padding:5px 8px;border:1px solid #f59e0b;border-radius:6px;background:#fffbeb;color:#92400e;cursor:pointer'>Archive</button></form>";
+      const canApproveQuote = String(r.conv_state || "") === "ESCALATED" && Math.round(Number(r.quote_total_cents || 0)) > 0;
+      const approveAction = canApproveQuote
+        ? "<form method='POST' action='/admin/lead/" + encodedPhone + "/approve-quote' style='margin:0 0 6px 0'><input type='hidden' name='return_to' value='" + esc(returnTo) + "'/><button type='submit' style='font-size:11px;padding:5px 8px;border:1px solid #16a34a;border-radius:6px;background:#ecfdf3;color:#166534;cursor:pointer;font-weight:700'>APPROVE QUOTE</button></form>"
+        : "";
+      const actionCell = approveAction + archiveAction;
       const source = String(r.lead_source || "sms");
       const isReferral = source === "realtor_referral" || String(r.referral_partner || "") === "realtor_assist";
       const sourceBadge = isReferral
         ? "<span style='display:inline-block;padding:2px 8px;border-radius:999px;background:#fef3c7;border:1px solid #eab308;color:#854d0e;font-size:11px;font-weight:700'>REALTOR</span>"
         : "<span style='display:inline-block;padding:2px 8px;border-radius:999px;background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;font-size:11px'>" + esc(source.toUpperCase()) + "</span>";
-      const fromCell = "<a href='/admin/lead/" + encodedPhone + "'>" + esc(r.from_phone) + "</a>" + (isReferral ? "<div style='margin-top:4px'>" + sourceBadge + "</div>" : "") + (r.referral_agent_name ? "<div style='margin-top:4px;color:#475569;font-size:11px'>Agent: " + esc(r.referral_agent_name) + "</div>" : "");
+      const fullHomeBadge = String(r.job_scope || "") === "full_home"
+        ? "<span style='display:inline-block;padding:2px 8px;border-radius:999px;background:#fef3c7;border:1px solid #d97706;color:#92400e;font-size:11px;font-weight:700'>FULL HOME</span>"
+        : "";
+      const escalatedBadge = String(r.conv_state || "") === "ESCALATED"
+        ? "<span title='" + esc(r.escalation_reason || "Escalated") + "' style='display:inline-block;padding:2px 8px;border-radius:999px;background:#fee2e2;border:1px solid #dc2626;color:#991b1b;font-size:11px;font-weight:700'>ESCALATED</span>"
+        : "";
+      const lowConfBadge = Number(r.low_confidence_retry || 0) === 1
+        ? "<span style='display:inline-block;padding:2px 8px;border-radius:999px;background:#fff7ed;border:1px solid #f59e0b;color:#92400e;font-size:11px;font-weight:700'>LOW CONF</span>"
+        : "";
+      const softFlagBadge = Number(r.soft_flag || 0) === 1
+        ? "<span style='display:inline-block;padding:2px 8px;border-radius:999px;background:#f3f4f6;border:1px solid #9ca3af;color:#374151;font-size:11px;font-weight:700'>SOFT FLAG</span>"
+        : "";
+      const badges = [sourceBadge, fullHomeBadge, escalatedBadge, lowConfBadge, softFlagBadge].filter(Boolean).join(" ");
+      const fromCell = "<a href='/admin/lead/" + encodedPhone + "'>" + esc(r.from_phone) + "</a>" + (badges ? "<div style='margin-top:4px;display:flex;gap:4px;flex-wrap:wrap'>" + badges + "</div>" : "") + (r.referral_agent_name ? "<div style='margin-top:4px;color:#475569;font-size:11px'>Agent: " + esc(r.referral_agent_name) + "</div>" : "");
       const payoutCents = Math.max(0, Math.round(Number(r.referral_payout_cents || 0)));
       const payoutCell = !isReferral
         ? "—"
@@ -1845,8 +1875,8 @@ app.get("/admin/leads", async (req, res) => {
           : ("<span style='color:#92400e;font-weight:600'>● $" + (payoutCents / 100).toFixed(0) + " pending</span>"));
       return "<tr><td>" + fromCell + "</td><td>" + esc(r.last_event) + "</td><td>" + esc(r.last_body_80) + "</td><td>" + esc(r.address_60) + "</td><td>" + esc(r.zip_text) + "</td><td>" + sourceBadge + "</td><td>" + payoutCell + "</td><td>" + mediaSentCell + "</td><td>" + esc(r.num_media) + "</td><td>" + previewCell + "</td><td>" + mediaCell + "</td><td>" + esc(r.distance_miles) + "</td><td>" + esc(r.last_seen_at) + "</td><td>" + actionCell + "</td></tr>";
     }).join("");
-    const modeActive = mode === "active" || (mode !== "archived" && mode !== "all" && mode !== "realtor");
-    const modeArchived = mode === "archived";
+    const modeEscalated = mode === "escalated";
+    const modeFullHome = mode === "full_home";
     const modeAll = mode === "all";
     const modeRealtor = mode === "realtor";
     res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -1854,9 +1884,9 @@ app.get("/admin/leads", async (req, res) => {
       "<html><head><title>ICL Leads</title><link rel='icon' type='image/svg+xml' href='/public/favicon.svg'><style>body{font-family:system-ui;padding:16px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;font-size:13px;vertical-align:top}th{background:#f6f6f6}.tabs{display:flex;gap:8px;margin:8px 0 14px}.tab{padding:6px 10px;border:1px solid #ddd;border-radius:8px;background:#fff;color:#333;text-decoration:none;font-size:12px}.tab.on{background:#111827;color:#fff;border-color:#111827}</style></head><body>" +
       "<h2>ICL Intake Leads</h2>" +
       "<div class='tabs'>" +
-      "<a class='tab " + (modeActive ? "on" : "") + "' href='/admin/leads?show=active'>Active</a>" +
-      "<a class='tab " + (modeArchived ? "on" : "") + "' href='/admin/leads?show=archived'>Archived</a>" +
       "<a class='tab " + (modeAll ? "on" : "") + "' href='/admin/leads?show=all'>All</a>" +
+      "<a class='tab " + (modeEscalated ? "on" : "") + "' href='/admin/leads?show=escalated'>Escalated</a>" +
+      "<a class='tab " + (modeFullHome ? "on" : "") + "' href='/admin/leads?show=full_home'>Full Home</a>" +
       "<a class='tab " + (modeRealtor ? "on" : "") + "' href='/admin/leads?show=realtor'>Realtor Referrals</a>" +
       "</div>" +
       "<table><thead><tr><th>From</th><th>Last Event</th><th>Last Message</th><th>Address</th><th>ZIP</th><th>Source</th><th>Payout</th><th>Media Sent</th><th>Media#</th><th>Media Preview</th><th>Media</th><th>Miles</th><th>Last Seen</th><th>Action</th></tr></thead><tbody>" +
@@ -1877,7 +1907,7 @@ app.post("/admin/lead/:from/archive", async (req, res) => {
   try {
     const from = String(req.params.from || "");
     await pool.query("UPDATE leads SET archived_at = NOW(), archived_reason = COALESCE($1, archived_reason), last_seen_at = NOW() WHERE from_phone = $2", [String(req.body?.reason || "manual_archive"), from]);
-    return res.redirect(adminReturnPath(req, "/admin/leads?show=active"));
+    return res.redirect(adminReturnPath(req, "/admin/leads?show=all"));
   } catch (e) {
     return res.status(500).send(String(e));
   }
@@ -1887,9 +1917,73 @@ app.post("/admin/lead/:from/unarchive", async (req, res) => {
   try {
     const from = String(req.params.from || "");
     await pool.query("UPDATE leads SET archived_at = NULL, archived_reason = NULL, last_seen_at = NOW() WHERE from_phone = $1", [from]);
-    return res.redirect(adminReturnPath(req, "/admin/leads?show=archived"));
+    return res.redirect(adminReturnPath(req, "/admin/leads?show=all"));
   } catch (e) {
     return res.status(500).send(String(e));
+  }
+});
+
+app.post("/admin/lead/:from/approve-quote", async (req, res) => {
+  try {
+    const from = String(req.params.from || "");
+    const lead = (await pool.query("SELECT * FROM leads WHERE from_phone=$1 LIMIT 1", [from])).rows[0] || null;
+    if (!lead) return res.status(404).json({ ok: false, error: "lead_not_found" });
+    const quoteTotalCents = Math.max(0, Math.round(Number(lead.quote_total_cents || 0)));
+    if (!quoteTotalCents) return res.status(400).json({ ok: false, error: "missing_quote_total_cents" });
+
+    const paymentOptions = await createSquarePaymentOptions(
+      { from_phone: from },
+      {
+        quoteTotalCents,
+        depositCents: 5000,
+        upfrontDiscountPct: 10,
+        lead,
+      }
+    );
+
+    await pool.query(
+      `UPDATE leads
+       SET square_payment_link_id=$1,
+           square_payment_link_url=$2,
+           square_order_id=$3,
+           square_upfront_payment_link_id=$4,
+           square_upfront_payment_link_url=$5,
+           square_upfront_order_id=$6,
+           quote_status='AWAITING_DEPOSIT',
+           conv_state='AWAITING_DEPOSIT',
+           last_seen_at=NOW()
+       WHERE from_phone=$7`,
+      [
+        paymentOptions?.deposit?.paymentLinkId || null,
+        paymentOptions?.deposit?.paymentLinkUrl || null,
+        paymentOptions?.deposit?.orderId || null,
+        paymentOptions?.upfront?.paymentLinkId || null,
+        paymentOptions?.upfront?.paymentLinkUrl || null,
+        paymentOptions?.upfront?.orderId || null,
+        from,
+      ]
+    );
+
+    await sendSms(
+      from,
+      "Jason approved your quote ✅\n\n" +
+      "Reserve your spot:\n" +
+      "• $50 deposit: " + (paymentOptions?.deposit?.paymentLinkUrl || "unavailable") + "\n" +
+      "• Pay in full (10% off): " + (paymentOptions?.upfront?.paymentLinkUrl || "unavailable")
+    );
+
+    insertEvent.run({
+      from_phone: from,
+      event_type: "quote_approved_by_jason",
+      payload_json: JSON.stringify({ quote_total_cents: quoteTotalCents }),
+      created_at: new Date().toISOString(),
+    });
+
+    const wantsJson = String(req.get("accept") || "").includes("application/json");
+    if (wantsJson) return res.json({ ok: true });
+    return res.redirect(adminReturnPath(req, "/admin/leads?show=escalated"));
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
