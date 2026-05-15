@@ -16,6 +16,7 @@ const STATES = {
   AWAITING_LOAD: "AWAITING_LOAD", QUOTE_READY: "QUOTE_READY",
   AWAITING_DEPOSIT: "AWAITING_DEPOSIT", BOOKING_SENT: "BOOKING_SENT",
   WINDOW_SELECTED: "WINDOW_SELECTED", AWAITING_DAY: "AWAITING_DAY", ESCALATED: "ESCALATED",
+  BOOKED: "BOOKED",
   AWAITING_SCOPE_TRIAGE: "AWAITING_SCOPE_TRIAGE",
   AWAITING_REFERRAL_SOURCE: "AWAITING_REFERRAL_SOURCE",
   AWAITING_AGENT_NAME: "AWAITING_AGENT_NAME",
@@ -787,10 +788,10 @@ async function handleConversation(payload) {
     }
 
     case STATES.AWAITING_POST_PAYMENT_REFERRAL: {
-      console.warn(`[deprecated state] lead ${lead?.id || from_phone} in AWAITING_POST_PAYMENT_REFERRAL — migrating to BOOKING_SENT`);
+      console.warn(`[deprecated state] lead ${lead?.id || from_phone} in AWAITING_POST_PAYMENT_REFERRAL — migrating to AWAITING_DAY`);
       await pool.query(
         "UPDATE leads SET conv_state=$1, quote_status='BOOKING_SENT', last_seen_at=NOW() WHERE from_phone=$2",
-        [STATES.BOOKING_SENT, from_phone]
+        [STATES.AWAITING_DAY, from_phone]
       );
       const migratedLead = await getLead.get(from_phone);
       await sendDayPickerPrompt(from_phone, migratedLead || lead);
@@ -1171,43 +1172,53 @@ async function handleConversation(payload) {
     }
 
     case STATES.BOOKING_SENT: {
-      const dayOptions = readDayOptionsSnapshot(lead);
-      const idx = Number.parseInt(String(body || "").trim(), 10) - 1;
-      if (!Number.isFinite(idx) || idx < 0 || idx >= dayOptions.length) {
-        await sendSms(from_phone, "Please reply 1, 2, or 3:\n\n" + formatDayPickerMenu(dayOptions));
-        break;
-      }
-      const chosenDay = dayOptions[idx];
       await pool.query(
-        "UPDATE leads SET timing_pref=$1, conv_state=$2, quote_status='BOOKING_SENT', last_seen_at=NOW() WHERE from_phone=$3",
-        [chosenDay, STATES.AWAITING_DAY, from_phone]
+        "UPDATE leads SET conv_state=$1, quote_status='BOOKING_SENT', last_seen_at=NOW() WHERE from_phone=$2",
+        [STATES.AWAITING_DAY, from_phone]
       );
-      logEvent(from_phone, "booking_day_selected", { selected_day: chosenDay, index: idx + 1, day_options: dayOptions });
-      await sendAfterDayWindowPrompt(from_phone);
+      await sendDayPickerPrompt(from_phone, lead);
       break;
     }
 
     case STATES.AWAITING_DAY: {
-      let selectedWindow = null;
-      for (const [key, val] of Object.entries(AFTER_DAY_WINDOW_MAP)) {
-        if (bodyUpper.includes(key)) { selectedWindow = val; break; }
+      let snapshot = null;
+      try {
+        snapshot = lead?.day_options_snapshot ? JSON.parse(lead.day_options_snapshot) : null;
+      } catch (_) {
+        snapshot = null;
       }
-      if (!selectedWindow) {
-        await sendAfterDayWindowPrompt(from_phone);
+      if (!Array.isArray(snapshot) || snapshot.length < 3) {
+        await sendSms(from_phone, "Pick a day: 1, 2, or 3.");
         break;
       }
-      const chosenDay = String(lead?.timing_pref || "").trim() || "your selected day";
-      const fullTiming = chosenDay + ", " + selectedWindow;
+
+      const choice = Number.parseInt(String(body || "").trim(), 10);
+      if (![1, 2, 3].includes(choice)) {
+        await sendSms(from_phone, "Pick a day: 1, 2, or 3.");
+        break;
+      }
+
+      const selectedDay = String(snapshot[choice - 1] || "").trim();
+      const selectedWindow = "8-11am";
+      const fullTiming = `${selectedDay || "your selected day"}, ${selectedWindow}`;
+
       await pool.query(
-        "UPDATE leads SET timing_pref=$1, conv_state=$2, quote_status='BOOKING_SENT', last_seen_at=NOW() WHERE from_phone=$3",
-        [fullTiming, STATES.AWAITING_POST_BOOKING_REFERRAL, from_phone]
+        `UPDATE leads
+         SET timing_pref=$1,
+             booking_day=$2,
+             booking_window=$3,
+             conv_state=$4,
+             quote_status='BOOKING_SENT',
+             last_seen_at=NOW()
+         WHERE from_phone=$5`,
+        [fullTiming, selectedDay, selectedWindow, STATES.AWAITING_POST_BOOKING_REFERRAL, from_phone]
       );
-      logEvent(from_phone,"window_selected_after_day",{timing_pref:fullTiming});
+      logEvent(from_phone,"day_selected",{timing_pref:fullTiming});
       const updatedLead = (await pool.query('SELECT * FROM leads WHERE from_phone=$1',[from_phone])).rows[0];
       createJobEvent(updatedLead).catch(e=>console.error('[calendar] event error:',e));
       await sendSms(
         from_phone,
-        "Booked — " + fullTiming + " window.\n\n" +
+        "Booked — " + fullTiming + ".\n\n" +
         "One last thing — were you referred by an agent? Reply their name or SKIP."
       );
       break;
@@ -1220,13 +1231,13 @@ async function handleConversation(payload) {
 
     case STATES.AWAITING_POST_BOOKING_REFERRAL: {
       const answer = String(body || "").trim();
-      const formattedDay = String(lead?.timing_pref || "").split(",")[0]?.trim() || "your scheduled day";
-      const isSkip = /^skip$/i.test(answer) || /^no$/i.test(answer) || /^none$/i.test(answer);
+      const formattedDay = String(lead?.booking_day || "").trim() || String(lead?.timing_pref || "").split(",")[0]?.trim() || "your scheduled day";
+      const isSkip = /^(skip|no|none|n\/a)$/i.test(answer);
 
       if (isSkip) {
         await pool.query(
           "UPDATE leads SET conv_state=$1, quote_status='BOOKING_CONFIRMED', last_seen_at=NOW() WHERE from_phone=$2",
-          [STATES.WINDOW_SELECTED, from_phone]
+          [STATES.BOOKED, from_phone]
         );
         await sendSms(from_phone, `All set. We'll see you on ${formattedDay}.`);
         break;
@@ -1239,16 +1250,18 @@ async function handleConversation(payload) {
 
       await pool.query(
         `UPDATE leads
-         SET referral_agent_name=$1,
-             lead_source='realtor_referral',
+         SET referral_source=$1,
+             referral_agent_name=$1,
+             lead_source='realtor',
              referral_partner='realtor_assist',
              conv_state=$2,
              quote_status='BOOKING_CONFIRMED',
              last_seen_at=NOW()
          WHERE from_phone=$3`,
-        [answer.slice(0, 140), STATES.WINDOW_SELECTED, from_phone]
+        [answer.slice(0, 140), STATES.BOOKED, from_phone]
       );
       await notifyReferralPartner(from_phone);
+      logEvent(from_phone, "referral_attributed", { agent_name: answer.slice(0, 140) });
       await sendSms(from_phone, `Got it — we'll make sure ${answer.slice(0, 140)} gets credit. See you on ${formattedDay}.`);
       break;
     }

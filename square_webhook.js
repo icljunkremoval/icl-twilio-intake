@@ -218,7 +218,7 @@ async function processDepositCompletion(lead, opts = {}) {
      SET day_options_snapshot=$2,
          day_options_snapshot_at=NOW(),
          quote_status='BOOKING_SENT',
-         conv_state='BOOKING_SENT',
+         conv_state='AWAITING_DAY',
          last_seen_at=NOW()
      WHERE from_phone=$1`,
     [from_phone, JSON.stringify(dayOptions)]
@@ -260,7 +260,7 @@ async function processDepositCompletion(lead, opts = {}) {
     amount_cents: resolvedAmountCents,
     is_test_payment: isTest,
     day_options: dayOptions,
-    next_state: "BOOKING_SENT",
+    next_state: "AWAITING_DAY",
   };
 }
 

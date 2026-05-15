@@ -4,7 +4,6 @@ const { handleSquareWebhook, processDepositCompletion } = require("./square_webh
 const { fetchLatest } = require("./twilio_debug");
 const { backfillLatestMedia } = require("./twilio_media_backfill");
 const { recomputeDerived } = require("./recompute");
-const { handleWindowReply } = require("./window_reply");
 const { evaluateQuoteReadyRow } = require("./quote_gate");
 const { handleConversation } = require("./conversation");
 const { sendSms } = require("./twilio_sms");
@@ -1180,6 +1179,9 @@ app.get("/admin/lead", async (req, res) => {
           address_text AS address,
           rentcast_sqft AS sqft,
           access_level,
+          booking_day,
+          booking_window,
+          referral_source,
           prelisting_addons AS selected_addons,
           base_price_cents,
           addon_total_cents,
