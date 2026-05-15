@@ -40,8 +40,6 @@ const WINDOW_MAP = {
   "8-10": "8-10am", "10-12": "10-12pm", "12-2": "12-2pm", "2-4": "2-4pm", "4-6": "4-6pm",
 };
 
-const APP_BASE_URL = String(process.env.APP_BASE_URL || "https://icl-twilio-intake-production.up.railway.app").replace(/\/+$/, "");
-const CONTACT_CARD_URL = `${APP_BASE_URL}/contact.vcf`;
 const REFERRAL_TIMEOUT_MS = 10 * 60 * 1000;
 const SCOPE_TRIAGE_TIMEOUT_MS = 15 * 60 * 1000;
 const ADDON_OFFER_TIMEOUT_MS = 15 * 60 * 1000;
@@ -106,8 +104,12 @@ function logEvent(from_phone, event_type, data) {
   try { insertEvent.run({ from_phone, event_type, payload_json: JSON.stringify(data || {}), created_at: new Date().toISOString() }); } catch (e) {}
 }
 
-function setState(from_phone, state) {
-  pool.query('UPDATE leads SET conv_state = $1, last_seen_at = NOW() WHERE from_phone = $2', [state, from_phone]).catch(e => console.error('[setState]', e.message));
+async function setState(from_phone, state) {
+  try {
+    await pool.query('UPDATE leads SET conv_state = $1, last_seen_at = NOW() WHERE from_phone = $2', [state, from_phone]);
+  } catch (e) {
+    console.error('[setState]', e.message);
+  }
 }
 
 async function sendPhotoPrompt(from_phone) {
@@ -434,6 +436,21 @@ async function triggerQuote(from_phone) {
   }
 }
 
+async function handleNewLead(lead, from_phone) {
+  const latest = await getLead.get(from_phone);
+  if (String(getConvState(latest || lead) || "") !== STATES.NEW) {
+    console.log(`[handleNewLead] skipping — ${from_phone} already in state ${String(getConvState(latest || lead) || "")}`);
+    return;
+  }
+  await setState(from_phone, STATES.AWAITING_SCOPE_TRIAGE);
+  scheduleScopeTriageTimeout(from_phone);
+  await sendSms(
+    from_phone,
+    "Hi! Thanks for texting ICL Junk Removal. We’re ready when you are."
+  );
+  await sendSms(from_phone, SCOPE_TRIAGE_PROMPT);
+}
+
 async function advanceAfterAddress(from_phone) {
   const lead = await getLead.get(from_phone);
   const hasAccess = lead && lead.access_level;
@@ -536,14 +553,7 @@ async function handleConversation(payload) {
 
   switch(state) {
     case STATES.NEW: {
-      setState(from_phone, STATES.AWAITING_SCOPE_TRIAGE);
-      scheduleScopeTriageTimeout(from_phone);
-      await sendSms(
-        from_phone,
-        "Hi! Thanks for texting ICL Junk Removal. We’re ready when you are."
-      );
-      await sendSms(from_phone, "Save our contact card: " + CONTACT_CARD_URL);
-      await sendSms(from_phone, SCOPE_TRIAGE_PROMPT);
+      await handleNewLead(lead, from_phone);
       break;
     }
 
@@ -785,7 +795,6 @@ async function handleConversation(payload) {
                 ? "Hey! You just called us — glad you reached out. Go ahead and send up to 10 photos of what needs to go — different angles help us give you the most accurate quote. 📦\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote."
                 : "Hi! Thanks for texting ICL Junk Removal.\n\nSend us up to 10 photos of what you need removed — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.";
               sendSms(from_phone, msg).then(() => {
-              sendSms(from_phone, "Save our contact card: " + CONTACT_CARD_URL).catch(()=>{});
             }).catch(()=>{});
             }).catch(()=>{ sendSms(from_phone,"Hi! Thanks for texting ICL Junk Removal.\n\nSend us up to 10 photos of what you need removed — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.").catch(()=>{}); });
           }

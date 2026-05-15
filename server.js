@@ -1323,15 +1323,14 @@ app.get("/contact.vcf", (req, res) => {
     "VERSION:3.0",
     "FN:ICL Junk Removal",
     "ORG:ICL Junk Removal",
-    "TEL;TYPE=CELL:+18555785014",
-    "EMAIL:admin@icljunkremoval.com",
+    "TEL;TYPE=WORK,VOICE:+18555785014",
+    "EMAIL;TYPE=WORK:admin@icljunkremoval.com",
     "URL:https://icljunkremoval.com",
-    "PHOTO;TYPE=JPEG;VALUE=URI:" + logoUrl,
-    "LOGO;TYPE=JPEG;VALUE=URI:" + logoUrl,
+    "PHOTO;VALUE=URI:" + logoUrl,
     "END:VCARD"
   ].join("\n");
-  res.set("Content-Type", "text/vcard");
-  res.set("Content-Disposition", "attachment; filename=ICL-Junk-Removal.vcf");
+  res.set("Content-Type", "text/vcard; charset=utf-8");
+  res.set("Content-Disposition", 'attachment; filename="ICL_Junk_Removal.vcf"');
   res.send(vcard);
 });
 

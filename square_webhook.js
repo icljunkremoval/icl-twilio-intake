@@ -1,5 +1,6 @@
 // square_webhook.js - handles Square payment webhooks
 const crypto = require("crypto");
+const twilio = require("twilio");
 const { pool, insertEvent } = require("./db");
 const { sendCrewBrief } = require("./crew_brief");
 const { processSalvage } = require("./salvage_pipeline");
@@ -9,6 +10,7 @@ const { recordSettledRevenue } = require("./finance_pipeline");
 const SQUARE_WEBHOOK_SIGNATURE_KEY = process.env.SQUARE_WEBHOOK_SIGNATURE_KEY || "";
 const POST_PAYMENT_REFERRAL_TIMEOUT_MS = 10 * 60 * 1000;
 const postPaymentReferralTimers = new Map();
+const APP_BASE_URL = String(process.env.BASE_URL || process.env.APP_BASE_URL || "https://icl-twilio-intake-production.up.railway.app").replace(/\/+$/, "");
 
 function verifySquareSignature(body, signature, url) {
   if (!SQUARE_WEBHOOK_SIGNATURE_KEY) return true; // skip in dev
@@ -68,6 +70,24 @@ function schedulePostPaymentReferralTimeout(from_phone) {
     clearPostPaymentReferralTimeout(from_phone);
   }, POST_PAYMENT_REFERRAL_TIMEOUT_MS);
   postPaymentReferralTimers.set(key, timer);
+}
+
+async function sendContactCardMms(toPhone) {
+  const sid = String(process.env.TWILIO_ACCOUNT_SID || "");
+  const token = String(process.env.TWILIO_AUTH_TOKEN || "");
+  if (!sid || !token) throw new Error("missing_twilio_credentials_for_mms");
+  const client = twilio(sid, token);
+  const messagingServiceSid = String(process.env.TWILIO_MESSAGING_SERVICE_SID || "").trim();
+  const from = String(process.env.TWILIO_FROM_NUMBER || "").trim();
+  const payload = {
+    to: toPhone,
+    body: "Save our contact for the day-of crew.",
+    mediaUrl: [`${APP_BASE_URL}/contact.vcf`],
+  };
+  if (messagingServiceSid) payload.messagingServiceSid = messagingServiceSid;
+  else if (from) payload.from = from;
+  else throw new Error("missing_twilio_sender_for_mms");
+  return client.messages.create(payload);
 }
 
 function phoneDigits(v) {
@@ -261,6 +281,17 @@ async function handleSquareWebhook(req, res) {
     let sms = null;
     if (shouldAskPostPaymentReferral) {
       await sendSms(lead.from_phone, buildBookingConfirmedSms(paymentKind));
+      try {
+        const vcardMms = await sendContactCardMms(lead.from_phone);
+        insertEvent.run({
+          from_phone: lead.from_phone,
+          event_type: "sms_sent_contact_vcard",
+          payload_json: JSON.stringify({ sid: vcardMms?.sid || null }),
+          created_at: new Date().toISOString(),
+        });
+      } catch (vcardErr) {
+        console.error("[square_webhook] contact vcard MMS failed:", vcardErr?.message || vcardErr);
+      }
       sms = await sendSms(
         lead.from_phone,
         "You're confirmed! One quick question — were you referred by\na real estate agent or property manager? If so, reply their\nname so we can make sure they get credit.\n\nOr reply SKIP to continue."
@@ -269,6 +300,17 @@ async function handleSquareWebhook(req, res) {
     } else {
       sms = await sendSms(lead.from_phone, buildWindowPickerSms(paymentKind));
       console.log("[square_webhook] window picker sent to:", lead.from_phone);
+      try {
+        const vcardMms = await sendContactCardMms(lead.from_phone);
+        insertEvent.run({
+          from_phone: lead.from_phone,
+          event_type: "sms_sent_contact_vcard",
+          payload_json: JSON.stringify({ sid: vcardMms?.sid || null }),
+          created_at: new Date().toISOString(),
+        });
+      } catch (vcardErr) {
+        console.error("[square_webhook] contact vcard MMS failed:", vcardErr?.message || vcardErr);
+      }
     }
     const leadForBrief = { ...lead };
     if (isReferralLead) leadForBrief.aerial_media_requested = 1;
