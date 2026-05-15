@@ -65,6 +65,28 @@ function normalizeAddonCode(addon) {
   return String(addon?.code || "").toUpperCase().trim();
 }
 
+function prettyAddonName(code) {
+  const normalized = String(code || "").toUpperCase().trim();
+  const map = {
+    DEEP_CLEAN: "Deep Clean",
+    PRESSURE_WASH: "Pressure Wash",
+    PAINT_TOUCHUP: "Paint Touch-Ups",
+    PAINT_TOUCHUPS: "Paint Touch-Ups",
+  };
+  return map[normalized] || normalized;
+}
+
+function formatAddonList(selectedAddons) {
+  if (!Array.isArray(selectedAddons) || !selectedAddons.length) return "";
+  const names = selectedAddons
+    .map((addon) => prettyAddonName(normalizeAddonCode(addon)))
+    .filter(Boolean);
+  if (!names.length) return "";
+  if (names.length === 1) return `${names[0]} included`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} included`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]} included`;
+}
+
 function computeAddonTotalCents(selectedAddons, sqft) {
   const safeSqft = Math.max(1, Math.round(Number(sqft || 0))) || 1500;
   const list = Array.isArray(selectedAddons) ? selectedAddons : [];
@@ -116,5 +138,7 @@ module.exports = {
   calcPressureWash,
   calcPaintTouchup,
   computeAddonTotalCents,
+  prettyAddonName,
+  formatAddonList,
   priceQuoteV1,
 };

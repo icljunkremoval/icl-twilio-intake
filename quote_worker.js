@@ -1,5 +1,5 @@
 const { db, pool, insertEvent } = require("./db");
-const { priceQuoteV1, computeAddonTotalCents } = require("./pricing_v1");
+const { priceQuoteV1, computeAddonTotalCents, formatAddonList } = require("./pricing_v1");
 const { createSquarePaymentOptions } = require("./square_quote");
 const { sendSms } = require("./twilio_sms");
 const { lookupSqftByAddress } = require("./property_sqft");
@@ -31,40 +31,20 @@ function parseSelectedAddons(rawAddons) {
   return addons;
 }
 
-function prettyAddonName(code) {
-  const normalized = String(code || "").toUpperCase().trim();
-  if (normalized === "DEEP_CLEAN") return "Deep Clean";
-  if (normalized === "PRESSURE_WASH") return "Pressure Wash";
-  if (normalized === "PAINT_TOUCHUP" || normalized === "PAINT_TOUCHUPS") return "Paint Touch-Ups";
-  if (normalized === "MINOR_REPAIRS") return "Minor Repairs";
-  return normalized;
-}
-
-function selectedAddonNames(addons) {
-  const selected = parseSelectedAddons(addons);
-  return selected
-    .map((a) => prettyAddonName(a?.code || a))
-    .filter(Boolean);
-}
-
 function buildQuoteSms(lead, pricing, payment) {
   const intakePath = String(lead?.intake_path || "");
   const isPath1 = intakePath === PATH_1_FULL_HOME || String(lead?.job_scope || "") === "full_home";
   if (isPath1) {
     const totalCents = Number(payment?.quoteTotalCents || pricing?.total_with_addons_cents || pricing?.total_cents || 0);
     const depositCents = Number(payment?.depositCents || payment?.deposit?.amount_cents || Math.round(totalCents / 2));
-    const totalStr = "$" + Math.round(totalCents / 100).toLocaleString("en-US");
-    const depositStr = "$" + Math.round(depositCents / 100).toLocaleString("en-US");
-    const addonNames = selectedAddonNames(lead?.prelisting_addons || lead?.selected_addons);
-    const addonLine = addonNames.length ? "\nIncludes: " + addonNames.join(", ") + "\n" : "\n";
+    const totalStr = `$${(totalCents / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+    const depositStr = `$${(depositCents / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+    const selectedAddons = parseSelectedAddons(lead?.prelisting_addons || lead?.selected_addons);
+    const addonClause = formatAddonList(selectedAddons);
     return (
-      "Your quote for " + String(lead?.address_text || "your property") + ":\n\n" +
-      totalStr + " all-inclusive" +
-      addonLine +
-      "\nCovers haul, dump fees, and our 7-day ICL Standard guarantee.\n\n" +
-      depositStr + " deposit secures the date:\n" +
-      String(payment?.deposit?.payment_link_url || "") +
-      "\n\nQuestions? Just reply."
+      `Confirmed for ${String(lead?.address_text || "your property")}.\n\n` +
+      `${totalStr} all-inclusive${addonClause ? ` — ${addonClause}` : ""}.\n\n` +
+      `Reserve your date with ${depositStr} today:\n${String(payment?.deposit?.payment_link_url || "")}`
     );
   }
   const bucket = pricing.bucket;
@@ -115,11 +95,10 @@ function buildQuoteSms(lead, pricing, payment) {
 function buildCompactQuoteSms(pricing, payment) {
   if (String(pricing?.path || "") === "full_home_rentcast" || String(pricing?.path || "") === "full_home_fallback") {
     return [
-      "Your quote is ready.",
-      "Deposit link:",
-      payment?.deposit?.payment_link_url || "",
+      "Confirmed for your property.",
       "",
-      "Questions? Just reply."
+      "Reserve your date today:",
+      payment?.deposit?.payment_link_url || "",
     ].join("\n");
   }
   const bucket = String(pricing?.bucket || "HALF");

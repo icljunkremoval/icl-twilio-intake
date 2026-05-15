@@ -567,7 +567,7 @@ async function handleConversation(payload) {
       }
 
       if (!jobScope) {
-        await sendSms(from_phone, "Just reply 1, 2, or 3 — whichever fits best.");
+        await sendSms(from_phone, "Reply 1, 2, or 3 — whichever fits best.");
         break;
       }
 
@@ -1149,7 +1149,7 @@ async function handleConversation(payload) {
       if (numMedia > 0 || mediaUrl) {
         setState(from_phone, STATES.AWAITING_MEDIA);
         if (allMediaUrls.length > 0) runVisionAsync(from_phone, allMediaUrls[0], allMediaUrls);
-        await sendSms(from_phone, "Got your photo — analyzing now. We'll have your quote ready shortly.");
+        await sendSms(from_phone, "Got your photo — analyzing now. We'll follow up with next steps soon.");
         break;
       }
       if (bodyUpper === "HELP") {
