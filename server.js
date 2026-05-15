@@ -23,6 +23,14 @@ const BASE_COORD = { lat: 33.9776848, lon: -118.3523303 };
 const SOCRATA_APP_TOKEN = process.env.OPENLA_SOCRATA_APP_TOKEN || process.env.SOCRATA_APP_TOKEN || "";
 const SOCRATA_USERNAME = process.env.OPENLA_SOCRATA_USERNAME || "";
 const SOCRATA_PASSWORD = process.env.OPENLA_SOCRATA_PASSWORD || "";
+let BEAR_LOGO_BASE64 = "";
+try {
+  const logoPath = path.join(__dirname, "public", "logo.jpg");
+  BEAR_LOGO_BASE64 = fs.readFileSync(logoPath).toString("base64");
+  console.log(`[contact.vcf] bear logo loaded, ${BEAR_LOGO_BASE64.length} chars base64`);
+} catch (e) {
+  console.error("[contact.vcf] could not load bear logo:", e?.message || e);
+}
 const ZIP_CENTROIDS = {
   "90008": { lat: 34.0075, lng: -118.3498 },
   "90016": { lat: 34.0151, lng: -118.3554 },
@@ -1372,19 +1380,16 @@ app.post("/twilio/inbound", (req, res) => {
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.get("/contact.vcf", (req, res) => {
-  const baseUrl = String(process.env.APP_BASE_URL || "https://icl-twilio-intake-production.up.railway.app").replace(/\/+$/, "");
-  const logoUrl = `${baseUrl}/public/logo.jpg`;
-  const vcard = [
-    "BEGIN:VCARD",
-    "VERSION:3.0",
-    "FN:ICL Junk Removal",
-    "ORG:ICL Junk Removal",
-    "TEL;TYPE=WORK,VOICE:+18555785014",
-    "EMAIL;TYPE=WORK:admin@icljunkremoval.com",
-    "URL:https://icljunkremoval.com",
-    "PHOTO;VALUE=URI:" + logoUrl,
-    "END:VCARD"
-  ].join("\n");
+  const vcard =
+    "BEGIN:VCARD\r\n" +
+    "VERSION:3.0\r\n" +
+    "FN:ICL Junk Removal\r\n" +
+    "ORG:ICL Junk Removal\r\n" +
+    "TEL;TYPE=WORK,VOICE:+18555785014\r\n" +
+    "EMAIL;TYPE=WORK:admin@icljunkremoval.com\r\n" +
+    "URL:https://icljunkremoval.com\r\n" +
+    (BEAR_LOGO_BASE64 ? `PHOTO;ENCODING=b;TYPE=JPEG:${BEAR_LOGO_BASE64}\r\n` : "") +
+    "END:VCARD\r\n";
   res.set("Content-Type", "text/vcard; charset=utf-8");
   res.set("Content-Disposition", 'attachment; filename="ICL_Junk_Removal.vcf"');
   res.send(vcard);

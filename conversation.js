@@ -21,6 +21,7 @@ const STATES = {
   AWAITING_AGENT_NAME: "AWAITING_AGENT_NAME",
   AWAITING_ADDON_SELECTION: "AWAITING_ADDON_SELECTION",
   AWAITING_POST_PAYMENT_REFERRAL: "AWAITING_POST_PAYMENT_REFERRAL",
+  AWAITING_POST_BOOKING_REFERRAL: "AWAITING_POST_BOOKING_REFERRAL",
 };
 
 const ACCESS_MAP = {
@@ -38,6 +39,12 @@ const WINDOW_MAP = {
   "1": "8-10am", "2": "10-12pm", "3": "12-2pm", "4": "2-4pm", "5": "4-6pm",
   "8": "8-10am", "10": "10-12pm", "12": "12-2pm", "2": "2-4pm", "4": "4-6pm",
   "8-10": "8-10am", "10-12": "10-12pm", "12-2": "12-2pm", "2-4": "2-4pm", "4-6": "4-6pm",
+};
+const AFTER_DAY_WINDOW_MAP = {
+  "1": "8a–11a",
+  "2": "12p–4p",
+  MORNING: "8a–11a",
+  AFTERNOON: "12p–4p",
 };
 
 const REFERRAL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -124,6 +131,48 @@ async function sendWindowPickerPrompt(from_phone) {
     from_phone,
     "Reply with your arrival window:\n1) 8–10am\n2) 10am–12pm\n3) 12–2pm\n4) 2–4pm\n5) 4–6pm"
   );
+}
+
+function buildDefaultDayOptions(now = new Date()) {
+  const dayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const options = [];
+  for (let i = 0; i < 3; i++) {
+    const d = new Date(now);
+    d.setDate(now.getDate() + i);
+    options.push(`${dayNames[d.getDay()]} ${monthNames[d.getMonth()]} ${d.getDate()}`);
+  }
+  return options;
+}
+
+function readDayOptionsSnapshot(lead) {
+  try {
+    const parsed = typeof lead?.day_options_snapshot === "string"
+      ? JSON.parse(lead.day_options_snapshot)
+      : lead?.day_options_snapshot;
+    if (Array.isArray(parsed) && parsed.length >= 3) {
+      const cleaned = parsed.slice(0, 3).map((v) => String(v || "").trim()).filter(Boolean);
+      if (cleaned.length >= 3) return cleaned;
+    }
+  } catch (_) {}
+  return buildDefaultDayOptions(new Date());
+}
+
+function formatDayPickerMenu(dayOptions) {
+  const safe = Array.isArray(dayOptions) ? dayOptions : buildDefaultDayOptions(new Date());
+  return "1) " + (safe[0] || "") + "\n" + "2) " + (safe[1] || "") + "\n" + "3) " + (safe[2] || "");
+}
+
+async function sendDayPickerPrompt(from_phone, lead) {
+  const dayOptions = readDayOptionsSnapshot(lead);
+  await sendSms(
+    from_phone,
+    "When works best for the crew? Tap a day:\n" + formatDayPickerMenu(dayOptions)
+  );
+}
+
+async function sendAfterDayWindowPrompt(from_phone) {
+  await sendSms(from_phone, "Pick an arrival window:\n1) Morning\n2) Afternoon");
 }
 
 function clearReferralTimeout(from_phone) {
@@ -678,40 +727,13 @@ async function handleConversation(payload) {
     }
 
     case STATES.AWAITING_POST_PAYMENT_REFERRAL: {
-      try {
-        const answer = String(body || "").trim();
-        if (/^skip$/i.test(answer)) {
-          await pool.query(
-            "UPDATE leads SET conv_state=$1, quote_status='BOOKING_SENT', last_seen_at=NOW() WHERE from_phone=$2",
-            [STATES.BOOKING_SENT, from_phone]
-          );
-          await sendWindowPickerPrompt(from_phone);
-          break;
-        }
-        if (!answer) {
-          await sendSms(
-            from_phone,
-            "You're confirmed! One quick question — were you referred by a real estate agent or property manager? If so, reply their name.\n\nOr reply SKIP to continue."
-          );
-          break;
-        }
-        await pool.query(
-          `UPDATE leads
-           SET referral_agent_name=$1,
-               lead_source='realtor_referral',
-               referral_partner='realtor_assist',
-               conv_state=$2,
-               quote_status='BOOKING_SENT',
-               last_seen_at=NOW()
-           WHERE from_phone=$3`,
-          [answer.slice(0, 140), STATES.BOOKING_SENT, from_phone]
-        );
-        await notifyReferralPartner(from_phone);
-        await sendWindowPickerPrompt(from_phone);
-      } catch (_) {
-        setState(from_phone, STATES.BOOKING_SENT);
-        await sendWindowPickerPrompt(from_phone);
-      }
+      console.warn(`[deprecated state] lead ${lead?.id || from_phone} in AWAITING_POST_PAYMENT_REFERRAL — migrating to BOOKING_SENT`);
+      await pool.query(
+        "UPDATE leads SET conv_state=$1, quote_status='BOOKING_SENT', last_seen_at=NOW() WHERE from_phone=$2",
+        [STATES.BOOKING_SENT, from_phone]
+      );
+      const migratedLead = await getLead.get(from_phone);
+      await sendDayPickerPrompt(from_phone, migratedLead || lead);
       break;
     }
 
@@ -1075,82 +1097,85 @@ async function handleConversation(payload) {
     }
 
     case STATES.BOOKING_SENT: {
-      let window=null;
-      for(const [key,val] of Object.entries(WINDOW_MAP)){if(bodyUpper.includes(key)){window=val;break;}}
-      if (!window) { await sendSms(from_phone,"Reply 1–5 for your arrival window:\n1) 8–10am\n2) 10am–12pm\n3) 12–2pm\n4) 2–4pm\n5) 4–6pm"); break; }
-      // Save window temporarily, ask for day
-      await pool.query('UPDATE leads SET timing_pref=$1,conv_state=$2,last_seen_at=NOW() WHERE from_phone=$3', [window,STATES.AWAITING_DAY,from_phone]);
-      logEvent(from_phone,"window_selected",{timing_pref:window});
-      // Build day options with 4hr buffer for same-day
-      const now = new Date();
-      const days = [];
-      const dayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-      const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-      // Window start hours
-      const windowStarts = {"8-10am":8,"10-12pm":10,"12-2pm":12,"2-4pm":14,"4-6pm":16};
-      const winStart = windowStarts[window] || 8;
-      for (let d=0; d<3; d++) {
-        const date = new Date(now);
-        date.setDate(now.getDate() + d);
-        if (d===0) {
-          // Same day: only show if window start is 4+ hours away
-          const hoursUntil = winStart - now.getHours();
-          if (hoursUntil < 4) continue;
-        }
-        const label = dayNames[date.getDay()] + " " + monthNames[date.getMonth()] + " " + date.getDate();
-        days.push(label);
+      const dayOptions = readDayOptionsSnapshot(lead);
+      const idx = Number.parseInt(String(body || "").trim(), 10) - 1;
+      if (!Number.isFinite(idx) || idx < 0 || idx >= dayOptions.length) {
+        await sendSms(from_phone, "Please reply 1, 2, or 3:\n\n" + formatDayPickerMenu(dayOptions));
+        break;
       }
-      // If same-day was skipped, add a 4th day
-      while (days.length < 3) {
-        const date = new Date(now);
-        date.setDate(now.getDate() + days.length + (days[0] && days[0].startsWith(dayNames[now.getDay()]) ? 0 : 1));
-        const label = dayNames[date.getDay()] + " " + monthNames[date.getMonth()] + " " + date.getDate();
-        if (!days.includes(label)) days.push(label);
-      }
-      const dayMenu = days.map((d,i) => (i+1) + ") " + d).join("\n");
-      await sendSms(from_phone, "Got it! What day works for you?\n\n" + dayMenu + "\n\nReply 1, 2, or 3.");
+      const chosenDay = dayOptions[idx];
+      await pool.query(
+        "UPDATE leads SET timing_pref=$1, conv_state=$2, quote_status='BOOKING_SENT', last_seen_at=NOW() WHERE from_phone=$3",
+        [chosenDay, STATES.AWAITING_DAY, from_phone]
+      );
+      logEvent(from_phone, "booking_day_selected", { selected_day: chosenDay, index: idx + 1, day_options: dayOptions });
+      await sendAfterDayWindowPrompt(from_phone);
       break;
     }
 
     case STATES.AWAITING_DAY: {
-      const dayChoice = body.trim();
-      const now2 = new Date();
-      const dayNames2 = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-      const monthNames2 = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-      const windowStarts2 = {"8-10am":8,"10-12pm":10,"12-2pm":12,"2-4pm":14,"4-6pm":16};
-      const savedWindow = lead && lead.timing_pref ? lead.timing_pref : "";
-      const winStart2 = windowStarts2[savedWindow] || 8;
-      const availDays = [];
-      for (let d=0; d<3; d++) {
-        const date = new Date(now2);
-        date.setDate(now2.getDate() + d);
-        if (d===0) { if ((winStart2 - now2.getHours()) < 4) continue; }
-        availDays.push(dayNames2[date.getDay()] + " " + monthNames2[date.getMonth()] + " " + date.getDate());
+      let selectedWindow = null;
+      for (const [key, val] of Object.entries(AFTER_DAY_WINDOW_MAP)) {
+        if (bodyUpper.includes(key)) { selectedWindow = val; break; }
       }
-      while (availDays.length < 3) {
-        const date = new Date(now2);
-        date.setDate(now2.getDate() + availDays.length + 1);
-        const label = dayNames2[date.getDay()] + " " + monthNames2[date.getMonth()] + " " + date.getDate();
-        if (!availDays.includes(label)) availDays.push(label);
-      }
-      const idx = parseInt(dayChoice) - 1;
-      if (isNaN(idx) || idx < 0 || idx >= availDays.length) {
-        const dayMenu2 = availDays.map((d,i) => (i+1) + ") " + d).join("\n");
-        await sendSms(from_phone, "Please reply 1, 2, or 3:\n\n" + dayMenu2);
+      if (!selectedWindow) {
+        await sendAfterDayWindowPrompt(from_phone);
         break;
       }
-      const chosenDay = availDays[idx];
-      const fullTiming = chosenDay + ", " + savedWindow;
-      await pool.query('UPDATE leads SET timing_pref=$1,conv_state=$2,last_seen_at=NOW() WHERE from_phone=$3', [fullTiming,STATES.WINDOW_SELECTED,from_phone]);
-      logEvent(from_phone,"day_selected",{timing_pref:fullTiming});
+      const chosenDay = String(lead?.timing_pref || "").trim() || "your selected day";
+      const fullTiming = chosenDay + ", " + selectedWindow;
+      await pool.query(
+        "UPDATE leads SET timing_pref=$1, conv_state=$2, quote_status='BOOKING_SENT', last_seen_at=NOW() WHERE from_phone=$3",
+        [fullTiming, STATES.AWAITING_POST_BOOKING_REFERRAL, from_phone]
+      );
+      logEvent(from_phone,"window_selected_after_day",{timing_pref:fullTiming});
       const updatedLead = (await pool.query('SELECT * FROM leads WHERE from_phone=$1',[from_phone])).rows[0];
       createJobEvent(updatedLead).catch(e=>console.error('[calendar] event error:',e));
-      await sendSms(from_phone, "Locked in! ✅ ICL Junk Removal arrives " + fullTiming + ".\n\nWe'll text you when we're on our way. Questions? Reply HELP anytime.");
+      await sendSms(
+        from_phone,
+        "Booked — " + fullTiming + " window.\n\n" +
+        "One last thing — were you referred by an agent? Reply their name or SKIP."
+      );
       break;
     }
 
     case STATES.WINDOW_SELECTED: {
       await sendSms(from_phone,`You're all set — ${lead&&lead.timing_pref?lead.timing_pref:"arrival confirmed"}. Reply HELP if anything changes.`);
+      break;
+    }
+
+    case STATES.AWAITING_POST_BOOKING_REFERRAL: {
+      const answer = String(body || "").trim();
+      const formattedDay = String(lead?.timing_pref || "").split(",")[0]?.trim() || "your scheduled day";
+      const isSkip = /^skip$/i.test(answer) || /^no$/i.test(answer) || /^none$/i.test(answer);
+
+      if (isSkip) {
+        await pool.query(
+          "UPDATE leads SET conv_state=$1, quote_status='BOOKING_CONFIRMED', last_seen_at=NOW() WHERE from_phone=$2",
+          [STATES.WINDOW_SELECTED, from_phone]
+        );
+        await sendSms(from_phone, `All set. We'll see you on ${formattedDay}.`);
+        break;
+      }
+
+      if (!answer) {
+        await sendSms(from_phone, "Reply their name, or SKIP if there was no referral.");
+        break;
+      }
+
+      await pool.query(
+        `UPDATE leads
+         SET referral_agent_name=$1,
+             lead_source='realtor_referral',
+             referral_partner='realtor_assist',
+             conv_state=$2,
+             quote_status='BOOKING_CONFIRMED',
+             last_seen_at=NOW()
+         WHERE from_phone=$3`,
+        [answer.slice(0, 140), STATES.WINDOW_SELECTED, from_phone]
+      );
+      await notifyReferralPartner(from_phone);
+      await sendSms(from_phone, `Got it — we'll make sure ${answer.slice(0, 140)} gets credit. See you on ${formattedDay}.`);
       break;
     }
 

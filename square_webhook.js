@@ -37,6 +37,29 @@ function buildBookingConfirmedSms(paymentKind) {
     : "Deposit received ✅ Your spot is locked in!";
 }
 
+function buildDayOptions(now = new Date()) {
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const options = [];
+  for (let i = 0; i < 3; i++) {
+    const d = new Date(now);
+    d.setDate(now.getDate() + i);
+    options.push(`${dayNames[d.getDay()]} ${monthNames[d.getMonth()]} ${d.getDate()}`);
+  }
+  return options;
+}
+
+function buildDepositDayPickerSms(paymentKind, dayOptions) {
+  const headline = buildBookingConfirmedSms(paymentKind);
+  return (
+    `${headline}\n\n` +
+    `When works best for the crew? Tap a day:\n` +
+    `1) ${dayOptions[0]}\n` +
+    `2) ${dayOptions[1]}\n` +
+    `3) ${dayOptions[2]}`
+  );
+}
+
 function clearPostPaymentReferralTimeout(from_phone) {
   const key = String(from_phone || "");
   const timer = postPaymentReferralTimers.get(key);
@@ -189,40 +212,29 @@ async function processDepositCompletion(lead, opts = {}) {
     });
   } catch {}
 
-  const shouldAskPostPaymentReferral = !isReferralLead;
-  let sms = null;
-  if (shouldAskPostPaymentReferral) {
-    await sendSms(from_phone, buildBookingConfirmedSms(paymentKind));
-    try {
-      const vcardMms = await sendContactCardMms(from_phone);
-      insertEvent.run({
-        from_phone,
-        event_type: "sms_sent_contact_vcard",
-        payload_json: JSON.stringify({ sid: vcardMms?.sid || null }),
-        created_at: new Date().toISOString(),
-      });
-    } catch (vcardErr) {
-      console.error("[square_webhook] contact vcard MMS failed:", vcardErr?.message || vcardErr);
-    }
-    sms = await sendSms(
+  const dayOptions = buildDayOptions(new Date());
+  await pool.query(
+    `UPDATE leads
+     SET day_options_snapshot=$2,
+         day_options_snapshot_at=NOW(),
+         quote_status='BOOKING_SENT',
+         conv_state='BOOKING_SENT',
+         last_seen_at=NOW()
+     WHERE from_phone=$1`,
+    [from_phone, JSON.stringify(dayOptions)]
+  );
+
+  const sms = await sendSms(from_phone, buildDepositDayPickerSms(paymentKind, dayOptions));
+  try {
+    const vcardMms = await sendContactCardMms(from_phone);
+    insertEvent.run({
       from_phone,
-      "You're confirmed! One quick question — were you referred by\na real estate agent or property manager? If so, reply their\nname so we can make sure they get credit.\n\nOr reply SKIP to continue."
-    );
-    console.log("[square_webhook] post-payment referral prompt sent to:", from_phone);
-  } else {
-    sms = await sendSms(from_phone, buildWindowPickerSms(paymentKind));
-    console.log("[square_webhook] window picker sent to:", from_phone);
-    try {
-      const vcardMms = await sendContactCardMms(from_phone);
-      insertEvent.run({
-        from_phone,
-        event_type: "sms_sent_contact_vcard",
-        payload_json: JSON.stringify({ sid: vcardMms?.sid || null }),
-        created_at: new Date().toISOString(),
-      });
-    } catch (vcardErr) {
-      console.error("[square_webhook] contact vcard MMS failed:", vcardErr?.message || vcardErr);
-    }
+      event_type: "sms_sent_contact_vcard",
+      payload_json: JSON.stringify({ sid: vcardMms?.sid || null }),
+      created_at: new Date().toISOString(),
+    });
+  } catch (vcardErr) {
+    console.error("[square_webhook] contact vcard MMS failed:", vcardErr?.message || vcardErr);
   }
 
   const leadForBrief = { ...(await loadLeadByPhone(from_phone) || lead) };
@@ -230,17 +242,12 @@ async function processDepositCompletion(lead, opts = {}) {
   sendCrewBrief(leadForBrief).catch(()=>{});
   processSalvage(leadForBrief).catch(()=>{});
 
-  await pool.query(
-    "UPDATE leads SET quote_status='BOOKING_SENT', conv_state=$2, last_seen_at=NOW() WHERE from_phone=$1",
-    [from_phone, shouldAskPostPaymentReferral ? "AWAITING_POST_PAYMENT_REFERRAL" : "BOOKING_SENT"]
-  );
-  if (shouldAskPostPaymentReferral) schedulePostPaymentReferralTimeout(from_phone);
-  else clearPostPaymentReferralTimeout(from_phone);
+  clearPostPaymentReferralTimeout(from_phone);
 
   try {
     insertEvent.run({
       from_phone,
-      event_type: shouldAskPostPaymentReferral ? "sms_sent_post_payment_referral" : "sms_sent_window_picker",
+      event_type: "sms_sent_day_picker",
       payload_json: JSON.stringify({ twilio: sms, payment_kind: paymentKind, is_test_payment: isTest }),
       created_at: new Date().toISOString(),
     });
@@ -252,7 +259,8 @@ async function processDepositCompletion(lead, opts = {}) {
     payment_kind: paymentKind,
     amount_cents: resolvedAmountCents,
     is_test_payment: isTest,
-    next_state: shouldAskPostPaymentReferral ? "AWAITING_POST_PAYMENT_REFERRAL" : "BOOKING_SENT",
+    day_options: dayOptions,
+    next_state: "BOOKING_SENT",
   };
 }
 
