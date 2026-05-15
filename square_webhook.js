@@ -7,6 +7,8 @@ const { sendSms } = require("./twilio_sms");
 const { recordSettledRevenue } = require("./finance_pipeline");
 
 const SQUARE_WEBHOOK_SIGNATURE_KEY = process.env.SQUARE_WEBHOOK_SIGNATURE_KEY || "";
+const POST_PAYMENT_REFERRAL_TIMEOUT_MS = 10 * 60 * 1000;
+const postPaymentReferralTimers = new Map();
 
 function verifySquareSignature(body, signature, url) {
   if (!SQUARE_WEBHOOK_SIGNATURE_KEY) return true; // skip in dev
@@ -25,6 +27,47 @@ function buildWindowPickerSms(paymentKind) {
     headline +
     "\n\nReply with your arrival window:\n1) 8–10am\n2) 10am–12pm\n3) 12–2pm\n4) 2–4pm\n5) 4–6pm"
   );
+}
+
+function buildBookingConfirmedSms(paymentKind) {
+  return paymentKind === "upfront"
+    ? "Payment received ✅ Your upfront booking is locked in!"
+    : "Deposit received ✅ Your spot is locked in!";
+}
+
+function clearPostPaymentReferralTimeout(from_phone) {
+  const key = String(from_phone || "");
+  const timer = postPaymentReferralTimers.get(key);
+  if (timer) clearTimeout(timer);
+  postPaymentReferralTimers.delete(key);
+}
+
+function schedulePostPaymentReferralTimeout(from_phone) {
+  clearPostPaymentReferralTimeout(from_phone);
+  const key = String(from_phone || "");
+  const timer = setTimeout(async () => {
+    try {
+      const leadRes = await pool.query("SELECT conv_state FROM leads WHERE from_phone=$1", [from_phone]);
+      const state = String(leadRes.rows[0]?.conv_state || "");
+      if (state !== "AWAITING_POST_PAYMENT_REFERRAL") return;
+      await pool.query(
+        "UPDATE leads SET conv_state='BOOKING_SENT', quote_status='BOOKING_SENT', last_seen_at=NOW() WHERE from_phone=$1",
+        [from_phone]
+      );
+      await sendSms(
+        from_phone,
+        "Reply with your arrival window:\n1) 8–10am\n2) 10am–12pm\n3) 12–2pm\n4) 2–4pm\n5) 4–6pm"
+      );
+      insertEvent.run({
+        from_phone,
+        event_type: "post_payment_referral_timeout_to_booking",
+        payload_json: JSON.stringify({ from_phone }),
+        created_at: new Date().toISOString(),
+      });
+    } catch (_) {}
+    clearPostPaymentReferralTimeout(from_phone);
+  }, POST_PAYMENT_REFERRAL_TIMEOUT_MS);
+  postPaymentReferralTimers.set(key, timer);
 }
 
 function phoneDigits(v) {
@@ -214,24 +257,36 @@ async function handleSquareWebhook(req, res) {
       });
     } catch {}
 
-    // Send window picker SMS
-    const sms = await sendSms(lead.from_phone, buildWindowPickerSms(paymentKind));
-    console.log("[square_webhook] window picker sent to:", lead.from_phone);
+    const shouldAskPostPaymentReferral = !isReferralLead;
+    let sms = null;
+    if (shouldAskPostPaymentReferral) {
+      await sendSms(lead.from_phone, buildBookingConfirmedSms(paymentKind));
+      sms = await sendSms(
+        lead.from_phone,
+        "You're confirmed! One quick question — were you referred by\na real estate agent or property manager? If so, reply their\nname so we can make sure they get credit.\n\nOr reply SKIP to continue."
+      );
+      console.log("[square_webhook] post-payment referral prompt sent to:", lead.from_phone);
+    } else {
+      sms = await sendSms(lead.from_phone, buildWindowPickerSms(paymentKind));
+      console.log("[square_webhook] window picker sent to:", lead.from_phone);
+    }
     const leadForBrief = { ...lead };
     if (isReferralLead) leadForBrief.aerial_media_requested = 1;
     sendCrewBrief(leadForBrief).catch(()=>{});
     processSalvage(lead).catch(()=>{});
 
     await pool.query(
-      "UPDATE leads SET quote_status='BOOKING_SENT', conv_state='BOOKING_SENT', last_seen_at=NOW() WHERE from_phone=$1",
-      [lead.from_phone]
+      "UPDATE leads SET quote_status='BOOKING_SENT', conv_state=$2, last_seen_at=NOW() WHERE from_phone=$1",
+      [lead.from_phone, shouldAskPostPaymentReferral ? "AWAITING_POST_PAYMENT_REFERRAL" : "BOOKING_SENT"]
     );
+    if (shouldAskPostPaymentReferral) schedulePostPaymentReferralTimeout(lead.from_phone);
+    else clearPostPaymentReferralTimeout(lead.from_phone);
 
     try {
       insertEvent.run({
         from_phone: lead.from_phone,
-        event_type: "sms_sent_window_picker",
-        payload_json: JSON.stringify({ twilio: sms }),
+        event_type: shouldAskPostPaymentReferral ? "sms_sent_post_payment_referral" : "sms_sent_window_picker",
+        payload_json: JSON.stringify({ twilio: sms, payment_kind: paymentKind }),
         created_at: new Date().toISOString(),
       });
     } catch {}

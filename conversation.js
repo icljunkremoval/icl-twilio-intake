@@ -44,6 +44,7 @@ const CONTACT_CARD_URL = `${APP_BASE_URL}/contact.vcf`;
 const REFERRAL_TIMEOUT_MS = 10 * 60 * 1000;
 const SCOPE_TRIAGE_TIMEOUT_MS = 15 * 60 * 1000;
 const ADDON_OFFER_TIMEOUT_MS = 15 * 60 * 1000;
+const POST_PAYMENT_REFERRAL_TIMEOUT_MS = 10 * 60 * 1000;
 const SCOPE_TRIAGE_PROMPT =
   "To get you the most accurate quote — which best describes your job?\n\n" +
   "1) Full home or estate clearout\n" +
@@ -95,6 +96,13 @@ async function sendPhotoPrompt(from_phone) {
   await sendSms(
     from_phone,
     "Perfect — send us up to 10 photos of what you need removed. Different angles help us give you the most accurate quote."
+  );
+}
+
+async function sendWindowPickerPrompt(from_phone) {
+  await sendSms(
+    from_phone,
+    "Reply with your arrival window:\n1) 8–10am\n2) 10am–12pm\n3) 12–2pm\n4) 2–4pm\n5) 4–6pm"
   );
 }
 
@@ -609,6 +617,44 @@ async function handleConversation(payload) {
       } catch (_) {
         setState(from_phone, STATES.AWAITING_MEDIA);
         await sendPhotoPrompt(from_phone);
+      }
+      break;
+    }
+
+    case STATES.AWAITING_POST_PAYMENT_REFERRAL: {
+      try {
+        const answer = String(body || "").trim();
+        if (/^skip$/i.test(answer)) {
+          await pool.query(
+            "UPDATE leads SET conv_state=$1, quote_status='BOOKING_SENT', last_seen_at=NOW() WHERE from_phone=$2",
+            [STATES.BOOKING_SENT, from_phone]
+          );
+          await sendWindowPickerPrompt(from_phone);
+          break;
+        }
+        if (!answer) {
+          await sendSms(
+            from_phone,
+            "You're confirmed! One quick question — were you referred by a real estate agent or property manager? If so, reply their name.\n\nOr reply SKIP to continue."
+          );
+          break;
+        }
+        await pool.query(
+          `UPDATE leads
+           SET referral_agent_name=$1,
+               lead_source='realtor_referral',
+               referral_partner='realtor_assist',
+               conv_state=$2,
+               quote_status='BOOKING_SENT',
+               last_seen_at=NOW()
+           WHERE from_phone=$3`,
+          [answer.slice(0, 140), STATES.BOOKING_SENT, from_phone]
+        );
+        await notifyReferralPartner(from_phone);
+        await sendWindowPickerPrompt(from_phone);
+      } catch (_) {
+        setState(from_phone, STATES.BOOKING_SENT);
+        await sendWindowPickerPrompt(from_phone);
       }
       break;
     }
