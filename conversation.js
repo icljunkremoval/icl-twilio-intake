@@ -71,6 +71,20 @@ const REALTOR_ADDON_CODE_MAP = {
 };
 const referralTimers = new Map();
 const scopeTriageTimers = new Map();
+const OPS_PHONE = String(process.env.OPS_PHONE || process.env.OPS_ALERT_PHONE || "+12138806318").trim();
+const ESCALATION_KEYWORDS = [
+  "condemned", "biohazard", "hoarder", "hoarding",
+  "fire damage", "flood damage", "mold", "asbestos",
+  "whole house", "entire house", "everything in the house",
+  "probate", "inherited", "passed away", "deceased",
+  "speak to someone", "talk to someone", "call me", "need to talk"
+];
+const ESCALATION_CUSTOMER_MESSAGE =
+  "Got it — thank you for reaching out to ICL. We've received your\n" +
+  "information and someone from our team will be in touch shortly\n" +
+  "to walk you through your options. Feel free to send any photos\n" +
+  "of the space in the meantime — it helps us get you the most\n" +
+  "accurate quote possible.";
 
 function getConvState(lead) { return (lead && lead.conv_state) || STATES.NEW; }
 
@@ -151,6 +165,40 @@ function scheduleReferralTimeout(from_phone) {
     clearReferralTimeout(from_phone);
   }, REFERRAL_TIMEOUT_MS);
   referralTimers.set(key, timer);
+}
+
+function detectEscalationKeywordReason(bodyLower) {
+  const txt = String(bodyLower || "");
+  for (const kw of ESCALATION_KEYWORDS) {
+    if (txt.includes(kw)) return `keyword:${kw}`;
+  }
+  return null;
+}
+
+async function escalateLead(from_phone, reason, leadMaybe) {
+  try {
+    const lead = leadMaybe || (await getLead.get(from_phone));
+    await pool.query(
+      "UPDATE leads SET conv_state=$1, escalation_reason=$2, last_seen_at=NOW() WHERE from_phone=$3",
+      [STATES.ESCALATED, reason, from_phone]
+    );
+    await sendSms(from_phone, ESCALATION_CUSTOMER_MESSAGE);
+    const scope = String(lead?.job_scope || "unknown");
+    const address = String(lead?.address_text || "pending");
+    await sendSms(
+      OPS_PHONE,
+      "ICL Escalation\n" +
+      "Scope: " + scope + "\n" +
+      "Phone: " + from_phone + "\n" +
+      "Reason: " + reason + "\n" +
+      "Address: " + address + "\n" +
+      "Call now."
+    );
+    logEvent(from_phone, "escalation_triggered", { reason, scope, address });
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 function formatAddonSelections(addons) {
@@ -237,12 +285,7 @@ async function maybeAutoQuoteFromVision(from_phone, reason = "vision_high_confid
   const { bucket, confidence } = readVisionLoad(lead);
   const normalizedConfidence = normalizeVisionConfidence(confidence);
   if (!bucket || normalizedConfidence === "NONE") {
-    setState(from_phone, STATES.ESCALATED);
-    logEvent(from_phone, "vision_confidence_none_escalated", { bucket, confidence: normalizedConfidence, reason });
-    await sendSms(
-      from_phone,
-      "Thanks for reaching out — we need a specialist to review this one. A team member will contact you shortly."
-    );
+    await escalateLead(from_phone, "vision_confidence_none_after_retry", lead);
     return false;
   }
   if (normalizedConfidence === "LOW") {
@@ -358,6 +401,7 @@ async function handleConversation(payload) {
     if (u) allMediaUrls.push(u);
   }
   const bodyUpper = body.toUpperCase();
+  const bodyLower = body.toLowerCase();
 
   try { upsertLead.run({from_phone,to_phone,ts:new Date().toISOString(),last_event:"message",last_body:body,num_media:numMedia,media_url0:mediaUrl||null}); } catch(e){}
   // Alert ops on first contact
@@ -371,6 +415,14 @@ async function handleConversation(payload) {
 
   const lead = await getLead.get(from_phone);
   const state = getConvState(lead);
+
+  if (state !== STATES.ESCALATED) {
+    const escalationReason = detectEscalationKeywordReason(bodyLower);
+    if (escalationReason) {
+      const escalated = await escalateLead(from_phone, escalationReason, lead);
+      if (escalated) return;
+    }
+  }
 
   if (bodyUpper==="URGENT") { logEvent(from_phone,"urgent_flag",{body}); await sendSms(from_phone,"Got it — flagged URGENT. We'll prioritize your job."); return; }
   if (bodyUpper==="HELP") {
@@ -604,9 +656,12 @@ async function handleConversation(payload) {
     case STATES.AWAITING_HAZMAT: {
       if (numMedia>0||mediaUrl) { if(allMediaUrls.length>0) runVisionAsync(from_phone,allMediaUrls[0],allMediaUrls); await sendSms(from_phone,"Got your photos! Any paint, chemicals, fuel, batteries, asbestos, or medical waste?\n\nReply YES or NO"); break; }
       if (bodyUpper==="YES") {
-        logEvent(from_phone,"hazmat_yes",{body}); setState(from_phone,STATES.ESCALATED);
-        await sendSms(from_phone,"Thanks for the heads up — restricted materials need special handling. A team member will reach out to discuss options.");
-        await sendSms("+12138806318", "🚨 HAZMAT LEAD\nPhone: "+from_phone+"\nAddress: "+(lead&&lead.address_text||"not yet provided")+"\nCall them back ASAP.");
+        logEvent(from_phone,"hazmat_yes",{body});
+        const escalated = await escalateLead(from_phone, "hazmat_confirmed_yes", lead);
+        if (!escalated) {
+          setState(from_phone,STATES.ESCALATED);
+          await sendSms(from_phone,"Thanks for the heads up — restricted materials need special handling. A team member will reach out to discuss options.");
+        }
       } else if (bodyUpper.startsWith("NO")||bodyUpper==="N") {
         logEvent(from_phone,"hazmat_no",{body}); setState(from_phone,STATES.AWAITING_ADDRESS);
         await sendSms(from_phone,"What's the service address? Cross streets + ZIP works too.");

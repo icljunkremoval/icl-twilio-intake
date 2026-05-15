@@ -6,6 +6,13 @@ const { lookupSqftByAddress } = require("./property_sqft");
 
 const DEPOSIT_CENTS = 5000;
 const UPFRONT_DISCOUNT_PCT = 10;
+const OPS_PHONE = String(process.env.OPS_PHONE || process.env.OPS_ALERT_PHONE || "+12138806318").trim();
+const ESCALATION_CUSTOMER_MESSAGE =
+  "Got it — thank you for reaching out to ICL. We've received your\n" +
+  "information and someone from our team will be in touch shortly\n" +
+  "to walk you through your options. Feel free to send any photos\n" +
+  "of the space in the meantime — it helps us get you the most\n" +
+  "accurate quote possible.";
 
 function buildQuoteSms(lead, pricing, payment) {
   const bucket = pricing.bucket;
@@ -120,6 +127,42 @@ function chooseBucket(lead) {
   );
 }
 
+function visionConfidenceFromLead(lead) {
+  try {
+    const vision = typeof lead?.vision_analysis === "string" ? JSON.parse(lead.vision_analysis || "{}") : (lead?.vision_analysis || {});
+    const conf = String(vision?.load_confidence || "").toUpperCase().trim();
+    if (conf === "HIGH" || conf === "MEDIUM" || conf === "LOW") return conf;
+  } catch (_) {}
+  return "NONE";
+}
+
+async function escalateQuoteFlow(from_phone, lead, reason) {
+  try {
+    await pool.query(
+      "UPDATE leads SET conv_state='ESCALATED', quote_status='ESCALATED', escalation_reason=$1, last_seen_at=NOW() WHERE from_phone=$2",
+      [reason, from_phone]
+    );
+    await sendSms(from_phone, ESCALATION_CUSTOMER_MESSAGE);
+    await sendSms(
+      OPS_PHONE,
+      "ICL Escalation\n" +
+      "Scope: " + String(lead?.job_scope || "unknown") + "\n" +
+      "Phone: " + from_phone + "\n" +
+      "Reason: " + reason + "\n" +
+      "Address: " + String(lead?.address_text || "pending") + "\n" +
+      "Call now."
+    );
+    try {
+      insertEvent.run({
+        from_phone,
+        event_type: "escalation_triggered",
+        payload_json: JSON.stringify({ reason, source: "quote_worker" }),
+        created_at: new Date().toISOString(),
+      });
+    } catch (_) {}
+  } catch (_) {}
+}
+
 async function maybeCreateQuote(from_phone) {
   const lead0 = await getLead(from_phone);
   if (!lead0) return { ok: false, reason: "no_lead" };
@@ -145,6 +188,7 @@ async function maybeCreateQuote(from_phone) {
 
     if (String(lead?.job_scope || "") === "full_home") {
       pricingPath = "full_home_fallback";
+      let rentcastOk = false;
       try {
         const lookup = await lookupSqftByAddress({
           address: lead?.address_text,
@@ -155,8 +199,14 @@ async function maybeCreateQuote(from_phone) {
           rentcastSqft = Math.round(Number(lookup.sqft));
           baseQuoteCents = Math.max(124700, Math.round(rentcastSqft * 85));
           pricingPath = "full_home_rentcast";
+          rentcastOk = true;
         }
       } catch (_) {}
+      const confidence = visionConfidenceFromLead(lead);
+      if (!rentcastOk && confidence !== "HIGH") {
+        await escalateQuoteFlow(from_phone, lead, "full_home_rentcast_failed_non_high_confidence");
+        return { ok: true, changed: true, reason: "escalated_full_home_rentcast_failure" };
+      }
     } else if (String(lead?.job_scope || "") === "room_garage") {
       pricingPath = "room_garage";
       if (selectedBucket === "3Q" || selectedBucket === "FULL") softFlag = 1;
