@@ -188,6 +188,7 @@ async function initDb() {
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_action_sent_count INTEGER DEFAULT 0",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_action_last_kind TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_action_last_error TEXT",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS review_requested_at TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS archived_at TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS archived_reason TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_source TEXT DEFAULT 'sms'",

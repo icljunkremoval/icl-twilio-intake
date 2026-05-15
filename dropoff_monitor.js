@@ -69,4 +69,56 @@ async function checkDropoffs() {
   }
 }
 
-module.exports = { checkDropoffs };
+function parseJobEndTime(timingPref) {
+  try {
+    const raw = String(timingPref || "");
+    const match = raw.match(/(\w+\s+\w+\s+\d+),\s*\d+(?:am|pm)-(\d+)(am|pm)/i);
+    if (!match) return null;
+    const [, dateStr, endHour, endAmPm] = match;
+    const year = new Date().getFullYear();
+    const base = new Date(`${dateStr} ${year}`);
+    let hour = parseInt(endHour, 10);
+    if (endAmPm.toLowerCase() === "pm" && hour !== 12) hour += 12;
+    if (endAmPm.toLowerCase() === "am" && hour === 12) hour = 0;
+    base.setHours(hour, 0, 0, 0);
+    return base;
+  } catch {
+    return null;
+  }
+}
+
+async function checkPostJobReviews() {
+  try {
+    const reviewLink = process.env.GOOGLE_REVIEW_LINK || "https://g.page/r/CchfNXDhqlYIEAI/review";
+    const result = await pool.query(
+      `SELECT from_phone, timing_pref
+       FROM leads
+       WHERE deposit_paid = 1
+         AND timing_pref IS NOT NULL
+         AND review_requested_at IS NULL
+         AND archived_at IS NULL`
+    );
+    for (const lead of result.rows) {
+      try {
+        const endTime = parseJobEndTime(lead.timing_pref);
+        if (!endTime) continue;
+        const twoHoursAfter = new Date(endTime.getTime() + 2 * 60 * 60 * 1000);
+        if (new Date() < twoHoursAfter) continue;
+        await sendSms(
+          lead.from_phone,
+          "One last thing — ICL is growing and we want to reach more people who need us. Your honest account of today's experience is one of the most powerful ways that happens.\n\n" +
+          "Would you take 60 seconds? It genuinely makes a difference:\n" +
+          reviewLink
+        );
+        await pool.query("UPDATE leads SET review_requested_at=NOW()::text WHERE from_phone=$1", [lead.from_phone]);
+        console.log(`[review] Sent to ${lead.from_phone}`);
+      } catch (e) {
+        console.error(`[review] Error for ${lead.from_phone}:`, e.message);
+      }
+    }
+  } catch (e) {
+    console.error("[review] checkPostJobReviews error:", e.message);
+  }
+}
+
+module.exports = { checkDropoffs, checkPostJobReviews };

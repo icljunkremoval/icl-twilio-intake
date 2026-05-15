@@ -1,4 +1,4 @@
-const { checkDropoffs } = require("./dropoff_monitor");
+const { checkDropoffs, checkPostJobReviews } = require("./dropoff_monitor");
 const { handleOpsReply } = require("./job_complete");
 const { handleSquareWebhook } = require("./square_webhook");
 const { fetchLatest } = require("./twilio_debug");
@@ -1940,6 +1940,8 @@ app.get("/admin/lead/:from", async (req, res) => {
 
 setInterval(() => checkDropoffs().catch(e => console.error('[dropoff]', e.message)), 30*60*1000);
 setTimeout(() => checkDropoffs().catch(()=>{}), 60*1000);
+setInterval(() => checkPostJobReviews().catch(e => console.error('[review]', e.message)), 30 * 60 * 1000);
+setTimeout(() => checkPostJobReviews().catch(() => {}), 90 * 1000);
 setInterval(() => fireNextBestActionAutomation().catch(e => console.error("[next_action_auto]", e?.message || e)), 10 * 60 * 1000);
 setTimeout(() => fireNextBestActionAutomation().catch(() => {}), 90 * 1000);
 setTimeout(() => {
