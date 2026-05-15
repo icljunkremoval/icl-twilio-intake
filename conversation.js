@@ -47,6 +47,13 @@ const REALTOR_ADDON_SELECTION_PROMPT =
   "3) Paint Touch-Ups $175\n" +
   "4) Minor Repairs (on-site quote)\n\n" +
   "Example: reply 1 2 to add both";
+const REALTOR_ADDON_OFFER_PROMPT =
+  "One more thing — since this is a pre-listing property, we also offer:\n\n" +
+  "🧹 Deep Clean — $150\n" +
+  "🚿 Pressure Wash — $125\n" +
+  "🎨 Paint Touch-Ups — $175\n" +
+  "🔧 Minor Repairs — quote on-site\n\n" +
+  "Reply ADD to include any of these, or SKIP to proceed with your quote.";
 const REALTOR_ADDON_CODE_MAP = {
   1: { code: "DEEP_CLEAN", label: "Deep Clean" },
   2: { code: "PRESSURE_WASH", label: "Pressure Wash" },
@@ -188,6 +195,21 @@ async function maybeAutoQuoteFromVision(from_phone, reason = "vision_high_confid
 }
 
 async function triggerQuote(from_phone) {
+  try {
+    const lead = await getLead.get(from_phone);
+    const isRealtorReferral = String(lead?.lead_source || "") === "realtor_referral";
+    const hasAddonDecision = lead?.prelisting_addons !== null && lead?.prelisting_addons !== undefined && String(lead.prelisting_addons) !== "";
+    if (isRealtorReferral && !hasAddonDecision) {
+      await pool.query(
+        "UPDATE leads SET conv_state=$1, quote_status='READY', quote_ready=1, last_seen_at=NOW() WHERE from_phone=$2",
+        [STATES.AWAITING_ADDON_SELECTION, from_phone]
+      );
+      await sendSms(from_phone, REALTOR_ADDON_OFFER_PROMPT);
+      return;
+    }
+  } catch (_) {
+    // fallback to normal quote path
+  }
   await sendSms(from_phone, "Your quote and booking options are ready shortly. Thank you for your patience.");
   try { await recomputeDerived(from_phone); } catch (e) {}
   setTimeout(async () => { try { const r = await maybeCreateQuote(from_phone); if (!r.ok) logEvent(from_phone, "quote_trigger_failed", r); }
@@ -309,15 +331,14 @@ async function handleConversation(payload) {
       try {
         const bodyLower = String(body || "").trim().toLowerCase();
         const isYes = [
-          "yes", "yeah", "yep", "yup", "yea", "sure", "absolutely",
-          "correct", "affirmative", "referred by", "sent by", "my agent",
-          "my realtor", "from my", "through my"
+          "yes","yeah","yep","yup","yea","sure","absolutely",
+          "correct","referred by","my agent","my realtor","through my"
         ].some((word) => bodyLower.includes(word));
         const isNo = [
-          "no", "nope", "nah", "not really", "no one", "nobody",
-          "direct", "myself", "found you", "google", "saw your",
-          "just found", "online", "instagram", "facebook"
+          "no","nope","nah","not really","nobody","direct",
+          "myself","found you","google","online","facebook","instagram"
         ].some((word) => bodyLower.includes(word));
+        console.log('[referral] body:', bodyLower, 'isYes:', isYes, 'isNo:', isNo);
 
         if (isYes) {
           await pool.query(
@@ -332,7 +353,7 @@ async function handleConversation(payload) {
           clearReferralTimeout(from_phone);
           await notifyReferralPartner(from_phone);
           await sendSms(from_phone, "Got it — what's the agent's name or brokerage? (You can skip this by replying SKIP)");
-          break;
+          return;
         }
 
         if (isNo || bodyUpper === "SKIP") {
@@ -524,12 +545,11 @@ async function handleConversation(payload) {
     case STATES.AWAITING_DEPOSIT: {
       const isRealtorLead = String(lead?.lead_source || "") === "realtor_referral";
       if (isRealtorLead && bodyUpper === "ADD") {
-        setState(from_phone, STATES.AWAITING_ADDON_SELECTION);
-        await sendSms(from_phone, REALTOR_ADDON_SELECTION_PROMPT);
+        await sendSms(from_phone, "Your current payment links are already set. We can still add extras on-site if needed.");
         break;
       }
       if (isRealtorLead && bodyUpper === "SKIP") {
-        await sendSms(from_phone, "Perfect — we'll proceed with your current quote. Reply RESEND if you need your checkout links again.");
+        await sendSms(from_phone, "Perfect — you're all set with the current quote. Reply RESEND if you need your checkout links again.");
         break;
       }
       let loadBucket=null;
@@ -550,15 +570,38 @@ async function handleConversation(payload) {
 
     case STATES.AWAITING_ADDON_SELECTION: {
       try {
+        if (bodyUpper === "ADD") {
+          await sendSms(from_phone, REALTOR_ADDON_SELECTION_PROMPT);
+          break;
+        }
         if (bodyUpper === "SKIP") {
-          setState(from_phone, STATES.AWAITING_DEPOSIT);
-          await sendSms(from_phone, "No problem — we’ll keep your current quote. Reply RESEND if you need the payment links again.");
+          await pool.query(
+            `UPDATE leads
+             SET prelisting_addons=$1,
+                 prelisting_addon_total_cents=0,
+                 conv_state=$2,
+                 quote_status='READY',
+                 quote_ready=1,
+                 square_payment_link_id=NULL,
+                 square_payment_link_url=NULL,
+                 square_order_id=NULL,
+                 square_upfront_payment_link_id=NULL,
+                 square_upfront_payment_link_url=NULL,
+                 square_upfront_order_id=NULL,
+                 quote_total_cents=NULL,
+                 upfront_total_cents=NULL,
+                 upfront_discount_pct=NULL,
+                 last_seen_at=NOW()
+             WHERE from_phone=$3`,
+            [JSON.stringify([]), STATES.QUOTE_READY, from_phone]
+          );
+          await triggerQuote(from_phone);
           break;
         }
         const matches = (body.match(/\b[1-4]\b/g) || []).map((v) => Number(v));
         const unique = [...new Set(matches)].filter((n) => REALTOR_ADDON_CODE_MAP[n]);
         if (!unique.length) {
-          await sendSms(from_phone, "Reply with the number(s) you want to add, or SKIP.\n\n" + REALTOR_ADDON_SELECTION_PROMPT);
+          await sendSms(from_phone, "Reply ADD to choose services, or SKIP to continue with your quote.");
           break;
         }
         const addons = unique.map((n) => REALTOR_ADDON_CODE_MAP[n]);
@@ -600,8 +643,11 @@ async function handleConversation(payload) {
         );
         await triggerQuote(from_phone);
       } catch (_) {
-        setState(from_phone, STATES.AWAITING_DEPOSIT);
-        await sendSms(from_phone, "Got it — we’ll keep the current quote for now. Reply ADD anytime if you want to include pre-listing add-ons.");
+        await pool.query(
+          "UPDATE leads SET prelisting_addons=$1, prelisting_addon_total_cents=0, conv_state=$2, quote_status='READY', quote_ready=1, last_seen_at=NOW() WHERE from_phone=$3",
+          [JSON.stringify([]), STATES.QUOTE_READY, from_phone]
+        ).catch(()=>{});
+        await triggerQuote(from_phone);
       }
       break;
     }

@@ -48,7 +48,7 @@ function buildQuoteSms(lead, pricing, payment) {
   );
   parts.push(payment.upfront.payment_link_url);
   parts.push("");
-  parts.push("After payment, choose your arrival window: 8-10am, 10-12pm, 12-2pm, 2-4pm, or 4-6pm.");
+  parts.push("Choose your arrival window: 8–10am, 10am–12pm, 12–2pm, 2–4pm, or 4–6pm.");
   return parts.join("\n");
 }
 
@@ -99,40 +99,6 @@ function addonTotalFromLead(lead) {
   const n = Math.round(Number(lead?.prelisting_addon_total_cents || 0));
   if (!Number.isFinite(n) || n < 0) return 0;
   return n;
-}
-
-async function maybeSendRealtorAddonOffer(from_phone, lead, addonTotalCents) {
-  try {
-    if (String(lead?.lead_source || "") !== "realtor_referral") return;
-    if (addonTotalCents > 0) return;
-    const already = await pool.query(
-      `SELECT 1 FROM events
-       WHERE from_phone=$1
-         AND event_type='sms_sent_addon_offer'
-       ORDER BY id DESC
-       LIMIT 1`,
-      [from_phone]
-    );
-    if (already.rows[0]) return;
-    const msg =
-      "One more thing — since this is a pre-listing property, we also offer:\n\n" +
-      "🧹 Deep Clean — $150\n" +
-      "🚿 Pressure Wash — $125\n" +
-      "🎨 Paint Touch-Ups — $175\n" +
-      "🔧 Minor Repairs — quote on-site\n\n" +
-      "Reply ADD to include any of these, or SKIP to proceed with your quote.";
-    const sms = await sendSms(from_phone, msg);
-    try {
-      insertEvent.run({
-        from_phone,
-        event_type: "sms_sent_addon_offer",
-        payload_json: JSON.stringify({ from_phone, twilio: sms }),
-        created_at: new Date().toISOString(),
-      });
-    } catch (_) {}
-  } catch (_) {
-    // must never block core flow
-  }
 }
 
 async function maybeCreateQuote(from_phone) {
@@ -222,8 +188,6 @@ async function maybeCreateQuote(from_phone) {
         created_at: new Date().toISOString(),
       });
     } catch (e) {}
-
-    await maybeSendRealtorAddonOffer(from_phone, lead, addonTotalCents);
 
     pool.query("UPDATE leads SET quote_status='AWAITING_DEPOSIT', last_seen_at=NOW() WHERE from_phone=$1", [from_phone]).catch(()=>{});
 
