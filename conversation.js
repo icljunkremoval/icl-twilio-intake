@@ -15,9 +15,11 @@ const STATES = {
   AWAITING_LOAD: "AWAITING_LOAD", QUOTE_READY: "QUOTE_READY",
   AWAITING_DEPOSIT: "AWAITING_DEPOSIT", BOOKING_SENT: "BOOKING_SENT",
   WINDOW_SELECTED: "WINDOW_SELECTED", AWAITING_DAY: "AWAITING_DAY", ESCALATED: "ESCALATED",
+  AWAITING_SCOPE_TRIAGE: "AWAITING_SCOPE_TRIAGE",
   AWAITING_REFERRAL_SOURCE: "AWAITING_REFERRAL_SOURCE",
   AWAITING_AGENT_NAME: "AWAITING_AGENT_NAME",
   AWAITING_ADDON_SELECTION: "AWAITING_ADDON_SELECTION",
+  AWAITING_POST_PAYMENT_REFERRAL: "AWAITING_POST_PAYMENT_REFERRAL",
 };
 
 const ACCESS_MAP = {
@@ -40,6 +42,13 @@ const WINDOW_MAP = {
 const APP_BASE_URL = String(process.env.APP_BASE_URL || "https://icl-twilio-intake-production.up.railway.app").replace(/\/+$/, "");
 const CONTACT_CARD_URL = `${APP_BASE_URL}/contact.vcf`;
 const REFERRAL_TIMEOUT_MS = 10 * 60 * 1000;
+const SCOPE_TRIAGE_TIMEOUT_MS = 15 * 60 * 1000;
+const SCOPE_TRIAGE_PROMPT =
+  "To get you the most accurate quote — which best describes your job?\n\n" +
+  "1) Full home or estate clearout\n" +
+  "2) One or two rooms / garage\n" +
+  "3) A few items\n\n" +
+  "Reply 1, 2, or 3.";
 const REALTOR_ADDON_SELECTION_PROMPT =
   "Which would you like to add? Reply the number(s):\n" +
   "1) Deep Clean $150\n" +
@@ -61,6 +70,7 @@ const REALTOR_ADDON_CODE_MAP = {
   4: { code: "MINOR_REPAIRS", label: "Minor Repairs (on-site quote)" },
 };
 const referralTimers = new Map();
+const scopeTriageTimers = new Map();
 
 function getConvState(lead) { return (lead && lead.conv_state) || STATES.NEW; }
 
@@ -84,6 +94,37 @@ function clearReferralTimeout(from_phone) {
   const t = referralTimers.get(key);
   if (t) clearTimeout(t);
   referralTimers.delete(key);
+}
+
+function clearScopeTriageTimeout(from_phone) {
+  const key = String(from_phone || "");
+  const t = scopeTriageTimers.get(key);
+  if (t) clearTimeout(t);
+  scopeTriageTimers.delete(key);
+}
+
+function scheduleScopeTriageTimeout(from_phone) {
+  clearScopeTriageTimeout(from_phone);
+  const key = String(from_phone || "");
+  const timer = setTimeout(async () => {
+    try {
+      const cur = await getLead.get(from_phone);
+      if (!cur) return;
+      if (String(cur.conv_state || "") !== STATES.AWAITING_SCOPE_TRIAGE) return;
+      await pool.query(
+        `UPDATE leads
+         SET job_scope = NULL,
+             conv_state = $1,
+             last_seen_at = NOW()
+         WHERE from_phone = $2`,
+        [STATES.AWAITING_MEDIA, from_phone]
+      );
+      await sendPhotoPrompt(from_phone);
+      logEvent(from_phone, "scope_triage_timeout_defaulted", { job_scope: null });
+    } catch (_) {}
+    clearScopeTriageTimeout(from_phone);
+  }, SCOPE_TRIAGE_TIMEOUT_MS);
+  scopeTriageTimers.set(key, timer);
 }
 
 function scheduleReferralTimeout(from_phone) {
@@ -313,17 +354,41 @@ async function handleConversation(payload) {
 
   switch(state) {
     case STATES.NEW: {
-      setState(from_phone, STATES.AWAITING_REFERRAL_SOURCE);
-      scheduleReferralTimeout(from_phone);
+      setState(from_phone, STATES.AWAITING_SCOPE_TRIAGE);
+      scheduleScopeTriageTimeout(from_phone);
       await sendSms(
         from_phone,
         "Hi! Thanks for texting ICL Junk Removal. We’re ready when you are."
       );
       await sendSms(from_phone, "Save our contact card: " + CONTACT_CARD_URL);
-      await sendSms(
-        from_phone,
-        "Quick question before we get started — were you referred by a real estate agent or property manager?\n\nReply YES or NO."
-      );
+      await sendSms(from_phone, SCOPE_TRIAGE_PROMPT);
+      break;
+    }
+
+    case STATES.AWAITING_SCOPE_TRIAGE: {
+      const bodyTrim = String(body || "").trim();
+      let jobScope = null;
+      if (/\b1\b/.test(bodyTrim)) jobScope = "full_home";
+      else if (/\b2\b/.test(bodyTrim)) jobScope = "room_garage";
+      else if (/\b3\b/.test(bodyTrim)) jobScope = "few_items";
+
+      if (!jobScope) {
+        await sendSms(from_phone, "Just reply 1, 2, or 3 — whichever fits best.");
+        break;
+      }
+
+      try {
+        await pool.query(
+          `UPDATE leads
+           SET job_scope = $1,
+               conv_state = $2,
+               last_seen_at = NOW()
+           WHERE from_phone = $3`,
+          [jobScope, STATES.AWAITING_MEDIA, from_phone]
+        );
+      } catch (_) {}
+      clearScopeTriageTimeout(from_phone);
+      await sendPhotoPrompt(from_phone);
       break;
     }
 
