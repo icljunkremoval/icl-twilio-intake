@@ -17,17 +17,22 @@ const RECOVERY_MESSAGES = {
 };
 
 async function checkDropoffs() {
-  const cutoff = new Date(Date.now() - STALL_MINUTES * 60 * 1000).toISOString();
+  const cutoff = new Date(Date.now() - STALL_MINUTES * 60 * 1000);
 
   const result = await pool.query(`
     SELECT from_phone, conv_state, address_text, last_seen_at
     FROM leads
-    WHERE last_seen_at < $1
+    WHERE last_seen_at IS NOT NULL
+      AND last_seen_at <> ''
+      AND last_seen_at::timestamptz < $1::timestamptz
       AND conv_state NOT IN ('AWAITING_DEPOSIT', 'DEPOSIT_PAID', 'BOOKING_SENT', 'WINDOW_SELECTED', 'ESCALATED', 'QUOTE_READY')
       AND COALESCE(stall_count, 0) < 3
-      AND (dropoff_alerted_at IS NULL OR dropoff_alerted_at < NOW() - INTERVAL '2 hours')
+      AND (
+        NULLIF(dropoff_alerted_at, '')::timestamptz IS NULL
+        OR NULLIF(dropoff_alerted_at, '')::timestamptz < NOW() - INTERVAL '2 hours'
+      )
       AND archived_at IS NULL
-    ORDER BY last_seen_at DESC
+    ORDER BY last_seen_at::timestamptz DESC
     LIMIT 20
   `, [cutoff]);
 

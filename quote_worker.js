@@ -81,15 +81,52 @@ function buildCompactQuoteSms(pricing, payment) {
   ].join("\n");
 }
 
+function normalizeDestinationPhone(from_phone) {
+  return String(from_phone || "").trim();
+}
+
+function twilioConfigSnapshot() {
+  const sid = String(process.env.TWILIO_ACCOUNT_SID || "");
+  const token = String(process.env.TWILIO_AUTH_TOKEN || "");
+  const messagingServiceSid = String(process.env.TWILIO_MESSAGING_SERVICE_SID || "");
+  const fromNumber = String(process.env.TWILIO_FROM_NUMBER || "");
+  return {
+    hasAccountSid: Boolean(sid),
+    accountSidPrefix: sid ? sid.slice(0, 6) : null,
+    hasAuthToken: Boolean(token),
+    hasMessagingServiceSid: Boolean(messagingServiceSid),
+    hasFromNumber: Boolean(fromNumber),
+  };
+}
+
+function assertTwilioSmsConfig() {
+  const snapshot = twilioConfigSnapshot();
+  console.log("[quote] twilio config snapshot:", snapshot);
+  if (!snapshot.hasAccountSid || !snapshot.hasAuthToken) {
+    throw new Error("Twilio credentials missing at quote SMS send time");
+  }
+  if (!snapshot.hasMessagingServiceSid && !snapshot.hasFromNumber) {
+    throw new Error("Twilio sender missing at quote SMS send time");
+  }
+}
+
 async function sendQuoteSmsWithFallback(from_phone, lead, pricing, payment) {
+  const toPhone = normalizeDestinationPhone(from_phone);
+  assertTwilioSmsConfig();
+
   const fullBody = String(buildQuoteSms(lead, pricing, payment) || "");
   try {
     if (fullBody.length > MAX_QUOTE_SMS_CHARS) {
       throw new Error("quote_sms_too_long_full_template");
     }
-    const sms = await sendSms(from_phone, fullBody);
-    return { sms, template: "QUOTE_LINK_V1_FULL" };
+    const messageText = fullBody;
+    console.log('[quote] attempting SMS send to:', toPhone);
+    console.log('[quote] message length:', messageText.length);
+    const result = await sendSms(toPhone, messageText);
+    console.log('[quote] send result:', result);
+    return { sms: result, template: "QUOTE_LINK_V1_FULL" };
   } catch (errFull) {
+    console.error("[quote] full SMS send failed:", errFull && errFull.stack ? errFull.stack : errFull);
     try {
       insertEvent.run({
         from_phone,
@@ -102,8 +139,17 @@ async function sendQuoteSmsWithFallback(from_phone, lead, pricing, payment) {
     if (compactBody.length > MAX_QUOTE_SMS_CHARS) {
       throw new Error("quote_sms_too_long_compact_template");
     }
-    const sms = await sendSms(from_phone, compactBody);
-    return { sms, template: "QUOTE_LINK_V1_COMPACT_FALLBACK" };
+    try {
+      const messageText = compactBody;
+      console.log('[quote] attempting SMS send to:', toPhone);
+      console.log('[quote] message length:', messageText.length);
+      const result = await sendSms(toPhone, messageText);
+      console.log('[quote] send result:', result);
+      return { sms: result, template: "QUOTE_LINK_V1_COMPACT_FALLBACK" };
+    } catch (errCompact) {
+      console.error("[quote] compact SMS fallback send failed:", errCompact && errCompact.stack ? errCompact.stack : errCompact);
+      throw errCompact;
+    }
   }
 }
 
@@ -125,6 +171,7 @@ async function claimForQuoting(from_phone) {
 }
 
 function setError(from_phone, err) {
+  console.error("[quote] setError for", from_phone, err && err.stack ? err.stack : err);
   pool.query("UPDATE leads SET quote_status='ERROR', last_seen_at=NOW() WHERE from_phone=$1", [from_phone]).catch(()=>{});
 
   try {
@@ -373,6 +420,7 @@ async function maybeCreateQuote(from_phone) {
       sms_status: sms.status,
     };
   } catch (e) {
+    console.error("[quote] maybeCreateQuote failed for", from_phone, e && e.stack ? e.stack : e);
     setError(from_phone, e);
     return { ok: false, reason: "error", error: String(e && e.message ? e.message : e) };
   }
