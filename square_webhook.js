@@ -6,6 +6,7 @@ const { sendCrewBrief } = require("./crew_brief");
 const { processSalvage } = require("./salvage_pipeline");
 const { sendSms } = require("./twilio_sms");
 const { recordSettledRevenue } = require("./finance_pipeline");
+const { generateDaySnapshot, PRESET_WINDOWS } = require("./window_parser");
 
 const SQUARE_WEBHOOK_SIGNATURE_KEY = process.env.SQUARE_WEBHOOK_SIGNATURE_KEY || "";
 const POST_PAYMENT_REFERRAL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -212,7 +213,7 @@ async function processDepositCompletion(lead, opts = {}) {
     });
   } catch {}
 
-  const dayOptions = buildDayOptions(new Date());
+  const daySnapshot = generateDaySnapshot();
   await pool.query(
     `UPDATE leads
      SET day_options_snapshot=$2,
@@ -221,10 +222,23 @@ async function processDepositCompletion(lead, opts = {}) {
          conv_state='AWAITING_DAY',
          last_seen_at=NOW()
      WHERE from_phone=$1`,
-    [from_phone, JSON.stringify(dayOptions)]
+    [from_phone, JSON.stringify(daySnapshot)]
   );
 
-  const sms = await sendSms(from_phone, buildDepositDayPickerSms(paymentKind, dayOptions));
+  const lines = [];
+  lines.push("Deposit received — your spot is locked in.");
+  lines.push("");
+  daySnapshot.forEach((day, dayIdx) => {
+    lines.push(day.day);
+    PRESET_WINDOWS.forEach((win, winIdx) => {
+      const num = dayIdx * 3 + winIdx + 1;
+      lines.push(`${num} — ${win.label}`);
+    });
+    lines.push("");
+  });
+  lines.push("To book your service window, reply with a number. If that doesn't work, feel free to text a date & time that works for you.");
+  const pickerBody = lines.join("\n");
+  const sms = await sendSms(from_phone, pickerBody);
   try {
     const vcardMms = await sendContactCardMms(from_phone);
     insertEvent.run({
@@ -259,7 +273,7 @@ async function processDepositCompletion(lead, opts = {}) {
     payment_kind: paymentKind,
     amount_cents: resolvedAmountCents,
     is_test_payment: isTest,
-    day_options: dayOptions,
+    day_options: daySnapshot,
     next_state: "AWAITING_DAY",
   };
 }

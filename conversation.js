@@ -8,6 +8,7 @@ const { recomputeDerived } = require("./recompute");
 const { createJobEvent } = require("./calendar");
 const { getAddonSqft, calcDeepClean, calcPressureWash, calcPaintTouchup } = require("./pricing_v1");
 const { notifyRealtorAssist } = require("./utils/notify_partner");
+const { parseWindowReply, generateDaySnapshot, PRESET_WINDOWS } = require("./window_parser");
 
 const STATES = {
   NEW: "NEW", AWAITING_MEDIA: "AWAITING_MEDIA", AWAITING_HAZMAT: "AWAITING_HAZMAT",
@@ -181,15 +182,7 @@ async function sendWindowPickerPrompt(from_phone) {
 }
 
 function buildDefaultDayOptions(now = new Date()) {
-  const dayNames = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-  const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const options = [];
-  for (let i = 0; i < 3; i++) {
-    const d = new Date(now);
-    d.setDate(now.getDate() + i);
-    options.push(`${dayNames[d.getDay()]} ${monthNames[d.getMonth()]} ${d.getDate()}`);
-  }
-  return options;
+  return generateDaySnapshot(now);
 }
 
 function readDayOptionsSnapshot(lead) {
@@ -197,24 +190,39 @@ function readDayOptionsSnapshot(lead) {
     const parsed = typeof lead?.day_options_snapshot === "string"
       ? JSON.parse(lead.day_options_snapshot)
       : lead?.day_options_snapshot;
+    if (Array.isArray(parsed) && parsed.length >= 3 && parsed[0] && typeof parsed[0] === "object") {
+      return parsed.slice(0, 3).map((d) => ({
+        day: String(d?.day || "").trim(),
+        isoDate: String(d?.isoDate || "").trim(),
+      }));
+    }
     if (Array.isArray(parsed) && parsed.length >= 3) {
-      const cleaned = parsed.slice(0, 3).map((v) => String(v || "").trim()).filter(Boolean);
-      if (cleaned.length >= 3) return cleaned;
+      return parsed.slice(0, 3).map((label) => ({ day: String(label || "").trim(), isoDate: "" }));
     }
   } catch (_) {}
   return buildDefaultDayOptions(new Date());
 }
 
 function formatDayPickerMenu(dayOptions) {
-  const safe = Array.isArray(dayOptions) ? dayOptions : buildDefaultDayOptions(new Date());
-  return "1) " + (safe[0] || "") + "\n" + "2) " + (safe[1] || "") + "\n" + "3) " + (safe[2] || "");
+  const safe = Array.isArray(dayOptions) ? dayOptions.slice(0, 3) : buildDefaultDayOptions(new Date());
+  const lines = [];
+  safe.forEach((day, dayIdx) => {
+    lines.push(String(day?.day || ""));
+    PRESET_WINDOWS.forEach((win, winIdx) => {
+      const num = dayIdx * 3 + winIdx + 1;
+      lines.push(`${num} — ${win.label}`);
+    });
+    lines.push("");
+  });
+  lines.push("To book your service window, reply with a number. If that doesn't work, feel free to text a date & time that works for you.");
+  return lines.join("\n");
 }
 
 async function sendDayPickerPrompt(from_phone, lead) {
   const dayOptions = readDayOptionsSnapshot(lead);
   await sendSms(
     from_phone,
-    "When works best for the crew? Tap a day:\n" + formatDayPickerMenu(dayOptions)
+    "Deposit received — your spot is locked in.\n\n" + formatDayPickerMenu(dayOptions)
   );
 }
 
@@ -1183,43 +1191,68 @@ async function handleConversation(payload) {
     case STATES.AWAITING_DAY: {
       let snapshot = null;
       try {
-        snapshot = lead?.day_options_snapshot ? JSON.parse(lead.day_options_snapshot) : null;
+        snapshot = lead?.day_options_snapshot
+          ? (typeof lead.day_options_snapshot === "string"
+              ? JSON.parse(lead.day_options_snapshot)
+              : lead.day_options_snapshot)
+          : null;
       } catch (_) {
         snapshot = null;
       }
-      if (!Array.isArray(snapshot) || snapshot.length < 3) {
-        await sendSms(from_phone, "Pick a day: 1, 2, or 3.");
+
+      const parsed = parseWindowReply(body, snapshot);
+      if (!parsed.ok) {
+        await sendSms(
+          from_phone,
+          "Tell me what works — pick a number above, or text a window like \"Sat 10am-2pm.\""
+        );
         break;
       }
-
-      const choice = Number.parseInt(String(body || "").trim(), 10);
-      if (![1, 2, 3].includes(choice)) {
-        await sendSms(from_phone, "Pick a day: 1, 2, or 3.");
-        break;
-      }
-
-      const selectedDay = String(snapshot[choice - 1] || "").trim();
-      const selectedWindow = "8-11am";
-      const fullTiming = `${selectedDay || "your selected day"}, ${selectedWindow}`;
 
       await pool.query(
         `UPDATE leads
          SET timing_pref=$1,
              booking_day=$2,
              booking_window=$3,
-             conv_state=$4,
+             booking_start_iso=$4,
+             booking_end_iso=$5,
+             conv_state=$6,
              quote_status='BOOKING_SENT',
              last_seen_at=NOW()
-         WHERE from_phone=$5`,
-        [fullTiming, selectedDay, selectedWindow, STATES.AWAITING_POST_BOOKING_REFERRAL, from_phone]
+         WHERE from_phone=$7`,
+        [
+          `${parsed.day}, ${parsed.window}`,
+          parsed.day,
+          parsed.window,
+          parsed.startISO,
+          parsed.endISO,
+          STATES.AWAITING_POST_BOOKING_REFERRAL,
+          from_phone,
+        ]
       );
-      logEvent(from_phone,"day_selected",{timing_pref:fullTiming});
-      const updatedLead = (await pool.query('SELECT * FROM leads WHERE from_phone=$1',[from_phone])).rows[0];
-      createJobEvent(updatedLead).catch(e=>console.error('[calendar] event error:',e));
+
+      logEvent(from_phone, "day_selected", {
+        timing_pref: `${parsed.day}, ${parsed.window}`,
+        start_iso: parsed.startISO,
+        end_iso: parsed.endISO,
+      });
+
+      const updatedLead = (await pool.query("SELECT * FROM leads WHERE from_phone=$1", [from_phone])).rows[0];
+      createJobEvent(updatedLead).catch(e => console.error("[calendar] event error:", e));
+
+      const address = updatedLead?.service_address || updatedLead?.address_text || "your address";
+      const totalCents = Number(updatedLead?.total_cents || updatedLead?.quote_total_cents || 0);
+      const depositCents = Number(updatedLead?.deposit_paid_amount_cents || Math.round(totalCents / 2));
+      const remainingCents = Math.max(0, totalCents - depositCents);
+      const totalDollars = (totalCents / 100).toFixed(0);
+      const depositDollars = (depositCents / 100).toFixed(0);
+      const remainingDollars = (remainingCents / 100).toFixed(0);
+
       await sendSms(
         from_phone,
-        "Booked — " + fullTiming + ".\n\n" +
-        "One last thing — were you referred by an agent? Reply their name or SKIP."
+        `Booked — ${parsed.day}, ${parsed.window} at ${address}.\n` +
+        `Total: $${totalDollars} ($${depositDollars} deposit received, $${remainingDollars} day-of).\n\n` +
+        `One last thing — were you referred by an agent? Reply their name or SKIP.`
       );
       break;
     }
@@ -1231,7 +1264,6 @@ async function handleConversation(payload) {
 
     case STATES.AWAITING_POST_BOOKING_REFERRAL: {
       const answer = String(body || "").trim();
-      const formattedDay = String(lead?.booking_day || "").trim() || String(lead?.timing_pref || "").split(",")[0]?.trim() || "your scheduled day";
       const isSkip = /^(skip|no|none|n\/a)$/i.test(answer);
 
       if (isSkip) {
@@ -1239,7 +1271,11 @@ async function handleConversation(payload) {
           "UPDATE leads SET conv_state=$1, quote_status='BOOKING_CONFIRMED', last_seen_at=NOW() WHERE from_phone=$2",
           [STATES.BOOKED, from_phone]
         );
-        await sendSms(from_phone, `All set. We'll see you on ${formattedDay}.`);
+        await sendSms(
+          from_phone,
+          `You're all set — the crew arrives ${lead?.booking_day || "on your scheduled day"} between ${lead?.booking_window || "your window"}.\n\n` +
+          `You'll get a text from us about 30 minutes before we arrive.`
+        );
         break;
       }
 
@@ -1262,7 +1298,11 @@ async function handleConversation(payload) {
       );
       await notifyReferralPartner(from_phone);
       logEvent(from_phone, "referral_attributed", { agent_name: answer.slice(0, 140) });
-      await sendSms(from_phone, `Got it — we'll make sure ${answer.slice(0, 140)} gets credit. See you on ${formattedDay}.`);
+      await sendSms(
+        from_phone,
+        `Got it — we'll make sure ${answer.slice(0, 140)} gets credit.\n\n` +
+        `The crew arrives ${lead?.booking_day || "on your scheduled day"} between ${lead?.booking_window || "your window"}. You'll get a text from us about 30 minutes before we arrive.`
+      );
       break;
     }
 

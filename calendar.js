@@ -30,36 +30,41 @@ function parseTimingPref(timing_pref) {
 }
 
 async function createJobEvent(lead) {
+  const calendarId = process.env.GOOGLE_CALENDAR_ID;
+  if (!calendarId) {
+    console.error("[calendar] GOOGLE_CALENDAR_ID not set");
+    return;
+  }
+
+  let startISO = lead?.booking_start_iso;
+  let endISO = lead?.booking_end_iso;
+  if (!startISO || !endISO) {
+    console.warn("[calendar] booking_start_iso/end_iso missing — skipping event creation");
+    return;
+  }
+
+  const calendar = getCalendarClient();
+  const event = {
+    summary: `ICL Junk — ${lead?.from_phone || "unknown"}`,
+    description: [
+      `Customer phone: ${lead?.from_phone || ""}`,
+      `Address: ${lead?.service_address || lead?.address_text || "TBD"}`,
+      `Total: $${((Number(lead?.total_quote_cents || lead?.total_cents || lead?.quote_total_cents || 0)) / 100).toFixed(0)}`,
+      lead?.intake_path ? `Path: ${lead.intake_path}` : null,
+      lead?.crew_notes ? `Notes: ${lead.crew_notes}` : null,
+    ].filter(Boolean).join("\n"),
+    location: lead?.service_address || lead?.address_text || "",
+    start: { dateTime: startISO, timeZone: "America/Los_Angeles" },
+    end: { dateTime: endISO, timeZone: "America/Los_Angeles" },
+  };
+
   try {
-    const calendar = getCalendarClient();
-    const calendarId = process.env.GOOGLE_CALENDAR_ID;
-    const timing = parseTimingPref(lead.timing_pref);
-    if (!timing) { console.error('[calendar] Could not parse timing_pref:', lead.timing_pref); return null; }
-    const items = lead.item_list
-      ? lead.item_list.split('\n').map(i => i.trim()).filter(Boolean).join(', ')
-      : 'See photos';
-    const description = [
-      `Phone: ${lead.from_phone}`,
-      `Address: ${lead.address || 'TBD'}`,
-      `Load: ${lead.load_bucket || 'TBD'}`,
-      `Items: ${items}`,
-      `Quote: $${lead.quote_amount || 'TBD'}`,
-      `Window: ${lead.timing_pref}`,
-      `Job ID: ${lead.id}`
-    ].join('\n');
-    const event = {
-      summary: `ICL Job — ${lead.address || lead.from_phone}`,
-      description,
-      start: { dateTime: timing.start.toISOString(), timeZone: 'America/Los_Angeles' },
-      end: { dateTime: timing.end.toISOString(), timeZone: 'America/Los_Angeles' },
-      colorId: '2'
-    };
     const res = await calendar.events.insert({ calendarId, resource: event });
-    console.log('[calendar] Event created:', res.data.htmlLink);
+    console.log("[calendar] event created:", res.data.htmlLink);
     return res.data;
-  } catch (err) {
-    console.error('[calendar] Failed to create event:', err.message);
-    return null;
+  } catch (e) {
+    console.error("[calendar] event error:", e.message);
+    throw e;
   }
 }
 

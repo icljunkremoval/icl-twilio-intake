@@ -11,6 +11,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "chrono-node": "2.7.7",
     "express": "^5.2.1",
     "googleapis": "^171.4.0",
     "node-fetch": "^2.7.0",
