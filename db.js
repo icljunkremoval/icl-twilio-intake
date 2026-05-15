@@ -86,6 +86,9 @@ async function initDb() {
       referral_payout_sent_at TEXT,
       prelisting_addons TEXT,
       prelisting_addon_total_cents INTEGER DEFAULT 0,
+      addon_deep_clean_cents INTEGER DEFAULT 0,
+      addon_pressure_wash_cents INTEGER DEFAULT 0,
+      addon_paint_touchup_cents INTEGER DEFAULT 0,
       aerial_media_requested INTEGER DEFAULT 0,
       aerial_media_delivered_at TEXT
     );
@@ -195,6 +198,9 @@ async function initDb() {
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS referral_payout_sent_at TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS prelisting_addons TEXT",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS prelisting_addon_total_cents INTEGER DEFAULT 0",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS addon_deep_clean_cents INTEGER DEFAULT 0",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS addon_pressure_wash_cents INTEGER DEFAULT 0",
+    "ALTER TABLE leads ADD COLUMN IF NOT EXISTS addon_paint_touchup_cents INTEGER DEFAULT 0",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS aerial_media_requested INTEGER DEFAULT 0",
     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS aerial_media_delivered_at TEXT"
   ];

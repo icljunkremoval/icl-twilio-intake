@@ -35,6 +35,31 @@ const ADDON_PRICING = {
   MINOR_REPAIRS: null,
 };
 
+function getAddonSqft(lead) {
+  const explicitSqft = Math.round(Number(lead?.rentcast_sqft || 0));
+  if (Number.isFinite(explicitSqft) && explicitSqft > 0) return explicitSqft;
+  const bucket = String(lead?.load_bucket || "").toUpperCase();
+  const SQFT_PROXY = { MIN: 700, QTR: 1000, HALF: 1500, "3Q": 2100, FULL: 2800 };
+  return SQFT_PROXY[bucket] || 1500;
+}
+
+function calcDeepClean(sqft) {
+  const n = Math.max(0, Number(sqft || 0));
+  return Math.max(150, Math.round((n * 0.08) / 5) * 5);
+}
+
+function calcPressureWash(sqft) {
+  const n = Math.max(0, Number(sqft || 0));
+  return Math.max(125, Math.round((n * 0.4 * 0.06) / 5) * 5);
+}
+
+function calcPaintTouchup(sqft) {
+  const n = Math.max(0, Number(sqft || 0));
+  if (n <= 2000) return 175;
+  if (n <= 4000) return 275;
+  return 375;
+}
+
 function priceQuoteV1({ load_bucket, distance_miles, access_level }) {
   const bucket = String(load_bucket || "").toUpperCase();
   if (!BASE_BY_BUCKET_CENTS[bucket]) throw new Error(`Unknown load_bucket: ${bucket}`);
@@ -68,5 +93,9 @@ module.exports = {
   ACCESS_UPLIFT_CENTS,
   ACCESS_UPLIFT_LEVELS,
   ADDON_PRICING,
+  getAddonSqft,
+  calcDeepClean,
+  calcPressureWash,
+  calcPaintTouchup,
   priceQuoteV1,
 };

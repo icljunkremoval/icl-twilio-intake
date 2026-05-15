@@ -6,7 +6,7 @@ const { analyzeJobMedia, analyzeAllMedia } = require("./vision_analyzer");
 const { backfillLatestMedia } = require("./twilio_media_backfill");
 const { recomputeDerived } = require("./recompute");
 const { createJobEvent } = require("./calendar");
-const { ADDON_PRICING } = require("./pricing_v1");
+const { getAddonSqft, calcDeepClean, calcPressureWash, calcPaintTouchup } = require("./pricing_v1");
 const { notifyRealtorAssist } = require("./utils/notify_partner");
 
 const STATES = {
@@ -43,19 +43,13 @@ const APP_BASE_URL = String(process.env.APP_BASE_URL || "https://icl-twilio-inta
 const CONTACT_CARD_URL = `${APP_BASE_URL}/contact.vcf`;
 const REFERRAL_TIMEOUT_MS = 10 * 60 * 1000;
 const SCOPE_TRIAGE_TIMEOUT_MS = 15 * 60 * 1000;
+const ADDON_OFFER_TIMEOUT_MS = 15 * 60 * 1000;
 const SCOPE_TRIAGE_PROMPT =
   "To get you the most accurate quote — which best describes your job?\n\n" +
   "1) Full home or estate clearout\n" +
   "2) One or two rooms / garage\n" +
   "3) A few items\n\n" +
   "Reply 1, 2, or 3.";
-const REALTOR_ADDON_SELECTION_PROMPT =
-  "Which would you like to add? Reply the number(s):\n" +
-  "1) Deep Clean $150\n" +
-  "2) Pressure Wash $125\n" +
-  "3) Paint Touch-Ups $175\n" +
-  "4) Minor Repairs (on-site quote)\n\n" +
-  "Example: reply 1 2 to add both";
 const REALTOR_ADDON_OFFER_PROMPT =
   "One more thing — since this is a pre-listing property, we also offer:\n\n" +
   "🧹 Deep Clean — $150\n" +
@@ -71,6 +65,7 @@ const REALTOR_ADDON_CODE_MAP = {
 };
 const referralTimers = new Map();
 const scopeTriageTimers = new Map();
+const addonOfferTimers = new Map();
 const OPS_PHONE = String(process.env.OPS_PHONE || process.env.OPS_ALERT_PHONE || "+12138806318").trim();
 const ESCALATION_KEYWORDS = [
   "condemned", "biohazard", "hoarder", "hoarding",
@@ -139,6 +134,58 @@ function scheduleScopeTriageTimeout(from_phone) {
     clearScopeTriageTimeout(from_phone);
   }, SCOPE_TRIAGE_TIMEOUT_MS);
   scopeTriageTimers.set(key, timer);
+}
+
+function clearAddonOfferTimeout(from_phone) {
+  const key = String(from_phone || "");
+  const t = addonOfferTimers.get(key);
+  if (t) clearTimeout(t);
+  addonOfferTimers.delete(key);
+}
+
+function scheduleAddonOfferTimeout(from_phone) {
+  clearAddonOfferTimeout(from_phone);
+  const key = String(from_phone || "");
+  const timer = setTimeout(async () => {
+    try {
+      const cur = await getLead.get(from_phone);
+      if (!cur) return;
+      if (String(cur.conv_state || "") !== STATES.AWAITING_ADDON_SELECTION) return;
+      await pool.query(
+        `UPDATE leads
+         SET prelisting_addons = COALESCE(prelisting_addons, '[]'),
+             prelisting_addon_total_cents = COALESCE(prelisting_addon_total_cents, 0),
+             addon_deep_clean_cents = COALESCE(addon_deep_clean_cents, 0),
+             addon_pressure_wash_cents = COALESCE(addon_pressure_wash_cents, 0),
+             addon_paint_touchup_cents = COALESCE(addon_paint_touchup_cents, 0),
+             conv_state = $1,
+             quote_status='READY',
+             quote_ready=1,
+             last_seen_at = NOW()
+         WHERE from_phone = $2`,
+        [STATES.QUOTE_READY, from_phone]
+      );
+      await triggerQuote(from_phone);
+    } catch (_) {}
+    clearAddonOfferTimeout(from_phone);
+  }, ADDON_OFFER_TIMEOUT_MS);
+  addonOfferTimers.set(key, timer);
+}
+
+function getDynamicAddonPricing(lead) {
+  const sqft = getAddonSqft(lead);
+  const deepClean = calcDeepClean(sqft);
+  const pressureWash = calcPressureWash(sqft);
+  const paintTouchup = calcPaintTouchup(sqft);
+  return {
+    sqft,
+    deepCleanDollars: deepClean,
+    pressureWashDollars: pressureWash,
+    paintTouchupDollars: paintTouchup,
+    deepCleanCents: deepClean * 100,
+    pressureWashCents: pressureWash * 100,
+    paintTouchupCents: paintTouchup * 100,
+  };
 }
 
 function scheduleReferralTimeout(from_phone) {
@@ -333,8 +380,10 @@ async function triggerQuote(from_phone) {
         [STATES.AWAITING_ADDON_SELECTION, from_phone]
       );
       await sendSms(from_phone, REALTOR_ADDON_OFFER_PROMPT);
+      scheduleAddonOfferTimeout(from_phone);
       return;
     }
+    clearAddonOfferTimeout(from_phone);
   } catch (_) {
     // fallback to normal quote path
   }
@@ -733,15 +782,30 @@ async function handleConversation(payload) {
 
     case STATES.AWAITING_ADDON_SELECTION: {
       try {
-        if (bodyUpper === "ADD") {
-          await sendSms(from_phone, REALTOR_ADDON_SELECTION_PROMPT);
+        clearAddonOfferTimeout(from_phone);
+        const dynamic = getDynamicAddonPricing(lead || {});
+        const selectionPrompt =
+          "Which would you like to add?\n\n" +
+          "1) Deep Clean — $" + dynamic.deepCleanDollars + "\n" +
+          "2) Pressure Wash — $" + dynamic.pressureWashDollars + "\n" +
+          "3) Paint Touch-Ups — $" + dynamic.paintTouchupDollars + "\n" +
+          "4) Minor Repairs — priced on-site\n\n" +
+          "Reply the number(s). Example: reply 1 3 to add both.";
+
+        if (bodyUpper === "YES") {
+          await sendSms(from_phone, selectionPrompt);
+          scheduleAddonOfferTimeout(from_phone);
           break;
         }
+
         if (bodyUpper === "SKIP") {
           await pool.query(
             `UPDATE leads
              SET prelisting_addons=$1,
                  prelisting_addon_total_cents=0,
+                 addon_deep_clean_cents=0,
+                 addon_pressure_wash_cents=0,
+                 addon_paint_touchup_cents=0,
                  conv_state=$2,
                  quote_status='READY',
                  quote_ready=1,
@@ -761,17 +825,25 @@ async function handleConversation(payload) {
           await triggerQuote(from_phone);
           break;
         }
+
         const matches = (body.match(/\b[1-4]\b/g) || []).map((v) => Number(v));
         const unique = [...new Set(matches)].filter((n) => REALTOR_ADDON_CODE_MAP[n]);
         if (!unique.length) {
-          await sendSms(from_phone, "Reply ADD to choose services, or SKIP to continue with your quote.");
+          await sendSms(from_phone, "Reply YES to see service options, or SKIP to continue with your quote.");
+          scheduleAddonOfferTimeout(from_phone);
           break;
         }
-        const addons = unique.map((n) => REALTOR_ADDON_CODE_MAP[n]);
-        const addonTotalCents = addons.reduce((sum, a) => {
-          const cents = ADDON_PRICING[a.code];
-          return sum + (Number.isFinite(cents) ? Number(cents) : 0);
-        }, 0);
+
+        const addons = unique.map((n) => {
+          if (n === 1) return { code: "DEEP_CLEAN", label: "Deep Clean", cents: dynamic.deepCleanCents };
+          if (n === 2) return { code: "PRESSURE_WASH", label: "Pressure Wash", cents: dynamic.pressureWashCents };
+          if (n === 3) return { code: "PAINT_TOUCHUP", label: "Paint Touch-Ups", cents: dynamic.paintTouchupCents };
+          return { code: "MINOR_REPAIRS", label: "Minor Repairs (on-site quote)", cents: null };
+        });
+        const addonDeepCleanCents = addons.find((a) => a.code === "DEEP_CLEAN")?.cents || 0;
+        const addonPressureWashCents = addons.find((a) => a.code === "PRESSURE_WASH")?.cents || 0;
+        const addonPaintTouchupCents = addons.find((a) => a.code === "PAINT_TOUCHUP")?.cents || 0;
+        const addonTotalCents = addonDeepCleanCents + addonPressureWashCents + addonPaintTouchupCents;
         const existingAddonTotal = Math.max(0, Math.round(Number(lead?.prelisting_addon_total_cents || 0)));
         const baseQuoteCents = Math.max(0, Math.round(Number(lead?.quote_total_cents || 0)) - existingAddonTotal);
         const updatedTotalCents = baseQuoteCents + addonTotalCents;
@@ -780,7 +852,10 @@ async function handleConversation(payload) {
           `UPDATE leads
            SET prelisting_addons=$1,
                prelisting_addon_total_cents=$2,
-               conv_state=$3,
+               addon_deep_clean_cents=$3,
+               addon_pressure_wash_cents=$4,
+               addon_paint_touchup_cents=$5,
+               conv_state=$6,
                quote_status='READY',
                quote_ready=1,
                square_payment_link_id=NULL,
@@ -793,12 +868,21 @@ async function handleConversation(payload) {
                upfront_total_cents=NULL,
                upfront_discount_pct=NULL,
                last_seen_at=NOW()
-           WHERE from_phone=$4`,
-          [JSON.stringify(addons), addonTotalCents, STATES.QUOTE_READY, from_phone]
+           WHERE from_phone=$7`,
+          [
+            JSON.stringify(addons),
+            addonTotalCents,
+            addonDeepCleanCents,
+            addonPressureWashCents,
+            addonPaintTouchupCents,
+            STATES.QUOTE_READY,
+            from_phone
+          ]
         );
         logEvent(from_phone, "prelisting_addons_selected", {
           addons,
           prelisting_addon_total_cents: addonTotalCents,
+          addon_sqft: dynamic.sqft,
         });
         await sendSms(
           from_phone,
@@ -807,9 +891,10 @@ async function handleConversation(payload) {
         await triggerQuote(from_phone);
       } catch (_) {
         await pool.query(
-          "UPDATE leads SET prelisting_addons=$1, prelisting_addon_total_cents=0, conv_state=$2, quote_status='READY', quote_ready=1, last_seen_at=NOW() WHERE from_phone=$3",
+          "UPDATE leads SET prelisting_addons=$1, prelisting_addon_total_cents=0, addon_deep_clean_cents=0, addon_pressure_wash_cents=0, addon_paint_touchup_cents=0, conv_state=$2, quote_status='READY', quote_ready=1, last_seen_at=NOW() WHERE from_phone=$3",
           [JSON.stringify([]), STATES.QUOTE_READY, from_phone]
         ).catch(()=>{});
+        clearAddonOfferTimeout(from_phone);
         await triggerQuote(from_phone);
       }
       break;
