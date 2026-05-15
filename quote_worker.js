@@ -341,9 +341,7 @@ async function maybeCreateQuote(from_phone) {
 
     writePricing(from_phone, pricingWithAddons);
 
-    const depositCents = isPath1
-      ? Math.max(100, Math.round(quoteTotalWithAddons / 2))
-      : DEPOSIT_CENTS;
+    const depositCents = Math.round(quoteTotalWithAddons / 2);
     const payment = await createSquarePaymentOptions(lead, {
       quoteTotalCents: quoteTotalWithAddons,
       depositCents,

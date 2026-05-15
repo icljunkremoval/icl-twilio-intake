@@ -403,26 +403,49 @@ async function notifyReferralPartner(from_phone) {
   }
 }
 
-function suggestedLoadFromVision(lead) {
-  const b = String(lead?.vision_load_bucket || "").toUpperCase();
-  if (!b) return null;
-  if (b === "MIN" || b === "QTR") return "SMALL";
-  if (b === "HALF") return "MEDIUM";
-  if (b === "3Q" || b === "FULL") return "LARGE";
-  return null;
+const LOAD_BUCKET_ORDER = ["MIN", "QTR", "HALF", "3Q", "FULL"];
+const LOAD_BUCKET_FRIENDLY = {
+  MIN: "small pile",
+  QTR: "quarter truckload",
+  HALF: "half truckload",
+  "3Q": "three-quarter truckload",
+  FULL: "full truckload",
+};
+
+function normalizeBucket(raw) {
+  const value = String(raw || "").toUpperCase().trim();
+  if (LOAD_BUCKET_ORDER.includes(value)) return value;
+  if (value === "SMALL") return "MIN";
+  if (value === "MEDIUM") return "HALF";
+  if (value === "LARGE") return "FULL";
+  return "";
+}
+
+function getSuggestedLoadBucket(lead) {
+  return (
+    normalizeBucket(lead?.vision_load_bucket) ||
+    normalizeBucket(lead?.load_bucket) ||
+    normalizeBucket(lead?.customer_load_bucket) ||
+    "QTR"
+  );
+}
+
+function bumpBucket(bucket, direction) {
+  const current = normalizeBucket(bucket) || "QTR";
+  const idx = LOAD_BUCKET_ORDER.indexOf(current);
+  if (idx < 0) return "QTR";
+  if (direction > 0) return LOAD_BUCKET_ORDER[Math.min(idx + 1, LOAD_BUCKET_ORDER.length - 1)];
+  if (direction < 0) return LOAD_BUCKET_ORDER[Math.max(idx - 1, 0)];
+  return current;
 }
 
 async function sendLoadPrompt(from_phone, lead) {
-  const hint = suggestedLoadFromVision(lead);
-  let conf = "";
-  try {
-    const vision = typeof lead?.vision_analysis === "string" ? JSON.parse(lead.vision_analysis) : lead?.vision_analysis;
-    conf = String(vision?.load_confidence || "").toUpperCase();
-  } catch (e) {}
-  const confSuffix = conf && conf !== "HIGH" ? ` (${conf} confidence)` : "";
-  const hintLabel = hint === "SMALL" ? "a small pickup" : hint === "MEDIUM" ? "about a half truckload" : "a larger truckload";
-  const prefix = hint ? `Looks like ${hintLabel}${confSuffix}. Sound right?\n\n` : "";
-  await sendSms(from_phone, `${prefix}How much are you removing?\n\nSMALL — pickup-truck bed\nMEDIUM — half a truck\nLARGE — full truck`);
+  const suggestedBucket = getSuggestedLoadBucket(lead);
+  const friendly = LOAD_BUCKET_FRIENDLY[suggestedBucket] || "quarter truckload";
+  await sendSms(
+    from_phone,
+    `Looks like about a ${friendly}. Reply YES to lock it in or BIGGER if it's more than that.`
+  );
 }
 
 function readVisionLoad(lead) {
@@ -476,7 +499,7 @@ async function maybeAutoQuoteFromVision(from_phone, reason = "vision_high_confid
   const label = bucket === "MIN" || bucket === "QTR" ? "SMALL" : (bucket === "HALF" ? "MEDIUM" : "LARGE");
   await sendSms(
     from_phone,
-    `Looks like about a ${label === "SMALL" ? "small pickup" : label === "MEDIUM" ? "half truckload" : "larger truckload"}. Sound right? Reply SMALL, MEDIUM, or LARGE if you'd like it adjusted before checkout.`
+    `Looks like about a ${label === "SMALL" ? "small pile" : label === "MEDIUM" ? "half truckload" : "full truckload"}. Reply SMALL, MEDIUM, or LARGE if that seems off.`
   );
   await triggerQuote(from_phone);
   return true;
@@ -539,8 +562,6 @@ async function advanceAfterAddress(from_phone) {
   const lead = await getLead.get(from_phone);
   const hasAccess = lead && lead.access_level;
   if (hasAccess) {
-    const autoQuoted = await maybeAutoQuoteFromVision(from_phone, "after_address");
-    if (autoQuoted) return;
     setState(from_phone, STATES.AWAITING_LOAD);
     await sendLoadPrompt(from_phone, lead);
   } else {
@@ -577,9 +598,6 @@ function runVisionAsync(from_phone, mediaUrl, allUrls) {
       params.push(from_phone);
       pool.query("UPDATE leads SET "+pgU.join(",")+",last_seen_at=NOW() WHERE from_phone=$"+(cols.length+1), params).catch(()=>{});
     }
-    setTimeout(() => {
-      maybeAutoQuoteFromVision(from_phone, "vision_async").catch(()=>{});
-    }, 220);
   }).catch((e)=>{ logEvent(from_phone,"vision_error",{error:String(e.message||e)}); });
 }
 
@@ -894,7 +912,7 @@ async function handleConversation(payload) {
           scheduleAddonOfferTimeout(from_phone);
         } else {
           setState(from_phone,STATES.AWAITING_ADDRESS);
-          await sendSms(from_phone,"What's the service address? Cross streets + ZIP works too.");
+          await sendSms(from_phone,"What's the property address? (Street, city, state.)");
         }
       } else {
         await sendSms(from_phone,"Reply YES or NO — any restricted materials like paint, chemicals, or medical waste?");
@@ -903,24 +921,23 @@ async function handleConversation(payload) {
     }
 
     case STATES.AWAITING_ADDRESS: {
-      if (body.length<3) { await sendSms(from_phone,"Please send the service address or nearest cross streets + ZIP."); break; }
+      if (body.length<3) { await sendSms(from_phone,"Please send the property address (street, city, state)."); break; }
       const zipMatch=body.match(/\b(\d{5})\b/); const zip=zipMatch?zipMatch[1]:null;
       await pool.query('UPDATE leads SET address_text=$1,zip=$2,zip_text=$2,last_seen_at=NOW() WHERE from_phone=$3', [body,zip,from_phone]);
       logEvent(from_phone,"address_capture",{address:body,zip});
-      if (isPath1Lead(lead)) {
-        setState(from_phone, STATES.AWAITING_ADDRESS_CONFIRM);
-        await sendSms(from_phone, "Got it: " + body + ". Is that right? Reply YES or NO.");
-      } else {
-        await sendSms(from_phone, "Excellent — we have " + body + " confirmed. We're preparing your quote now.");
-        await advanceAfterAddress(from_phone);
-      }
+      setState(from_phone, STATES.AWAITING_ADDRESS_CONFIRM);
+      await sendSms(from_phone, "Got it: " + body + ". Is that right? Reply YES or NO.");
       break;
     }
 
     case STATES.AWAITING_ADDRESS_CONFIRM: {
       if (bodyUpper === "YES" || bodyUpper === "Y") {
-        setState(from_phone, STATES.AWAITING_HAZMAT);
-        await sendSms(from_phone, "Quick safety check: any paint, chemicals, fuel, batteries, asbestos, or medical waste on site? Reply YES or NO.");
+        if (isPath1Lead(lead)) {
+          setState(from_phone, STATES.AWAITING_HAZMAT);
+          await sendSms(from_phone, "Quick safety check: any paint, chemicals, fuel, batteries, asbestos, or medical waste on site? Reply YES or NO.");
+          break;
+        }
+        await advanceAfterAddress(from_phone);
         break;
       }
       if (bodyUpper === "NO" || bodyUpper === "N") {
@@ -959,19 +976,34 @@ async function handleConversation(payload) {
         break;
       }
       const afterAccess=await getLead.get(from_phone);
-      const autoQuoted = await maybeAutoQuoteFromVision(from_phone, "after_access");
-      if (autoQuoted) break;
       setState(from_phone,STATES.AWAITING_LOAD);
       await sendLoadPrompt(from_phone, afterAccess);
       break;
     }
 
     case STATES.AWAITING_LOAD: {
-      let loadBucket=null;
-      for(const [key,val] of Object.entries(LOAD_MAP)){if(bodyUpper.includes(key)){loadBucket=val;break;}}
-      if (!loadBucket) { await sendSms(from_phone,"Reply SMALL, MEDIUM, or LARGE."); break; }
-      await pool.query("UPDATE leads SET load_bucket=$1, customer_load_bucket=$1, conv_state=$2, last_seen_at=NOW() WHERE from_phone=$3", [loadBucket, STATES.QUOTE_READY, from_phone]);
-      logEvent(from_phone,"load_capture",{load_bucket:loadBucket});
+      const latestLead = await getLead.get(from_phone);
+      const suggestedBucket = getSuggestedLoadBucket(latestLead || lead);
+      const answer = String(body || "").trim().toUpperCase();
+      let loadBucket = "";
+
+      if (answer === "YES" || answer === "Y" || answer === "OK" || answer === "CONFIRM") {
+        loadBucket = suggestedBucket;
+      } else if (answer === "BIGGER" || answer === "LARGER" || answer === "MORE") {
+        loadBucket = bumpBucket(suggestedBucket, 1);
+      } else if (answer === "SMALLER" || answer === "LESS") {
+        loadBucket = bumpBucket(suggestedBucket, -1);
+      } else {
+        for(const [key,val] of Object.entries(LOAD_MAP)){if(answer.includes(key)){loadBucket=val;break;}}
+      }
+
+      if (!loadBucket) {
+        await sendSms(from_phone,"Reply YES to lock it in, BIGGER if it's more than that, or SMALLER if it's less.");
+        break;
+      }
+
+      await pool.query("UPDATE leads SET load_bucket=$1, customer_load_bucket=$1, conv_state=$2, quote_ready=1, quote_status='READY', last_seen_at=NOW() WHERE from_phone=$3", [loadBucket, STATES.QUOTE_READY, from_phone]);
+      logEvent(from_phone,"load_capture",{load_bucket:loadBucket, suggested_bucket: suggestedBucket, answer});
       await triggerQuote(from_phone);
       break;
     }
