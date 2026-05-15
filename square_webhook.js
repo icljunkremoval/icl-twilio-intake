@@ -131,6 +131,131 @@ async function findLeadByOrderOrPhone(orderId, payment) {
   return { lead: null, match: "none" };
 }
 
+async function loadLeadByPhone(from_phone) {
+  const rows = await pool.query("SELECT * FROM leads WHERE from_phone=$1 LIMIT 1", [from_phone]);
+  return rows.rows[0] || null;
+}
+
+/**
+ * Run all post-deposit side effects for a lead.
+ * Used by both the real Square webhook and admin simulation endpoint.
+ */
+async function processDepositCompletion(lead, opts = {}) {
+  const from_phone = String(lead?.from_phone || "");
+  if (!from_phone) throw new Error("missing_from_phone");
+
+  const isTest = !!opts.isTest;
+  const paymentKind = String(opts.paymentKind || "deposit") === "upfront" ? "upfront" : "deposit";
+  const isReferralLead = opts.isReferralLead !== undefined
+    ? !!opts.isReferralLead
+    : (
+      String(lead?.lead_source || "") === "realtor_referral" ||
+      String(lead?.referral_partner || "") === "realtor_assist"
+    );
+  const totalCents = Math.max(
+    0,
+    Math.round(Number(lead?.total_cents || lead?.quote_total_cents || 0))
+  );
+  const resolvedAmountCents = Number.isFinite(Number(opts.amountCents)) && Number(opts.amountCents) > 0
+    ? Math.round(Number(opts.amountCents))
+    : Math.max(0, Math.round(totalCents / 2));
+
+  await pool.query(
+    `UPDATE leads
+     SET deposit_paid=1,
+         deposit_paid_at=NOW(),
+         deposit_paid_amount_cents=$2,
+         is_test_payment=$3,
+         quote_status='DEPOSIT_PAID',
+         aerial_media_requested=CASE WHEN $4::int = 1 THEN 1 ELSE COALESCE(aerial_media_requested,0) END,
+         last_seen_at=NOW()
+     WHERE from_phone=$1`,
+    [from_phone, resolvedAmountCents, isTest ? true : false, isReferralLead ? 1 : 0]
+  );
+
+  try {
+    insertEvent.run({
+      from_phone,
+      event_type: paymentKind === "upfront" ? "upfront_paid" : "deposit_paid",
+      payload_json: JSON.stringify({
+        order_id: opts.orderId || null,
+        event_type: opts.eventType || "payment.completed",
+        payment_id: opts.paymentId || null,
+        amount_cents: resolvedAmountCents,
+        payment_kind: paymentKind,
+        is_test_payment: isTest,
+      }),
+      created_at: new Date().toISOString(),
+    });
+  } catch {}
+
+  const shouldAskPostPaymentReferral = !isReferralLead;
+  let sms = null;
+  if (shouldAskPostPaymentReferral) {
+    await sendSms(from_phone, buildBookingConfirmedSms(paymentKind));
+    try {
+      const vcardMms = await sendContactCardMms(from_phone);
+      insertEvent.run({
+        from_phone,
+        event_type: "sms_sent_contact_vcard",
+        payload_json: JSON.stringify({ sid: vcardMms?.sid || null }),
+        created_at: new Date().toISOString(),
+      });
+    } catch (vcardErr) {
+      console.error("[square_webhook] contact vcard MMS failed:", vcardErr?.message || vcardErr);
+    }
+    sms = await sendSms(
+      from_phone,
+      "You're confirmed! One quick question — were you referred by\na real estate agent or property manager? If so, reply their\nname so we can make sure they get credit.\n\nOr reply SKIP to continue."
+    );
+    console.log("[square_webhook] post-payment referral prompt sent to:", from_phone);
+  } else {
+    sms = await sendSms(from_phone, buildWindowPickerSms(paymentKind));
+    console.log("[square_webhook] window picker sent to:", from_phone);
+    try {
+      const vcardMms = await sendContactCardMms(from_phone);
+      insertEvent.run({
+        from_phone,
+        event_type: "sms_sent_contact_vcard",
+        payload_json: JSON.stringify({ sid: vcardMms?.sid || null }),
+        created_at: new Date().toISOString(),
+      });
+    } catch (vcardErr) {
+      console.error("[square_webhook] contact vcard MMS failed:", vcardErr?.message || vcardErr);
+    }
+  }
+
+  const leadForBrief = { ...(await loadLeadByPhone(from_phone) || lead) };
+  if (isReferralLead) leadForBrief.aerial_media_requested = 1;
+  sendCrewBrief(leadForBrief).catch(()=>{});
+  processSalvage(leadForBrief).catch(()=>{});
+
+  await pool.query(
+    "UPDATE leads SET quote_status='BOOKING_SENT', conv_state=$2, last_seen_at=NOW() WHERE from_phone=$1",
+    [from_phone, shouldAskPostPaymentReferral ? "AWAITING_POST_PAYMENT_REFERRAL" : "BOOKING_SENT"]
+  );
+  if (shouldAskPostPaymentReferral) schedulePostPaymentReferralTimeout(from_phone);
+  else clearPostPaymentReferralTimeout(from_phone);
+
+  try {
+    insertEvent.run({
+      from_phone,
+      event_type: shouldAskPostPaymentReferral ? "sms_sent_post_payment_referral" : "sms_sent_window_picker",
+      payload_json: JSON.stringify({ twilio: sms, payment_kind: paymentKind, is_test_payment: isTest }),
+      created_at: new Date().toISOString(),
+    });
+  } catch {}
+
+  return {
+    ok: true,
+    from_phone,
+    payment_kind: paymentKind,
+    amount_cents: resolvedAmountCents,
+    is_test_payment: isTest,
+    next_state: shouldAskPostPaymentReferral ? "AWAITING_POST_PAYMENT_REFERRAL" : "BOOKING_SENT",
+  };
+}
+
 async function handleSquareWebhook(req, res) {
   try {
     const signature = req.headers["x-square-hmacsha256-signature"] || "";
@@ -251,87 +376,15 @@ async function handleSquareWebhook(req, res) {
     }
 
     const paymentKind = match === "order_upfront" ? "upfront" : "deposit";
-    await pool.query(
-      `UPDATE leads
-       SET deposit_paid=1,
-           deposit_paid_at=NOW(),
-           quote_status='DEPOSIT_PAID',
-           aerial_media_requested=CASE WHEN $2::int = 1 THEN 1 ELSE COALESCE(aerial_media_requested,0) END,
-           last_seen_at=NOW()
-       WHERE from_phone=$1`,
-      [lead.from_phone, isReferralLead ? 1 : 0]
-    );
-
-    try {
-      insertEvent.run({
-        from_phone: lead.from_phone,
-        event_type: paymentKind === "upfront" ? "upfront_paid" : "deposit_paid",
-        payload_json: JSON.stringify({
-          order_id: orderId,
-          event_type: eventType,
-          payment_id: paymentId,
-          amount_cents: amountCents,
-          payment_kind: paymentKind
-        }),
-        created_at: new Date().toISOString(),
-      });
-    } catch {}
-
-    const shouldAskPostPaymentReferral = !isReferralLead;
-    let sms = null;
-    if (shouldAskPostPaymentReferral) {
-      await sendSms(lead.from_phone, buildBookingConfirmedSms(paymentKind));
-      try {
-        const vcardMms = await sendContactCardMms(lead.from_phone);
-        insertEvent.run({
-          from_phone: lead.from_phone,
-          event_type: "sms_sent_contact_vcard",
-          payload_json: JSON.stringify({ sid: vcardMms?.sid || null }),
-          created_at: new Date().toISOString(),
-        });
-      } catch (vcardErr) {
-        console.error("[square_webhook] contact vcard MMS failed:", vcardErr?.message || vcardErr);
-      }
-      sms = await sendSms(
-        lead.from_phone,
-        "You're confirmed! One quick question — were you referred by\na real estate agent or property manager? If so, reply their\nname so we can make sure they get credit.\n\nOr reply SKIP to continue."
-      );
-      console.log("[square_webhook] post-payment referral prompt sent to:", lead.from_phone);
-    } else {
-      sms = await sendSms(lead.from_phone, buildWindowPickerSms(paymentKind));
-      console.log("[square_webhook] window picker sent to:", lead.from_phone);
-      try {
-        const vcardMms = await sendContactCardMms(lead.from_phone);
-        insertEvent.run({
-          from_phone: lead.from_phone,
-          event_type: "sms_sent_contact_vcard",
-          payload_json: JSON.stringify({ sid: vcardMms?.sid || null }),
-          created_at: new Date().toISOString(),
-        });
-      } catch (vcardErr) {
-        console.error("[square_webhook] contact vcard MMS failed:", vcardErr?.message || vcardErr);
-      }
-    }
-    const leadForBrief = { ...lead };
-    if (isReferralLead) leadForBrief.aerial_media_requested = 1;
-    sendCrewBrief(leadForBrief).catch(()=>{});
-    processSalvage(lead).catch(()=>{});
-
-    await pool.query(
-      "UPDATE leads SET quote_status='BOOKING_SENT', conv_state=$2, last_seen_at=NOW() WHERE from_phone=$1",
-      [lead.from_phone, shouldAskPostPaymentReferral ? "AWAITING_POST_PAYMENT_REFERRAL" : "BOOKING_SENT"]
-    );
-    if (shouldAskPostPaymentReferral) schedulePostPaymentReferralTimeout(lead.from_phone);
-    else clearPostPaymentReferralTimeout(lead.from_phone);
-
-    try {
-      insertEvent.run({
-        from_phone: lead.from_phone,
-        event_type: shouldAskPostPaymentReferral ? "sms_sent_post_payment_referral" : "sms_sent_window_picker",
-        payload_json: JSON.stringify({ twilio: sms, payment_kind: paymentKind }),
-        created_at: new Date().toISOString(),
-      });
-    } catch {}
+    await processDepositCompletion(lead, {
+      isTest: false,
+      amountCents,
+      paymentKind,
+      orderId,
+      paymentId,
+      eventType,
+      isReferralLead,
+    });
 
     return res.status(200).send("ok");
 
@@ -341,4 +394,4 @@ async function handleSquareWebhook(req, res) {
   }
 }
 
-module.exports = { handleSquareWebhook };
+module.exports = { handleSquareWebhook, processDepositCompletion };

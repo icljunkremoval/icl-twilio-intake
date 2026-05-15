@@ -1,6 +1,6 @@
 const { checkDropoffs, checkPostJobReviews } = require("./dropoff_monitor");
 const { handleOpsReply } = require("./job_complete");
-const { handleSquareWebhook } = require("./square_webhook");
+const { handleSquareWebhook, processDepositCompletion } = require("./square_webhook");
 const { fetchLatest } = require("./twilio_debug");
 const { backfillLatestMedia } = require("./twilio_media_backfill");
 const { recomputeDerived } = require("./recompute");
@@ -1098,6 +1098,58 @@ app.get("/admin/test-sqft", async (req, res) => {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
+app.post("/admin/simulate-payment", async (req, res) => {
+  try {
+    const pass = String(req.headers["x-admin-password"] || "");
+    if (!ADMIN_PASSWORD) return res.status(500).json({ ok: false, error: "admin password not set" });
+    if (!pass || pass !== ADMIN_PASSWORD) return res.status(401).json({ ok: false, error: "unauthorized" });
+
+    const phone = String(req.query.phone || req.body?.phone || "").trim();
+    if (!phone) {
+      return res.status(400).json({ ok: false, error: "phone required, e.g. ?phone=%2B13233979698" });
+    }
+
+    const result = await pool.query(
+      `SELECT *
+       FROM leads
+       WHERE from_phone = $1
+       ORDER BY last_seen_at DESC
+       LIMIT 1`,
+      [phone]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ ok: false, error: "no lead found for that phone" });
+    }
+    const lead = result.rows[0];
+    const totalCents = Math.max(0, Math.round(Number(lead.total_cents || lead.quote_total_cents || 0)));
+    if (!totalCents) {
+      return res.status(400).json({
+        ok: false,
+        error: "lead has no total_cents — must complete intake to AWAITING_DEPOSIT first",
+        lead_state: String(lead.conv_state || ""),
+      });
+    }
+
+    const simulatedAmountCents = Math.max(100, Math.round(totalCents / 2));
+    const completion = await processDepositCompletion(lead, {
+      isTest: true,
+      amountCents: simulatedAmountCents,
+      paymentKind: "deposit",
+      eventType: "admin.simulate-payment",
+    });
+
+    return res.json({
+      ok: true,
+      message: "simulated payment.completed processed",
+      phone: lead.from_phone,
+      simulated_amount_cents: simulatedAmountCents,
+      next_state: completion?.next_state || null,
+    });
+  } catch (e) {
+    console.error("[admin/simulate-payment] error:", e);
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
 app.get("/admin/lead", async (req, res) => {
   try {
     const pass = String(req.headers["x-admin-password"] || "");
@@ -1124,6 +1176,10 @@ app.get("/admin/lead", async (req, res) => {
           base_price_cents,
           addon_total_cents,
           total_cents,
+          deposit_paid,
+          deposit_paid_at,
+          deposit_paid_amount_cents,
+          is_test_payment,
           needs_manual_review,
           first_seen_at AS created_at,
           last_seen_at,
