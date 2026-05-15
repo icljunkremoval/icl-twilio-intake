@@ -21,6 +21,7 @@ const ACCESS_LABELS = {
   STAIRS:     "Stairs involved — plan lifts carefully",
   APARTMENT:  "Apartment — elevator or stairs?",
   OTHER:      "Non-standard access — assess on arrival",
+  ALL_AREAS:  "Full home access — all interior + garage + perimeter as needed",
 };
 
 const SPACE_LABELS = {

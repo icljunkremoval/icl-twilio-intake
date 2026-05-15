@@ -60,6 +60,24 @@ function calcPaintTouchup(sqft) {
   return 375;
 }
 
+function normalizeAddonCode(addon) {
+  if (typeof addon === "string") return addon.toUpperCase().trim();
+  return String(addon?.code || "").toUpperCase().trim();
+}
+
+function computeAddonTotalCents(selectedAddons, sqft) {
+  const safeSqft = Math.max(1, Math.round(Number(sqft || 0))) || 1500;
+  const list = Array.isArray(selectedAddons) ? selectedAddons : [];
+  let total = 0;
+  for (const addon of list) {
+    const code = normalizeAddonCode(addon);
+    if (code === "DEEP_CLEAN") total += calcDeepClean(safeSqft) * 100;
+    else if (code === "PRESSURE_WASH") total += calcPressureWash(safeSqft) * 100;
+    else if (code === "PAINT_TOUCHUP" || code === "PAINT_TOUCHUPS") total += calcPaintTouchup(safeSqft) * 100;
+  }
+  return total;
+}
+
 function priceQuoteV1({ load_bucket, distance_miles, access_level }) {
   const bucket = String(load_bucket || "").toUpperCase();
   if (!BASE_BY_BUCKET_CENTS[bucket]) throw new Error(`Unknown load_bucket: ${bucket}`);
@@ -97,5 +115,6 @@ module.exports = {
   calcDeepClean,
   calcPressureWash,
   calcPaintTouchup,
+  computeAddonTotalCents,
   priceQuoteV1,
 };

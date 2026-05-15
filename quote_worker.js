@@ -1,5 +1,5 @@
 const { db, pool, insertEvent } = require("./db");
-const { priceQuoteV1, calcDeepClean, calcPressureWash, calcPaintTouchup } = require("./pricing_v1");
+const { priceQuoteV1, computeAddonTotalCents } = require("./pricing_v1");
 const { createSquarePaymentOptions } = require("./square_quote");
 const { sendSms } = require("./twilio_sms");
 const { lookupSqftByAddress } = require("./property_sqft");
@@ -31,21 +31,42 @@ function parseSelectedAddons(rawAddons) {
   return addons;
 }
 
-function calcPath1AddonTotalCents(addons, sqft) {
+function prettyAddonName(code) {
+  const normalized = String(code || "").toUpperCase().trim();
+  if (normalized === "DEEP_CLEAN") return "Deep Clean";
+  if (normalized === "PRESSURE_WASH") return "Pressure Wash";
+  if (normalized === "PAINT_TOUCHUP" || normalized === "PAINT_TOUCHUPS") return "Paint Touch-Ups";
+  if (normalized === "MINOR_REPAIRS") return "Minor Repairs";
+  return normalized;
+}
+
+function selectedAddonNames(addons) {
   const selected = parseSelectedAddons(addons);
-  if (!selected.length) return 0;
-  const safeSqft = Math.max(1, Math.round(Number(sqft || 0))) || 1500;
-  let total = 0;
-  for (const addon of selected) {
-    const code = String(addon?.code || "").toUpperCase();
-    if (code === "DEEP_CLEAN") total += calcDeepClean(safeSqft) * 100;
-    else if (code === "PRESSURE_WASH") total += calcPressureWash(safeSqft) * 100;
-    else if (code === "PAINT_TOUCHUP") total += calcPaintTouchup(safeSqft) * 100;
-  }
-  return total;
+  return selected
+    .map((a) => prettyAddonName(a?.code || a))
+    .filter(Boolean);
 }
 
 function buildQuoteSms(lead, pricing, payment) {
+  const intakePath = String(lead?.intake_path || "");
+  const isPath1 = intakePath === PATH_1_FULL_HOME || String(lead?.job_scope || "") === "full_home";
+  if (isPath1) {
+    const totalCents = Number(payment?.quoteTotalCents || pricing?.total_with_addons_cents || pricing?.total_cents || 0);
+    const depositCents = Number(payment?.depositCents || payment?.deposit?.amount_cents || Math.round(totalCents / 2));
+    const totalStr = "$" + Math.round(totalCents / 100).toLocaleString("en-US");
+    const depositStr = "$" + Math.round(depositCents / 100).toLocaleString("en-US");
+    const addonNames = selectedAddonNames(lead?.prelisting_addons || lead?.selected_addons);
+    const addonLine = addonNames.length ? "\nIncludes: " + addonNames.join(", ") + "\n" : "\n";
+    return (
+      "Your quote for " + String(lead?.address_text || "your property") + ":\n\n" +
+      totalStr + " all-inclusive" +
+      addonLine +
+      "\nCovers haul, dump fees, and our 7-day ICL Standard guarantee.\n\n" +
+      depositStr + " deposit secures the date:\n" +
+      String(payment?.deposit?.payment_link_url || "") +
+      "\n\nQuestions? Just reply."
+    );
+  }
   const bucket = pricing.bucket;
   const total = (Number(payment?.quoteTotalCents || pricing.total_cents || 0) / 100).toFixed(0);
   const deposit = (DEPOSIT_CENTS / 100).toFixed(0);
@@ -92,6 +113,15 @@ function buildQuoteSms(lead, pricing, payment) {
 }
 
 function buildCompactQuoteSms(pricing, payment) {
+  if (String(pricing?.path || "") === "full_home_rentcast" || String(pricing?.path || "") === "full_home_fallback") {
+    return [
+      "Your quote is ready.",
+      "Deposit link:",
+      payment?.deposit?.payment_link_url || "",
+      "",
+      "Questions? Just reply."
+    ].join("\n");
+  }
   const bucket = String(pricing?.bucket || "HALF");
   const total = (Number(payment?.quoteTotalCents || pricing?.total_cents || 0) / 100).toFixed(0);
   const deposit = (DEPOSIT_CENTS / 100).toFixed(0);
@@ -313,6 +343,7 @@ async function maybeCreateQuote(from_phone) {
     const intakePath = String(lead?.intake_path || "");
     const isPath1 = intakePath === PATH_1_FULL_HOME || String(lead?.job_scope || "") === "full_home";
     let addonTotalCents = addonTotalFromLead(lead);
+    let selectedAddons = parseSelectedAddons(lead?.prelisting_addons || lead?.selected_addons);
 
     if (isPath1) {
       pricingPath = "full_home_fallback";
@@ -342,7 +373,7 @@ async function maybeCreateQuote(from_phone) {
           });
         } catch (_) {}
       }
-      addonTotalCents = calcPath1AddonTotalCents(lead?.prelisting_addons, rentcastSqft || 1500);
+      addonTotalCents = computeAddonTotalCents(selectedAddons, rentcastSqft || 1500);
     } else if (String(lead?.job_scope || "") === "room_garage") {
       pricingPath = "room_garage";
       if (selectedBucket === "3Q" || selectedBucket === "FULL") softFlag = 1;
@@ -359,17 +390,22 @@ async function maybeCreateQuote(from_phone) {
       path: pricingPath,
       base_path_total_cents: baseQuoteCents,
       rentcast_sqft: rentcastSqft,
+      selected_addons: selectedAddons,
       addon_total_cents: addonTotalCents,
       total_with_addons_cents: quoteTotalWithAddons,
     };
 
     writePricing(from_phone, pricingWithAddons);
 
+    const depositCents = isPath1
+      ? Math.max(100, Math.round(quoteTotalWithAddons / 2))
+      : DEPOSIT_CENTS;
     const payment = await createSquarePaymentOptions(lead, {
       quoteTotalCents: quoteTotalWithAddons,
-      depositCents: DEPOSIT_CENTS,
+      depositCents,
       upfrontDiscountPct: UPFRONT_DISCOUNT_PCT
     });
+    payment.depositCents = depositCents;
 
     await pool.query(
       `UPDATE leads
@@ -380,11 +416,14 @@ async function maybeCreateQuote(from_phone) {
            square_upfront_payment_link_url=$5,
            square_upfront_order_id=$6,
            quote_total_cents=$7,
-           upfront_total_cents=$8,
-           upfront_discount_pct=$9,
+           base_price_cents=$8,
+           addon_total_cents=$9,
+           total_cents=$10,
+           upfront_total_cents=$11,
+           upfront_discount_pct=$12,
            quote_status='AWAITING_DEPOSIT',
            last_seen_at=NOW()
-       WHERE from_phone=$10`,
+       WHERE from_phone=$13`,
       [
         payment.deposit.payment_link_id,
         payment.deposit.payment_link_url,
@@ -393,6 +432,9 @@ async function maybeCreateQuote(from_phone) {
         payment.upfront.payment_link_url,
         payment.upfront.order_id,
         payment.quoteTotalCents,
+        baseQuoteCents,
+        addonTotalCents,
+        quoteTotalWithAddons,
         payment.upfrontTotalCents,
         payment.upfrontDiscountPct,
         from_phone
@@ -410,9 +452,10 @@ async function maybeCreateQuote(from_phone) {
              ELSE crew_notes || ' ' || $4::text
            END,
            needs_manual_review = $5,
+           prelisting_addon_total_cents = CASE WHEN $7::int = 1 THEN $8 ELSE prelisting_addon_total_cents END,
            last_seen_at = NOW()
        WHERE from_phone = $6`,
-      [selectedBucket, rentcastSqft, softFlag, crewNote, needsManualReview, from_phone]
+      [selectedBucket, rentcastSqft, softFlag, crewNote, needsManualReview, from_phone, isPath1 ? 1 : 0, addonTotalCents]
     );
 
     try {

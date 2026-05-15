@@ -397,11 +397,22 @@ async function maybeAutoQuoteFromVision(from_phone, reason = "vision_high_confid
 }
 
 async function triggerQuote(from_phone) {
+  let lead = null;
   try {
-    const lead = await getLead.get(from_phone);
+    lead = await getLead.get(from_phone);
+    const isPath1 = isPath1Lead(lead);
     const isRealtorReferral = String(lead?.lead_source || "") === "realtor_referral";
     const hasAddonDecision = lead?.prelisting_addons !== null && lead?.prelisting_addons !== undefined && String(lead.prelisting_addons) !== "";
-    if (isRealtorReferral && !hasAddonDecision) {
+    if (isPath1 && !hasAddonDecision) {
+      await pool.query(
+        "UPDATE leads SET conv_state=$1, quote_status='READY', quote_ready=1, last_seen_at=NOW() WHERE from_phone=$2",
+        [STATES.AWAITING_ADDON_SELECTION, from_phone]
+      );
+      await sendSms(from_phone, PATH1_ADDON_PROMPT);
+      scheduleAddonOfferTimeout(from_phone);
+      return;
+    }
+    if (!isPath1 && isRealtorReferral && !hasAddonDecision) {
       await pool.query(
         "UPDATE leads SET conv_state=$1, quote_status='READY', quote_ready=1, last_seen_at=NOW() WHERE from_phone=$2",
         [STATES.AWAITING_ADDON_SELECTION, from_phone]
@@ -414,11 +425,13 @@ async function triggerQuote(from_phone) {
   } catch (_) {
     // fallback to normal quote path
   }
-  await sendSms(from_phone, "Your quote and booking options are ready shortly. Thank you for your patience.");
   try { await recomputeDerived(from_phone); } catch (e) {}
-  setTimeout(async () => { try { const r = await maybeCreateQuote(from_phone); if (!r.ok) logEvent(from_phone, "quote_trigger_failed", r); }
-    catch (e) { logEvent(from_phone, "quote_trigger_error", { error: String(e.message || e) }); }
-  }, 500);
+  try {
+    const r = await maybeCreateQuote(from_phone);
+    if (!r.ok) logEvent(from_phone, "quote_trigger_failed", r);
+  } catch (e) {
+    logEvent(from_phone, "quote_trigger_error", { error: String(e.message || e) });
+  }
 }
 
 async function advanceAfterAddress(from_phone) {
@@ -793,8 +806,19 @@ async function handleConversation(payload) {
       } else if (bodyUpper.startsWith("NO")||bodyUpper==="N") {
         logEvent(from_phone,"hazmat_no",{body});
         if (isPath1Lead(lead) && String(lead?.address_text || "").trim()) {
-          setState(from_phone, STATES.AWAITING_ACCESS);
-          await sendSms(from_phone, PATH1_ACCESS_PROMPT);
+          await pool.query(
+            `UPDATE leads
+             SET access_level='ALL_AREAS',
+                 customer_access_level='ALL_AREAS',
+                 conv_state=$1,
+                 quote_status='READY',
+                 quote_ready=1,
+                 last_seen_at=NOW()
+             WHERE from_phone=$2`,
+            [STATES.AWAITING_ADDON_SELECTION, from_phone]
+          );
+          await sendSms(from_phone, PATH1_ADDON_PROMPT);
+          scheduleAddonOfferTimeout(from_phone);
         } else {
           setState(from_phone,STATES.AWAITING_ADDRESS);
           await sendSms(from_phone,"What's the service address? Cross streets + ZIP works too.");
@@ -918,7 +942,8 @@ async function handleConversation(payload) {
           "Reply the number(s). Example: reply 1 3 to add both.";
 
         if (bodyUpper === "YES") {
-          await sendSms(from_phone, selectionPrompt);
+          if (isPath1Lead(lead)) await sendSms(from_phone, PATH1_ADDON_PROMPT);
+          else await sendSms(from_phone, selectionPrompt);
           scheduleAddonOfferTimeout(from_phone);
           break;
         }
@@ -947,7 +972,12 @@ async function handleConversation(payload) {
              WHERE from_phone=$3`,
             [JSON.stringify([]), STATES.QUOTE_READY, from_phone]
           );
-          await triggerQuote(from_phone);
+          if (isPath1Lead(lead)) {
+            const path1Quote = await maybeCreateQuote(from_phone);
+            if (!path1Quote?.ok) logEvent(from_phone, "path1_quote_failed_after_skip", path1Quote || {});
+          } else {
+            await triggerQuote(from_phone);
+          }
           break;
         }
 
@@ -1013,18 +1043,24 @@ async function handleConversation(payload) {
           prelisting_addon_total_cents: addonTotalCents,
           addon_sqft: dynamic.sqft,
         });
-        await sendSms(
-          from_phone,
-          "Updated total: $" + (updatedTotalCents / 100).toFixed(0) + ". Your payment link will reflect this."
-        );
-        await triggerQuote(from_phone);
+        if (isPath1Lead(lead)) {
+          const path1Quote = await maybeCreateQuote(from_phone);
+          if (!path1Quote?.ok) logEvent(from_phone, "path1_quote_failed_after_addons", path1Quote || {});
+        } else {
+          await triggerQuote(from_phone);
+        }
       } catch (_) {
         await pool.query(
           "UPDATE leads SET prelisting_addons=$1, prelisting_addon_total_cents=0, addon_deep_clean_cents=0, addon_pressure_wash_cents=0, addon_paint_touchup_cents=0, conv_state=$2, quote_status='READY', quote_ready=1, last_seen_at=NOW() WHERE from_phone=$3",
           [JSON.stringify([]), STATES.QUOTE_READY, from_phone]
         ).catch(()=>{});
         clearAddonOfferTimeout(from_phone);
-        await triggerQuote(from_phone);
+        if (isPath1Lead(lead)) {
+          const path1Quote = await maybeCreateQuote(from_phone);
+          if (!path1Quote?.ok) logEvent(from_phone, "path1_quote_failed_after_addons_fallback", path1Quote || {});
+        } else {
+          await triggerQuote(from_phone);
+        }
       }
       break;
     }

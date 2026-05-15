@@ -1098,6 +1098,54 @@ app.get("/admin/test-sqft", async (req, res) => {
     return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 });
+app.get("/admin/lead", async (req, res) => {
+  try {
+    const pass = String(req.headers["x-admin-password"] || "");
+    if (!ADMIN_PASSWORD) return res.status(500).json({ ok: false, error: "admin password not set" });
+    if (!pass || pass !== ADMIN_PASSWORD) return res.status(401).json({ ok: false, error: "unauthorized" });
+
+    const phone = String(req.query.phone || "").trim();
+    if (!phone) {
+      return res.status(400).json({ ok: false, error: "phone query param required, e.g. ?phone=%2B13233979698" });
+    }
+
+    const result = await pool.query(
+      `SELECT
+          NULL::integer AS id,
+          from_phone,
+          conv_state AS state,
+          quote_status,
+          intake_path,
+          job_scope,
+          address_text AS address,
+          rentcast_sqft AS sqft,
+          access_level,
+          prelisting_addons AS selected_addons,
+          base_price_cents,
+          addon_total_cents,
+          total_cents,
+          needs_manual_review,
+          first_seen_at AS created_at,
+          last_seen_at,
+          last_event,
+          last_body,
+          quote_total_cents
+       FROM leads
+       WHERE from_phone = $1
+       LIMIT 1`,
+      [phone]
+    );
+
+    if (!result.rows.length) {
+      return res.json({ ok: false, message: "no lead found for that phone" });
+    }
+
+    return res.json({ ok: true, lead: result.rows[0] });
+  } catch (e) {
+    console.error("[admin/lead] error:", e);
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
 app.use("/admin", (req, res, next) => {
   if (!ADMIN_PASSWORD) return res.status(500).send("Admin password not set.");
   const h = req.headers.authorization || "";
