@@ -213,6 +213,21 @@ function readVisionLoad(lead) {
   return { bucket, confidence };
 }
 
+function normalizeVisionConfidence(raw) {
+  const c = String(raw || "").toUpperCase().trim();
+  if (c === "HIGH" || c === "MEDIUM" || c === "LOW") return c;
+  return "NONE";
+}
+
+async function appendCrewNote(from_phone, note) {
+  try {
+    const row = await getLead.get(from_phone);
+    const current = String(row?.crew_notes || "").trim();
+    const next = current ? `${current} ${note}` : note;
+    await pool.query("UPDATE leads SET crew_notes=$1, last_seen_at=NOW() WHERE from_phone=$2", [next, from_phone]);
+  } catch (_) {}
+}
+
 async function maybeAutoQuoteFromVision(from_phone, reason = "vision_high_confidence") {
   const lead = await getLead.get(from_phone);
   if (!lead) return false;
@@ -220,9 +235,38 @@ async function maybeAutoQuoteFromVision(from_phone, reason = "vision_high_confid
   if (!lead.access_level) return false;
   if (!(lead.address_text || lead.zip || lead.zip_text)) return false;
   const { bucket, confidence } = readVisionLoad(lead);
-  if (!bucket || confidence !== "HIGH") return false;
+  const normalizedConfidence = normalizeVisionConfidence(confidence);
+  if (!bucket || normalizedConfidence === "NONE") {
+    setState(from_phone, STATES.ESCALATED);
+    logEvent(from_phone, "vision_confidence_none_escalated", { bucket, confidence: normalizedConfidence, reason });
+    await sendSms(
+      from_phone,
+      "Thanks for reaching out — we need a specialist to review this one. A team member will contact you shortly."
+    );
+    return false;
+  }
+  if (normalizedConfidence === "LOW") {
+    const retry = Math.max(0, Math.round(Number(lead.low_confidence_retry || 0)));
+    if (retry < 1) {
+      await pool.query(
+        "UPDATE leads SET low_confidence_retry=1, conv_state=$1, last_seen_at=NOW() WHERE from_phone=$2",
+        [STATES.AWAITING_MEDIA, from_phone]
+      );
+      await sendSms(
+        from_phone,
+        "A couple more angles would help us nail your quote — can you send a few more photos showing the full space?"
+      );
+      logEvent(from_phone, "vision_low_confidence_retry_requested", { reason });
+      return false;
+    }
+    await appendCrewNote(from_phone, "Load estimate is MEDIUM confidence — confirm on arrival.");
+    logEvent(from_phone, "vision_low_confidence_retry_promoted", { reason });
+  }
+  if (normalizedConfidence === "MEDIUM") {
+    await appendCrewNote(from_phone, "Load estimate is MEDIUM confidence — confirm on arrival.");
+  }
   await pool.query(
-    "UPDATE leads SET load_bucket=$1, conv_state=$2, quote_ready=1, last_seen_at=NOW() WHERE from_phone=$3",
+    "UPDATE leads SET load_bucket=$1, low_confidence_retry=0, conv_state=$2, quote_ready=1, last_seen_at=NOW() WHERE from_phone=$3",
     [bucket, STATES.QUOTE_READY, from_phone]
   );
   logEvent(from_phone, "vision_load_autolock", { load_bucket: bucket, reason });
@@ -298,9 +342,6 @@ function runVisionAsync(from_phone, mediaUrl, allUrls) {
     setTimeout(() => {
       maybeAutoQuoteFromVision(from_phone, "vision_async").catch(()=>{});
     }, 220);
-    if (vision.load_confidence === "LOW") {
-      sendSms(from_phone, "Quick note: load size confidence is low from this photo. If possible, send 1-2 wider shots so we can quote more accurately.").catch(()=>{});
-    }
   }).catch((e)=>{ logEvent(from_phone,"vision_error",{error:String(e.message||e)}); });
 }
 
@@ -499,6 +540,7 @@ async function handleConversation(payload) {
                quote_total_cents=NULL,
                upfront_total_cents=NULL,
                upfront_discount_pct=NULL,
+               low_confidence_retry=0,
                conv_state=$1,
                last_seen_at=NOW()
            WHERE from_phone=$2`,
@@ -533,6 +575,7 @@ async function handleConversation(payload) {
                    quote_total_cents=NULL,
                    upfront_total_cents=NULL,
                    upfront_discount_pct=NULL,
+                   low_confidence_retry=0,
                    conv_state=$3,
                    last_seen_at=NOW()
                WHERE from_phone=$4`,
