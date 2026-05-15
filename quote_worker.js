@@ -6,6 +6,7 @@ const { lookupSqftByAddress } = require("./property_sqft");
 
 const DEPOSIT_CENTS = 5000;
 const UPFRONT_DISCOUNT_PCT = 10;
+const MAX_QUOTE_SMS_CHARS = 1450;
 const OPS_PHONE = String(process.env.OPS_PHONE || process.env.OPS_ALERT_PHONE || "+12138806318").trim();
 const ESCALATION_CUSTOMER_MESSAGE =
   "Got it — thank you for reaching out to ICL. We've received your\n" +
@@ -58,6 +59,52 @@ function buildQuoteSms(lead, pricing, payment) {
   parts.push("");
   parts.push("Choose your arrival window: 8–10am, 10am–12pm, 12–2pm, 2–4pm, or 4–6pm.");
   return parts.join("\n");
+}
+
+function buildCompactQuoteSms(pricing, payment) {
+  const bucket = String(pricing?.bucket || "HALF");
+  const total = (Number(payment?.quoteTotalCents || pricing?.total_cents || 0) / 100).toFixed(0);
+  const deposit = (DEPOSIT_CENTS / 100).toFixed(0);
+  const upfrontTotal = (Number(payment?.upfrontTotalCents || 0) / 100).toFixed(0);
+  const upfrontSavings = ((Number(payment?.quoteTotalCents || 0) - Number(payment?.upfrontTotalCents || 0)) / 100).toFixed(0);
+  return [
+    "Your ICL quote is ready.",
+    "Load: " + bucket + " | Total: $" + total,
+    "",
+    "1) Reserve with $" + deposit + " deposit:",
+    payment?.deposit?.payment_link_url || "",
+    "",
+    "2) Pay upfront and save " + Number(payment?.upfrontDiscountPct || UPFRONT_DISCOUNT_PCT) + "% ($" + upfrontSavings + " off, total $" + upfrontTotal + "):",
+    payment?.upfront?.payment_link_url || "",
+    "",
+    "Reply 1–5 for your arrival window after checkout."
+  ].join("\n");
+}
+
+async function sendQuoteSmsWithFallback(from_phone, lead, pricing, payment) {
+  const fullBody = String(buildQuoteSms(lead, pricing, payment) || "");
+  try {
+    if (fullBody.length > MAX_QUOTE_SMS_CHARS) {
+      throw new Error("quote_sms_too_long_full_template");
+    }
+    const sms = await sendSms(from_phone, fullBody);
+    return { sms, template: "QUOTE_LINK_V1_FULL" };
+  } catch (errFull) {
+    try {
+      insertEvent.run({
+        from_phone,
+        event_type: "quote_sms_full_failed",
+        payload_json: JSON.stringify({ error: String(errFull?.message || errFull) }),
+        created_at: new Date().toISOString(),
+      });
+    } catch (_) {}
+    const compactBody = String(buildCompactQuoteSms(pricing, payment) || "");
+    if (compactBody.length > MAX_QUOTE_SMS_CHARS) {
+      throw new Error("quote_sms_too_long_compact_template");
+    }
+    const sms = await sendSms(from_phone, compactBody);
+    return { sms, template: "QUOTE_LINK_V1_COMPACT_FALLBACK" };
+  }
 }
 
 async function getLead(from_phone) {
@@ -296,19 +343,22 @@ async function maybeCreateQuote(from_phone) {
       });
     } catch (e) {}
 
-    const smsBody = buildQuoteSms(lead, pricingWithAddons, payment);
-    const sms = await sendSms(from_phone, smsBody);
+    const quoteSmsResult = await sendQuoteSmsWithFallback(from_phone, lead, pricingWithAddons, payment);
+    const sms = quoteSmsResult.sms;
 
     try {
       insertEvent.run({
         from_phone,
         event_type: "sms_sent_quote_link",
-        payload_json: JSON.stringify({ from_phone, template: "QUOTE_LINK_V1", twilio: sms }),
+        payload_json: JSON.stringify({ from_phone, template: quoteSmsResult.template, twilio: sms }),
         created_at: new Date().toISOString(),
       });
     } catch (e) {}
 
-    pool.query("UPDATE leads SET quote_status='AWAITING_DEPOSIT', last_seen_at=NOW() WHERE from_phone=$1", [from_phone]).catch(()=>{});
+    pool.query(
+      "UPDATE leads SET quote_status='AWAITING_DEPOSIT', conv_state='AWAITING_DEPOSIT', quote_ready=0, last_seen_at=NOW() WHERE from_phone=$1",
+      [from_phone]
+    ).catch(()=>{});
 
     return {
       ok: true,
