@@ -1065,7 +1065,7 @@ async function getActiveDumpSiteOverrides() {
   const rows = (await pool.query(
     `SELECT site_id, override_state, reason, active_until, updated_at, updated_by
      FROM dumpsite_overrides
-     WHERE active_until IS NULL OR active_until > NOW()`
+     WHERE active_until IS NULL OR active_until::timestamptz > NOW()`
   )).rows;
   return rows;
 }

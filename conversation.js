@@ -16,6 +16,7 @@ const STATES = {
   AWAITING_DEPOSIT: "AWAITING_DEPOSIT", BOOKING_SENT: "BOOKING_SENT",
   WINDOW_SELECTED: "WINDOW_SELECTED", AWAITING_DAY: "AWAITING_DAY", ESCALATED: "ESCALATED",
   AWAITING_REFERRAL_SOURCE: "AWAITING_REFERRAL_SOURCE",
+  AWAITING_AGENT_NAME: "AWAITING_AGENT_NAME",
   AWAITING_ADDON_SELECTION: "AWAITING_ADDON_SELECTION",
 };
 
@@ -306,31 +307,19 @@ async function handleConversation(payload) {
 
     case STATES.AWAITING_REFERRAL_SOURCE: {
       try {
-        const leadNow = await getLead.get(from_phone);
-        const isRealtor = String(leadNow?.lead_source || "") === "realtor_referral";
-        const needsAgentName = isRealtor && !String(leadNow?.referral_agent_name || "").trim();
+        const bodyLower = String(body || "").trim().toLowerCase();
+        const isYes = [
+          "yes", "yeah", "yep", "yup", "yea", "sure", "absolutely",
+          "correct", "affirmative", "referred by", "sent by", "my agent",
+          "my realtor", "from my", "through my"
+        ].some((word) => bodyLower.includes(word));
+        const isNo = [
+          "no", "nope", "nah", "not really", "no one", "nobody",
+          "direct", "myself", "found you", "google", "saw your",
+          "just found", "online", "instagram", "facebook"
+        ].some((word) => bodyLower.includes(word));
 
-        if (needsAgentName) {
-          const agentName = bodyUpper === "SKIP" ? null : String(body || "").trim().slice(0, 140);
-          if (bodyUpper !== "SKIP" && !agentName) {
-            await sendSms(from_phone, "Got it — what's the agent's name or brokerage? (You can skip this by replying SKIP)");
-            break;
-          }
-          await pool.query(
-            `UPDATE leads
-             SET referral_agent_name=$1,
-                 conv_state=$2,
-                 last_seen_at=NOW()
-             WHERE from_phone=$3`,
-            [agentName || null, STATES.AWAITING_MEDIA, from_phone]
-          );
-          clearReferralTimeout(from_phone);
-          await notifyReferralPartner(from_phone);
-          await sendPhotoPrompt(from_phone);
-          break;
-        }
-
-        if (bodyUpper === "YES" || bodyUpper === "Y") {
+        if (isYes) {
           await pool.query(
             `UPDATE leads
              SET lead_source='realtor_referral',
@@ -338,16 +327,15 @@ async function handleConversation(payload) {
                  conv_state=$1,
                  last_seen_at=NOW()
              WHERE from_phone=$2`,
-            [STATES.AWAITING_REFERRAL_SOURCE, from_phone]
+            [STATES.AWAITING_AGENT_NAME, from_phone]
           );
           clearReferralTimeout(from_phone);
-          scheduleReferralTimeout(from_phone);
           await notifyReferralPartner(from_phone);
           await sendSms(from_phone, "Got it — what's the agent's name or brokerage? (You can skip this by replying SKIP)");
           break;
         }
 
-        if (bodyUpper === "NO" || bodyUpper === "N" || bodyUpper === "SKIP") {
+        if (isNo || bodyUpper === "SKIP") {
           await pool.query(
             `UPDATE leads
              SET lead_source='sms',
@@ -361,9 +349,36 @@ async function handleConversation(payload) {
           break;
         }
 
-        await sendSms(from_phone, "Quick question before we get started — were you referred by a real estate agent or property manager?\n\nReply YES or NO.");
+        await sendSms(from_phone, "Just to confirm — were you referred by a real estate agent or property manager? Reply YES or NO.");
       } catch (_) {
         clearReferralTimeout(from_phone);
+        setState(from_phone, STATES.AWAITING_MEDIA);
+        await sendPhotoPrompt(from_phone);
+      }
+      break;
+    }
+
+    case STATES.AWAITING_AGENT_NAME: {
+      try {
+        const agentInput = String(body || "").trim();
+        if (/^skip$/i.test(agentInput)) {
+          await pool.query(
+            "UPDATE leads SET conv_state=$1, last_seen_at=NOW() WHERE from_phone=$2",
+            [STATES.AWAITING_MEDIA, from_phone]
+          );
+          await sendPhotoPrompt(from_phone);
+          break;
+        }
+        if (!agentInput) {
+          await sendSms(from_phone, "Got it — what's the agent's name or brokerage? (You can skip this by replying SKIP)");
+          break;
+        }
+        await pool.query(
+          "UPDATE leads SET referral_agent_name=$1, conv_state=$2, last_seen_at=NOW() WHERE from_phone=$3",
+          [agentInput.slice(0, 140), STATES.AWAITING_MEDIA, from_phone]
+        );
+        await sendPhotoPrompt(from_phone);
+      } catch (_) {
         setState(from_phone, STATES.AWAITING_MEDIA);
         await sendPhotoPrompt(from_phone);
       }
