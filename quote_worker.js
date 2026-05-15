@@ -47,49 +47,21 @@ function buildQuoteSms(lead, pricing, payment) {
       `Reserve your date with ${depositStr} today:\n${String(payment?.deposit?.payment_link_url || "")}`
     );
   }
-  const bucket = pricing.bucket;
-  const total = (Number(payment?.quoteTotalCents || pricing.total_cents || 0) / 100).toFixed(0);
-  const deposit = (DEPOSIT_CENTS / 100).toFixed(0);
-  const upfrontTotal = (payment.upfrontTotalCents / 100).toFixed(0);
-  const upfrontSavings = ((payment.quoteTotalCents - payment.upfrontTotalCents) / 100).toFixed(0);
-  const addonTotal = Math.max(0, Math.round(Number(pricing?.addon_total_cents || 0)));
+  const totalCents = Number(payment?.quoteTotalCents || pricing?.total_with_addons_cents || pricing?.total_cents || 0);
+  const depositCents = Number(payment?.depositCents || payment?.deposit?.amount_cents || DEPOSIT_CENTS);
+  const totalStr = `$${(totalCents / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+  const depositStr = `$${(depositCents / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+  const address = String(lead?.address_text || lead?.address || "your address");
 
-  let itemLines = "";
-  try {
-    const vision = typeof lead.vision_analysis === "string" ? JSON.parse(lead.vision_analysis) : lead.vision_analysis;
-    if (vision && vision.items && vision.items.length > 0) {
-      itemLines = "Items flagged for removal:\n" + vision.items.map(i => "• " + i).join("\n");
-    }
-  } catch(e) {}
+  let scopePhrase = "job";
+  if (intakePath === "path_2_rooms") scopePhrase = "room / garage clearout";
+  else if (intakePath === "path_3_few_items") scopePhrase = "pickup";
 
-  const parts = [
-    "Your ICL Junk Removal quote is ready.",
-    "",
-    "Load: " + bucket + "  |  Total: $" + total,
-    ""
-  ];
-  if (addonTotal > 0) {
-    parts.push("Pre-listing add-ons: $" + (addonTotal / 100).toFixed(0));
-    parts.push("");
-  }
-  if (itemLines) { parts.push(itemLines); parts.push(""); }
-  parts.push("Pick your checkout option:");
-  parts.push("1) Reserve with $" + deposit + " deposit:");
-  parts.push(payment.deposit.payment_link_url);
-  parts.push("");
-  parts.push(
-    "2) Pay upfront and save " +
-    payment.upfrontDiscountPct +
-    "% ($" +
-    upfrontSavings +
-    " off, total $" +
-    upfrontTotal +
-    "):"
+  return (
+    `Confirmed for ${address} — ${scopePhrase}.\n\n` +
+    `${totalStr} all-inclusive.\n\n` +
+    `Reserve your date with ${depositStr} today:\n${String(payment?.deposit?.payment_link_url || "")}`
   );
-  parts.push(payment.upfront.payment_link_url);
-  parts.push("");
-  parts.push("Choose your arrival window: 8–10am, 10am–12pm, 12–2pm, 2–4pm, or 4–6pm.");
-  return parts.join("\n");
 }
 
 function buildCompactQuoteSms(pricing, payment) {
@@ -101,22 +73,15 @@ function buildCompactQuoteSms(pricing, payment) {
       payment?.deposit?.payment_link_url || "",
     ].join("\n");
   }
-  const bucket = String(pricing?.bucket || "HALF");
-  const total = (Number(payment?.quoteTotalCents || pricing?.total_cents || 0) / 100).toFixed(0);
-  const deposit = (DEPOSIT_CENTS / 100).toFixed(0);
-  const upfrontTotal = (Number(payment?.upfrontTotalCents || 0) / 100).toFixed(0);
-  const upfrontSavings = ((Number(payment?.quoteTotalCents || 0) - Number(payment?.upfrontTotalCents || 0)) / 100).toFixed(0);
+  const total = Number(payment?.quoteTotalCents || pricing?.total_with_addons_cents || pricing?.total_cents || 0);
+  const deposit = Number(payment?.depositCents || payment?.deposit?.amount_cents || DEPOSIT_CENTS);
   return [
-    "Your ICL quote is ready.",
-    "Load: " + bucket + " | Total: $" + total,
+    "Confirmed for your address.",
     "",
-    "1) Reserve with $" + deposit + " deposit:",
+    `$${(total / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })} all-inclusive.`,
+    "",
+    "Reserve your date with $" + (deposit / 100).toLocaleString("en-US", { maximumFractionDigits: 0 }) + " today:",
     payment?.deposit?.payment_link_url || "",
-    "",
-    "2) Pay upfront and save " + Number(payment?.upfrontDiscountPct || UPFRONT_DISCOUNT_PCT) + "% ($" + upfrontSavings + " off, total $" + upfrontTotal + "):",
-    payment?.upfront?.payment_link_url || "",
-    "",
-    "Reply 1–5 for your arrival window after checkout."
   ].join("\n");
 }
 

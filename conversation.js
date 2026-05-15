@@ -20,6 +20,7 @@ const STATES = {
   AWAITING_REFERRAL_SOURCE: "AWAITING_REFERRAL_SOURCE",
   AWAITING_AGENT_NAME: "AWAITING_AGENT_NAME",
   AWAITING_ADDON_SELECTION: "AWAITING_ADDON_SELECTION",
+  AWAITING_MANUAL_REVIEW: "AWAITING_MANUAL_REVIEW",
   AWAITING_POST_PAYMENT_REFERRAL: "AWAITING_POST_PAYMENT_REFERRAL",
   AWAITING_POST_BOOKING_REFERRAL: "AWAITING_POST_BOOKING_REFERRAL",
 };
@@ -73,7 +74,7 @@ const REALTOR_ADDON_CODE_MAP = {
 const referralTimers = new Map();
 const scopeTriageTimers = new Map();
 const addonOfferTimers = new Map();
-const OPS_PHONE = String(process.env.OPS_PHONE || process.env.OPS_ALERT_PHONE || "+12138806318").trim();
+const OPS_PHONE = String(process.env.OPS_PHONE_NUMBER || process.env.OPS_PHONE || process.env.OPS_ALERT_PHONE || "+12138806318").trim();
 const ESCALATION_KEYWORDS = [
   "condemned", "biohazard", "hoarder", "hoarding",
   "fire damage", "flood damage", "mold", "asbestos",
@@ -102,6 +103,8 @@ const PATH1_ADDON_PROMPT =
   "1) Deep Clean\n" +
   "2) Pressure Wash\n" +
   "3) Paint Touch-Ups";
+const MANUAL_VISION_REVIEW_CUSTOMER_MESSAGE =
+  "Thanks — we're going to have a teammate eyeball this one to make sure your quote is right. We'll be back to you in a few minutes.";
 
 function getConvState(lead) { return (lead && lead.conv_state) || STATES.NEW; }
 function getIntakePath(lead) { return String(lead?.intake_path || "").trim(); }
@@ -122,7 +125,50 @@ async function setState(from_phone, state) {
 async function sendPhotoPrompt(from_phone) {
   await sendSms(
     from_phone,
-    "Perfect — send us up to 10 photos of what you need removed. Different angles help us give you the most accurate quote."
+    "Got it — send up to 10 photos of what needs to go and we'll have a quote back in a minute."
+  );
+}
+
+async function sendScopedPhotoPrompt(from_phone, jobScope) {
+  if (jobScope === "room_garage") {
+    await sendSms(
+      from_phone,
+      "Got it — one or two rooms / garage. Send up to 10 photos of what needs to go and we'll have a quote back in a minute."
+    );
+    return;
+  }
+  if (jobScope === "few_items") {
+    await sendSms(
+      from_phone,
+      "Got it — sounds like a quick one. Send a few photos of what needs to go and we'll have a quote back in a minute."
+    );
+    return;
+  }
+  await sendPhotoPrompt(from_phone);
+}
+
+function getLeadReviewUrl(from_phone) {
+  const baseUrl = String(process.env.BASE_URL || process.env.APP_BASE_URL || "https://icl-twilio-intake-production.up.railway.app").replace(/\/+$/, "");
+  return `${baseUrl}/admin/lead?phone=${encodeURIComponent(from_phone)}`;
+}
+
+async function handoffManualVisionReview(from_phone, lead, reason, photoUrls = []) {
+  const urls = Array.isArray(photoUrls)
+    ? photoUrls.filter(Boolean)
+    : [];
+  const fallbackUrl = String(lead?.media_url0 || "").trim();
+  if (!urls.length && fallbackUrl) urls.push(fallbackUrl);
+  await pool.query(
+    "UPDATE leads SET conv_state=$1, quote_status='MANUAL_REVIEW', low_confidence_retry=0, escalation_reason=$2, last_seen_at=NOW() WHERE from_phone=$3",
+    [STATES.AWAITING_MANUAL_REVIEW, reason, from_phone]
+  );
+  await sendSms(from_phone, MANUAL_VISION_REVIEW_CUSTOMER_MESSAGE);
+  await sendSms(
+    OPS_PHONE,
+    `[VISION LOW CONF] Lead #${lead?.id || "unknown"} — ${from_phone}\n` +
+    `Path: ${String(lead?.intake_path || "unknown")}\n` +
+    `Photos: ${urls.length ? urls.join(", ") : "n/a"}\n` +
+    `Review: ${getLeadReviewUrl(from_phone)}`
   );
 }
 
@@ -374,7 +420,8 @@ async function sendLoadPrompt(from_phone, lead) {
     conf = String(vision?.load_confidence || "").toUpperCase();
   } catch (e) {}
   const confSuffix = conf && conf !== "HIGH" ? ` (${conf} confidence)` : "";
-  const prefix = hint ? `Photo estimate: ${hint}${confSuffix}. Please confirm below.\n\n` : "";
+  const hintLabel = hint === "SMALL" ? "a small pickup" : hint === "MEDIUM" ? "about a half truckload" : "a larger truckload";
+  const prefix = hint ? `Looks like ${hintLabel}${confSuffix}. Sound right?\n\n` : "";
   await sendSms(from_phone, `${prefix}How much are you removing?\n\nSMALL — pickup-truck bed\nMEDIUM — half a truck\nLARGE — full truck`);
 }
 
@@ -414,21 +461,9 @@ async function maybeAutoQuoteFromVision(from_phone, reason = "vision_high_confid
     return false;
   }
   if (normalizedConfidence === "LOW") {
-    const retry = Math.max(0, Math.round(Number(lead.low_confidence_retry || 0)));
-    if (retry < 1) {
-      await pool.query(
-        "UPDATE leads SET low_confidence_retry=1, conv_state=$1, last_seen_at=NOW() WHERE from_phone=$2",
-        [STATES.AWAITING_MEDIA, from_phone]
-      );
-      await sendSms(
-        from_phone,
-        "A couple more angles would help us nail your quote — can you send a few more photos showing the full space?"
-      );
-      logEvent(from_phone, "vision_low_confidence_retry_requested", { reason });
-      return false;
-    }
-    await appendCrewNote(from_phone, "Load estimate is MEDIUM confidence — confirm on arrival.");
-    logEvent(from_phone, "vision_low_confidence_retry_promoted", { reason });
+    await handoffManualVisionReview(from_phone, lead, "vision_low_confidence", [lead?.media_url0]);
+    logEvent(from_phone, "vision_low_confidence_manual_review", { reason });
+    return false;
   }
   if (normalizedConfidence === "MEDIUM") {
     await appendCrewNote(from_phone, "Load estimate is MEDIUM confidence — confirm on arrival.");
@@ -441,7 +476,7 @@ async function maybeAutoQuoteFromVision(from_phone, reason = "vision_high_confid
   const label = bucket === "MIN" || bucket === "QTR" ? "SMALL" : (bucket === "HALF" ? "MEDIUM" : "LARGE");
   await sendSms(
     from_phone,
-    `Based on your photos, this appears to be a ${label.toLowerCase()} load. If you want to adjust it, reply SMALL, MEDIUM, or LARGE before checkout.`
+    `Looks like about a ${label === "SMALL" ? "small pickup" : label === "MEDIUM" ? "half truckload" : "larger truckload"}. Sound right? Reply SMALL, MEDIUM, or LARGE if you'd like it adjusted before checkout.`
   );
   await triggerQuote(from_phone);
   return true;
@@ -516,16 +551,21 @@ async function advanceAfterAddress(from_phone) {
 
 function runVisionAsync(from_phone, mediaUrl, allUrls) {
   const urlsToAnalyze = allUrls && allUrls.length > 0 ? allUrls : [mediaUrl];
-  analyzeAllMedia(urlsToAnalyze).then((vision) => {
+  analyzeAllMedia(urlsToAnalyze).then(async (vision) => {
     logEvent(from_phone, "vision_analysis", vision);
+    const lead = await getLead.get(from_phone);
     try {
       pool.query('UPDATE leads SET vision_analysis=$1,troll_flag=$2,crew_notes=$3,item_tags=$4,vision_load_bucket=$5,vision_access_level=$6,last_seen_at=NOW() WHERE from_phone=$7', [JSON.stringify(vision), vision.troll_flag?1:0, vision.crew_notes||null, JSON.stringify(vision.data_tags||[]), vision.load_bucket||null, vision.access_level||null, from_phone]).catch(()=>{});
     } catch(e) {
       pool.query('UPDATE leads SET vision_analysis=$1,troll_flag=$2,crew_notes=$3,item_tags=$4,last_seen_at=NOW() WHERE from_phone=$5', [JSON.stringify(vision),vision.troll_flag?1:0,vision.crew_notes||null,JSON.stringify(vision.data_tags||[]),from_phone]).catch(()=>{});
     }
     if (vision.troll_flag || !vision.is_valid_junk) {
-      setState(from_phone, STATES.ESCALATED);
-      sendSms(from_phone, "Thanks for reaching out! We couldn't identify junk removal items in your photo. Send a clearer photo or reply HELP to reach our team.").catch(()=>{});
+      try {
+        await handoffManualVisionReview(from_phone, lead || { from_phone }, "vision_unclear_items", urlsToAnalyze);
+      } catch (_) {
+        setState(from_phone, STATES.AWAITING_MANUAL_REVIEW);
+        sendSms(from_phone, MANUAL_VISION_REVIEW_CUSTOMER_MESSAGE).catch(()=>{});
+      }
       return;
     }
     const updates=[]; const params=[];
@@ -620,9 +660,11 @@ async function handleConversation(payload) {
       } else if (/\b2\b/.test(bodyTrim)) {
         jobScope = "room_garage";
         intakePath = PATH_2_ROOMS;
+        nextPrompt = "Got it — one or two rooms / garage. Send up to 10 photos of what needs to go and we'll have a quote back in a minute.";
       } else if (/\b3\b/.test(bodyTrim)) {
         jobScope = "few_items";
         intakePath = PATH_3_FEW_ITEMS;
+        nextPrompt = "Got it — sounds like a quick one. Send a few photos of what needs to go and we'll have a quote back in a minute.";
       }
 
       if (!jobScope) {
@@ -643,7 +685,7 @@ async function handleConversation(payload) {
       } catch (_) {}
       clearScopeTriageTimeout(from_phone);
       if (nextPrompt) await sendSms(from_phone, nextPrompt);
-      else await sendPhotoPrompt(from_phone);
+      else await sendScopedPhotoPrompt(from_phone, jobScope);
       break;
     }
 
@@ -739,7 +781,7 @@ async function handleConversation(payload) {
 
     case STATES.AWAITING_MEDIA: {
       const isVideo = (payload.MediaContentType0||"").includes("video");
-      if (isVideo) { await sendSms(from_phone, "Got it! Videos don't come through our system — can you send still photos instead? Different angles help us give you the most accurate quote."); break; }
+      if (isVideo) { await sendSms(from_phone, "Got it — videos don't come through our system. Send still photos and we'll get your quote right over."); break; }
       if (numMedia>0||mediaUrl) {
         try { upsertLead.run({from_phone,to_phone,ts:new Date().toISOString(),last_event:"media_received",last_body:body,num_media:numMedia,media_url0:mediaUrl||null}); } catch(e){}
         logEvent(from_phone,"media_received",{numMedia,mediaUrl});
@@ -814,13 +856,13 @@ async function handleConversation(payload) {
             pool.query("SELECT COUNT(*) as cnt FROM events WHERE from_phone=$1", [from_phone]).then(evtR => {
               const isCaller = parseInt(evtR.rows[0].cnt) <= 1;
               const msg = isCaller
-                ? "Hey! You just called us — glad you reached out. Go ahead and send up to 10 photos of what needs to go — different angles help us give you the most accurate quote. 📦\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote."
-                : "Hi! Thanks for texting ICL Junk Removal.\n\nSend us up to 10 photos of what you need removed — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.";
+                ? "Hey! You just called us — glad you reached out. Go ahead and send up to 10 photos of what needs to go and we'll get your quote started right away. 📦\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote."
+                : "Hi! Thanks for texting ICL Junk Removal.\n\nSend up to 10 photos of what needs to go and we'll get your quote started right away.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.";
               sendSms(from_phone, msg).then(() => {
             }).catch(()=>{});
-            }).catch(()=>{ sendSms(from_phone,"Hi! Thanks for texting ICL Junk Removal.\n\nSend us up to 10 photos of what you need removed — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.").catch(()=>{}); });
+            }).catch(()=>{ sendSms(from_phone,"Hi! Thanks for texting ICL Junk Removal.\n\nSend up to 10 photos of what needs to go and we'll get your quote started right away.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.").catch(()=>{}); });
           }
-        }).catch(()=>{ sendSms(from_phone,"Hi! Thanks for texting ICL Junk Removal.\n\nSend us up to 10 photos of what you need removed — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.").catch(()=>{}); });
+        }).catch(()=>{ sendSms(from_phone,"Hi! Thanks for texting ICL Junk Removal.\n\nSend up to 10 photos of what needs to go and we'll get your quote started right away.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.").catch(()=>{}); });
       }
       break;
     }
@@ -1179,6 +1221,11 @@ async function handleConversation(payload) {
       break;
     }
 
+    case STATES.AWAITING_MANUAL_REVIEW: {
+      await sendSms(from_phone, "Thanks again — a teammate is reviewing your photos now and we'll follow up shortly.");
+      break;
+    }
+
     case STATES.ESCALATED: {
       if (numMedia > 0 || mediaUrl) {
         setState(from_phone, STATES.AWAITING_MEDIA);
@@ -1202,11 +1249,11 @@ async function handleConversation(payload) {
       const evtCheck2 = await pool.query("SELECT COUNT(*) as cnt FROM events WHERE from_phone=$1", [from_phone]);
       const isCallerFollowup2 = parseInt(evtCheck2.rows[0].cnt) <= 1;
       const greeting2 = isCallerFollowup2
-        ? "Hey! You just called us — glad you reached out. Go ahead and send up to 10 photos of what needs to go — different angles help us give you the most accurate quote. 📦\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote."
-        : "Hi! Thanks for texting ICL Junk Removal. Send us up to 10 photos of what needs to go — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.";
+        ? "Hey! You just called us — glad you reached out. Go ahead and send up to 10 photos of what needs to go and we'll get your quote started right away. 📦\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote."
+        : "Hi! Thanks for texting ICL Junk Removal. Send up to 10 photos of what needs to go and we'll get your quote started right away.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.";
       await sendSms(from_phone, greeting2);
     } catch(e) {
-      await sendSms(from_phone,"Hi! Thanks for texting ICL Junk Removal. Send us up to 10 photos of what needs to go — different angles help us give you the most accurate quote.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.");
+      await sendSms(from_phone,"Hi! Thanks for texting ICL Junk Removal. Send up to 10 photos of what needs to go and we'll get your quote started right away.\n\n⚠️ Any item visible in your photos will be flagged for removal and included in your quote.");
     }
     }
   }
