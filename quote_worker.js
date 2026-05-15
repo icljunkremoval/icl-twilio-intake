@@ -2,6 +2,7 @@ const { db, pool, insertEvent } = require("./db");
 const { priceQuoteV1 } = require("./pricing_v1");
 const { createSquarePaymentOptions } = require("./square_quote");
 const { sendSms } = require("./twilio_sms");
+const { lookupSqftByAddress } = require("./property_sqft");
 
 const DEPOSIT_CENTS = 5000;
 const UPFRONT_DISCOUNT_PCT = 10;
@@ -101,6 +102,24 @@ function addonTotalFromLead(lead) {
   return n;
 }
 
+function normalizeBucket(raw) {
+  const v = String(raw || "").toUpperCase().trim();
+  if (v === "SMALL") return "MIN";
+  if (v === "MEDIUM") return "HALF";
+  if (v === "LARGE") return "FULL";
+  if (v === "MIN" || v === "QTR" || v === "HALF" || v === "3Q" || v === "FULL") return v;
+  return "";
+}
+
+function chooseBucket(lead) {
+  return (
+    normalizeBucket(lead?.load_bucket) ||
+    normalizeBucket(lead?.vision_load_bucket) ||
+    normalizeBucket(lead?.customer_load_bucket) ||
+    "HALF"
+  );
+}
+
 async function maybeCreateQuote(from_phone) {
   const lead0 = await getLead(from_phone);
   if (!lead0) return { ok: false, reason: "no_lead" };
@@ -111,16 +130,51 @@ async function maybeCreateQuote(from_phone) {
 
   try {
     const lead = await getLead(from_phone);
+    const selectedBucket = chooseBucket(lead);
 
     const pricing = priceQuoteV1({
-      load_bucket: lead.load_bucket,
+      load_bucket: selectedBucket,
       distance_miles: lead.distance_miles || 0,
       access_level: lead.access_level,
     });
+    let baseQuoteCents = Number(pricing.total_cents || 0);
+    let pricingPath = "default";
+    let rentcastSqft = Number.isFinite(Number(lead?.rentcast_sqft)) ? Math.round(Number(lead.rentcast_sqft)) : null;
+    let softFlag = Math.max(0, Math.round(Number(lead?.soft_flag || 0)));
+    let crewNote = null;
+
+    if (String(lead?.job_scope || "") === "full_home") {
+      pricingPath = "full_home_fallback";
+      try {
+        const lookup = await lookupSqftByAddress({
+          address: lead?.address_text,
+          zip: lead?.zip || lead?.zip_text,
+          load_bucket: selectedBucket,
+        });
+        if (lookup && lookup.ok && Number(lookup.sqft) > 0) {
+          rentcastSqft = Math.round(Number(lookup.sqft));
+          baseQuoteCents = Math.max(124700, Math.round(rentcastSqft * 85));
+          pricingPath = "full_home_rentcast";
+        }
+      } catch (_) {}
+    } else if (String(lead?.job_scope || "") === "room_garage") {
+      pricingPath = "room_garage";
+      if (selectedBucket === "3Q" || selectedBucket === "FULL") softFlag = 1;
+    } else if (String(lead?.job_scope || "") === "few_items") {
+      pricingPath = "few_items";
+      if (selectedBucket === "HALF" || selectedBucket === "3Q" || selectedBucket === "FULL") {
+        crewNote = "Few-items intake returned larger load bucket — confirm scope on arrival.";
+      }
+    }
+
     const addonTotalCents = addonTotalFromLead(lead);
-    const quoteTotalWithAddons = Number(pricing.total_cents || 0) + addonTotalCents;
+    const quoteTotalWithAddons = baseQuoteCents + addonTotalCents;
     const pricingWithAddons = {
       ...pricing,
+      bucket: selectedBucket,
+      path: pricingPath,
+      base_path_total_cents: baseQuoteCents,
+      rentcast_sqft: rentcastSqft,
       addon_total_cents: addonTotalCents,
       total_with_addons_cents: quoteTotalWithAddons,
     };
@@ -159,6 +213,21 @@ async function maybeCreateQuote(from_phone) {
         payment.upfrontDiscountPct,
         from_phone
       ]
+    );
+    await pool.query(
+      `UPDATE leads
+       SET load_bucket = COALESCE(NULLIF(load_bucket,''), $1),
+           rentcast_sqft = COALESCE($2, rentcast_sqft),
+           soft_flag = $3,
+           crew_notes = CASE
+             WHEN $4 IS NULL OR $4 = '' THEN crew_notes
+             WHEN crew_notes IS NULL OR crew_notes = '' THEN $4
+             WHEN crew_notes ILIKE '%' || $4 || '%' THEN crew_notes
+             ELSE crew_notes || ' ' || $4
+           END,
+           last_seen_at = NOW()
+       WHERE from_phone = $5`,
+      [selectedBucket, rentcastSqft, softFlag, crewNote, from_phone]
     );
 
     try {
