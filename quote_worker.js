@@ -364,10 +364,10 @@ async function maybeCreateQuote(from_phone) {
            rentcast_sqft = COALESCE($2, rentcast_sqft),
            soft_flag = $3,
            crew_notes = CASE
-             WHEN $4 IS NULL OR $4 = '' THEN crew_notes
-             WHEN crew_notes IS NULL OR crew_notes = '' THEN $4
-             WHEN crew_notes ILIKE '%' || $4 || '%' THEN crew_notes
-             ELSE crew_notes || ' ' || $4
+             WHEN $4::text IS NULL OR $4::text = '' THEN crew_notes
+             WHEN crew_notes IS NULL OR crew_notes = '' THEN $4::text
+             WHEN crew_notes ILIKE '%' || $4::text || '%' THEN crew_notes
+             ELSE crew_notes || ' ' || $4::text
            END,
            last_seen_at = NOW()
        WHERE from_phone = $5`,

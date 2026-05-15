@@ -3,7 +3,6 @@ const { pool, insertEvent } = require("./db");
 const { sendSms } = require("./twilio_sms");
 
 const OPS_PHONE = "+12138806318";
-const STALL_MINUTES = 30;
 
 const RECOVERY_MESSAGES = {
   NEW:              "Hey — still thinking about getting rid of some stuff? Text us a photo and we'll have a quote ready in minutes. 📦",
@@ -17,14 +16,12 @@ const RECOVERY_MESSAGES = {
 };
 
 async function checkDropoffs() {
-  const cutoff = new Date(Date.now() - STALL_MINUTES * 60 * 1000);
-
   const result = await pool.query(`
     SELECT from_phone, conv_state, address_text, last_seen_at
     FROM leads
     WHERE last_seen_at IS NOT NULL
       AND last_seen_at <> ''
-      AND last_seen_at::timestamptz < $1::timestamptz
+      AND last_seen_at::timestamptz < NOW() - INTERVAL '30 minutes'
       AND conv_state NOT IN ('AWAITING_DEPOSIT', 'DEPOSIT_PAID', 'BOOKING_SENT', 'WINDOW_SELECTED', 'ESCALATED', 'QUOTE_READY')
       AND COALESCE(stall_count, 0) < 3
       AND (
@@ -34,7 +31,7 @@ async function checkDropoffs() {
       AND archived_at IS NULL
     ORDER BY last_seen_at::timestamptz DESC
     LIMIT 20
-  `, [cutoff]);
+  `);
 
   const stalled = result.rows;
   if (stalled.length === 0) return;
