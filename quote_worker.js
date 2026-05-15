@@ -1,5 +1,5 @@
 const { db, pool, insertEvent } = require("./db");
-const { priceQuoteV1 } = require("./pricing_v1");
+const { priceQuoteV1, calcDeepClean, calcPressureWash, calcPaintTouchup } = require("./pricing_v1");
 const { createSquarePaymentOptions } = require("./square_quote");
 const { sendSms } = require("./twilio_sms");
 const { lookupSqftByAddress } = require("./property_sqft");
@@ -14,6 +14,36 @@ const ESCALATION_CUSTOMER_MESSAGE =
   "to walk you through your options. Feel free to send any photos\n" +
   "of the space in the meantime — it helps us get you the most\n" +
   "accurate quote possible.";
+const PATH_1_FULL_HOME = "path_1_full_home";
+
+function roundPath1BaseCents(sqft) {
+  const s = Math.max(0, Math.round(Number(sqft || 0)));
+  if (!s) return 124700;
+  return Math.max(124700, Math.round((s * 85) / 500) * 500);
+}
+
+function parseSelectedAddons(rawAddons) {
+  let addons = rawAddons;
+  if (typeof addons === "string") {
+    try { addons = JSON.parse(addons); } catch (_) { addons = []; }
+  }
+  if (!Array.isArray(addons)) return [];
+  return addons;
+}
+
+function calcPath1AddonTotalCents(addons, sqft) {
+  const selected = parseSelectedAddons(addons);
+  if (!selected.length) return 0;
+  const safeSqft = Math.max(1, Math.round(Number(sqft || 0))) || 1500;
+  let total = 0;
+  for (const addon of selected) {
+    const code = String(addon?.code || "").toUpperCase();
+    if (code === "DEEP_CLEAN") total += calcDeepClean(safeSqft) * 100;
+    else if (code === "PRESSURE_WASH") total += calcPressureWash(safeSqft) * 100;
+    else if (code === "PAINT_TOUCHUP") total += calcPaintTouchup(safeSqft) * 100;
+  }
+  return total;
+}
 
 function buildQuoteSms(lead, pricing, payment) {
   const bucket = pricing.bucket;
@@ -279,28 +309,40 @@ async function maybeCreateQuote(from_phone) {
     let rentcastSqft = Number.isFinite(Number(lead?.rentcast_sqft)) ? Math.round(Number(lead.rentcast_sqft)) : null;
     let softFlag = Math.max(0, Math.round(Number(lead?.soft_flag || 0)));
     let crewNote = null;
+    let needsManualReview = false;
+    const intakePath = String(lead?.intake_path || "");
+    const isPath1 = intakePath === PATH_1_FULL_HOME || String(lead?.job_scope || "") === "full_home";
+    let addonTotalCents = addonTotalFromLead(lead);
 
-    if (String(lead?.job_scope || "") === "full_home") {
+    if (isPath1) {
       pricingPath = "full_home_fallback";
-      let rentcastOk = false;
+      let rentcastLookup = null;
       try {
-        const lookup = await lookupSqftByAddress({
+        rentcastLookup = await lookupSqftByAddress({
           address: lead?.address_text,
           zip: lead?.zip || lead?.zip_text,
           load_bucket: selectedBucket,
         });
-        if (lookup && lookup.ok && Number(lookup.sqft) > 0) {
-          rentcastSqft = Math.round(Number(lookup.sqft));
-          baseQuoteCents = Math.max(124700, Math.round(rentcastSqft * 85));
+        if (rentcastLookup && rentcastLookup.ok && Number(rentcastLookup.sqft) > 0) {
+          rentcastSqft = Math.round(Number(rentcastLookup.sqft));
+          baseQuoteCents = roundPath1BaseCents(rentcastSqft);
           pricingPath = "full_home_rentcast";
-          rentcastOk = true;
         }
       } catch (_) {}
-      const confidence = visionConfidenceFromLead(lead);
-      if (!rentcastOk && confidence !== "HIGH") {
-        await escalateQuoteFlow(from_phone, lead, "full_home_rentcast_failed_non_high_confidence");
-        return { ok: true, changed: true, reason: "escalated_full_home_rentcast_failure" };
+      if (!rentcastSqft) {
+        baseQuoteCents = 124700;
+        needsManualReview = true;
+        crewNote = "Path 1 RentCast lookup unavailable — defaulted to $1,247 minimum.";
+        try {
+          insertEvent.run({
+            from_phone,
+            event_type: "path1_rentcast_fallback_used",
+            payload_json: JSON.stringify({ reason: rentcastLookup?.reason || "lookup_failed" }),
+            created_at: new Date().toISOString(),
+          });
+        } catch (_) {}
       }
+      addonTotalCents = calcPath1AddonTotalCents(lead?.prelisting_addons, rentcastSqft || 1500);
     } else if (String(lead?.job_scope || "") === "room_garage") {
       pricingPath = "room_garage";
       if (selectedBucket === "3Q" || selectedBucket === "FULL") softFlag = 1;
@@ -310,8 +352,6 @@ async function maybeCreateQuote(from_phone) {
         crewNote = "Few-items intake returned larger load bucket — confirm scope on arrival.";
       }
     }
-
-    const addonTotalCents = addonTotalFromLead(lead);
     const quoteTotalWithAddons = baseQuoteCents + addonTotalCents;
     const pricingWithAddons = {
       ...pricing,
@@ -369,9 +409,10 @@ async function maybeCreateQuote(from_phone) {
              WHEN crew_notes ILIKE '%' || $4::text || '%' THEN crew_notes
              ELSE crew_notes || ' ' || $4::text
            END,
+           needs_manual_review = $5,
            last_seen_at = NOW()
-       WHERE from_phone = $5`,
-      [selectedBucket, rentcastSqft, softFlag, crewNote, from_phone]
+       WHERE from_phone = $6`,
+      [selectedBucket, rentcastSqft, softFlag, crewNote, needsManualReview, from_phone]
     );
 
     try {

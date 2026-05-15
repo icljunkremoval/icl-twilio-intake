@@ -12,6 +12,7 @@ const { notifyRealtorAssist } = require("./utils/notify_partner");
 const STATES = {
   NEW: "NEW", AWAITING_MEDIA: "AWAITING_MEDIA", AWAITING_HAZMAT: "AWAITING_HAZMAT",
   AWAITING_ADDRESS: "AWAITING_ADDRESS", AWAITING_ACCESS: "AWAITING_ACCESS",
+  AWAITING_ADDRESS_CONFIRM: "AWAITING_ADDRESS_CONFIRM",
   AWAITING_LOAD: "AWAITING_LOAD", QUOTE_READY: "QUOTE_READY",
   AWAITING_DEPOSIT: "AWAITING_DEPOSIT", BOOKING_SENT: "BOOKING_SENT",
   WINDOW_SELECTED: "WINDOW_SELECTED", AWAITING_DAY: "AWAITING_DAY", ESCALATED: "ESCALATED",
@@ -81,8 +82,25 @@ const ESCALATION_CUSTOMER_MESSAGE =
   "to walk you through your options. Feel free to send any photos\n" +
   "of the space in the meantime — it helps us get you the most\n" +
   "accurate quote possible.";
+const PATH_1_FULL_HOME = "path_1_full_home";
+const PATH_2_ROOMS = "path_2_rooms";
+const PATH_3_FEW_ITEMS = "path_3_few_items";
+const PATH1_ADDRESS_PROMPT = "Got it — full home or estate clearout. What's the property address? (Street, city, state.)";
+const PATH1_ACCESS_PROMPT =
+  "Where will the crew be working? Tap one:\n" +
+  "1) Inside the home\n" +
+  "2) Garage\n" +
+  "3) Curbside\n" +
+  "4) Mix";
+const PATH1_ADDON_PROMPT =
+  "Want to add any of these to make the property listing-ready? Reply with any numbers (e.g. \"1 3\") or SKIP:\n" +
+  "1) Deep Clean\n" +
+  "2) Pressure Wash\n" +
+  "3) Paint Touch-Ups";
 
 function getConvState(lead) { return (lead && lead.conv_state) || STATES.NEW; }
+function getIntakePath(lead) { return String(lead?.intake_path || "").trim(); }
+function isPath1Lead(lead) { return getIntakePath(lead) === PATH_1_FULL_HOME; }
 
 function logEvent(from_phone, event_type, data) {
   try { insertEvent.run({ from_phone, event_type, payload_json: JSON.stringify(data || {}), created_at: new Date().toISOString() }); } catch (e) {}
@@ -131,6 +149,7 @@ function scheduleScopeTriageTimeout(from_phone) {
       await pool.query(
         `UPDATE leads
          SET job_scope = NULL,
+             intake_path = NULL,
              conv_state = $1,
              last_seen_at = NOW()
          WHERE from_phone = $2`,
@@ -518,9 +537,21 @@ async function handleConversation(payload) {
     case STATES.AWAITING_SCOPE_TRIAGE: {
       const bodyTrim = String(body || "").trim();
       let jobScope = null;
-      if (/\b1\b/.test(bodyTrim)) jobScope = "full_home";
-      else if (/\b2\b/.test(bodyTrim)) jobScope = "room_garage";
-      else if (/\b3\b/.test(bodyTrim)) jobScope = "few_items";
+      let intakePath = null;
+      let nextState = STATES.AWAITING_MEDIA;
+      let nextPrompt = null;
+      if (/\b1\b/.test(bodyTrim)) {
+        jobScope = "full_home";
+        intakePath = PATH_1_FULL_HOME;
+        nextState = STATES.AWAITING_ADDRESS;
+        nextPrompt = PATH1_ADDRESS_PROMPT;
+      } else if (/\b2\b/.test(bodyTrim)) {
+        jobScope = "room_garage";
+        intakePath = PATH_2_ROOMS;
+      } else if (/\b3\b/.test(bodyTrim)) {
+        jobScope = "few_items";
+        intakePath = PATH_3_FEW_ITEMS;
+      }
 
       if (!jobScope) {
         await sendSms(from_phone, "Just reply 1, 2, or 3 — whichever fits best.");
@@ -531,14 +562,16 @@ async function handleConversation(payload) {
         await pool.query(
           `UPDATE leads
            SET job_scope = $1,
-               conv_state = $2,
+               intake_path = $2,
+               conv_state = $3,
                last_seen_at = NOW()
-           WHERE from_phone = $3`,
-          [jobScope, STATES.AWAITING_MEDIA, from_phone]
+           WHERE from_phone = $4`,
+          [jobScope, intakePath, nextState, from_phone]
         );
       } catch (_) {}
       clearScopeTriageTimeout(from_phone);
-      await sendPhotoPrompt(from_phone);
+      if (nextPrompt) await sendSms(from_phone, nextPrompt);
+      else await sendPhotoPrompt(from_phone);
       break;
     }
 
@@ -758,8 +791,14 @@ async function handleConversation(payload) {
           await sendSms(from_phone,"Thanks for the heads up — restricted materials need special handling. A team member will reach out to discuss options.");
         }
       } else if (bodyUpper.startsWith("NO")||bodyUpper==="N") {
-        logEvent(from_phone,"hazmat_no",{body}); setState(from_phone,STATES.AWAITING_ADDRESS);
-        await sendSms(from_phone,"What's the service address? Cross streets + ZIP works too.");
+        logEvent(from_phone,"hazmat_no",{body});
+        if (isPath1Lead(lead) && String(lead?.address_text || "").trim()) {
+          setState(from_phone, STATES.AWAITING_ACCESS);
+          await sendSms(from_phone, PATH1_ACCESS_PROMPT);
+        } else {
+          setState(from_phone,STATES.AWAITING_ADDRESS);
+          await sendSms(from_phone,"What's the service address? Cross streets + ZIP works too.");
+        }
       } else {
         await sendSms(from_phone,"Reply YES or NO — any restricted materials like paint, chemicals, or medical waste?");
       }
@@ -771,17 +810,57 @@ async function handleConversation(payload) {
       const zipMatch=body.match(/\b(\d{5})\b/); const zip=zipMatch?zipMatch[1]:null;
       await pool.query('UPDATE leads SET address_text=$1,zip=$2,zip_text=$2,last_seen_at=NOW() WHERE from_phone=$3', [body,zip,from_phone]);
       logEvent(from_phone,"address_capture",{address:body,zip});
-      await sendSms(from_phone, "Excellent — we have " + body + " confirmed. We're preparing your quote now.");
-      await advanceAfterAddress(from_phone);
+      if (isPath1Lead(lead)) {
+        setState(from_phone, STATES.AWAITING_ADDRESS_CONFIRM);
+        await sendSms(from_phone, "Got it: " + body + ". Is that right? Reply YES or NO.");
+      } else {
+        await sendSms(from_phone, "Excellent — we have " + body + " confirmed. We're preparing your quote now.");
+        await advanceAfterAddress(from_phone);
+      }
+      break;
+    }
+
+    case STATES.AWAITING_ADDRESS_CONFIRM: {
+      if (bodyUpper === "YES" || bodyUpper === "Y") {
+        setState(from_phone, STATES.AWAITING_HAZMAT);
+        await sendSms(from_phone, "Quick safety check: any paint, chemicals, fuel, batteries, asbestos, or medical waste on site? Reply YES or NO.");
+        break;
+      }
+      if (bodyUpper === "NO" || bodyUpper === "N") {
+        setState(from_phone, STATES.AWAITING_ADDRESS);
+        await sendSms(from_phone, "No problem — please resend the property address (street, city, state).");
+        break;
+      }
+      await sendSms(from_phone, "Please reply YES or NO so we can confirm the address.");
       break;
     }
 
     case STATES.AWAITING_ACCESS: {
       let accessLevel=null;
+      const path1 = isPath1Lead(lead);
+      if (path1) {
+        if (/\b1\b/.test(bodyUpper) || bodyUpper.includes("INSIDE")) accessLevel = "INSIDE_HOME";
+        else if (/\b2\b/.test(bodyUpper) || bodyUpper.includes("GARAGE")) accessLevel = "GARAGE";
+        else if (/\b3\b/.test(bodyUpper) || bodyUpper.includes("CURB")) accessLevel = "CURB";
+        else if (/\b4\b/.test(bodyUpper) || bodyUpper.includes("MIX")) accessLevel = "OTHER";
+      }
       for(const [key,val] of Object.entries(ACCESS_MAP)){if(bodyUpper.includes(key)){accessLevel=val;break;}}
-      if (!accessLevel) { await sendSms(from_phone,"Reply with: CURB / DRIVEWAY / GARAGE / INSIDE HOME / STAIRS / APARTMENT / OTHER"); break; }
+      if (!accessLevel) {
+        if (path1) await sendSms(from_phone, PATH1_ACCESS_PROMPT);
+        else await sendSms(from_phone,"Reply with: CURB / DRIVEWAY / GARAGE / INSIDE HOME / STAIRS / APARTMENT / OTHER");
+        break;
+      }
       await pool.query("UPDATE leads SET access_level=$1, customer_access_level=$1, last_seen_at=NOW() WHERE from_phone=$2", [accessLevel, from_phone]);
       logEvent(from_phone,"access_capture",{access_level:accessLevel});
+      if (path1) {
+        await pool.query(
+          "UPDATE leads SET conv_state=$1, quote_status='READY', quote_ready=1, last_seen_at=NOW() WHERE from_phone=$2",
+          [STATES.AWAITING_ADDON_SELECTION, from_phone]
+        );
+        await sendSms(from_phone, PATH1_ADDON_PROMPT);
+        scheduleAddonOfferTimeout(from_phone);
+        break;
+      }
       const afterAccess=await getLead.get(from_phone);
       const autoQuoted = await maybeAutoQuoteFromVision(from_phone, "after_access");
       if (autoQuoted) break;
@@ -875,7 +954,11 @@ async function handleConversation(payload) {
         const matches = (body.match(/\b[1-4]\b/g) || []).map((v) => Number(v));
         const unique = [...new Set(matches)].filter((n) => REALTOR_ADDON_CODE_MAP[n]);
         if (!unique.length) {
-          await sendSms(from_phone, "Reply YES to see service options, or SKIP to continue with your quote.");
+          if (isPath1Lead(lead)) {
+            await sendSms(from_phone, "Reply with add-on number(s) like 1 3, or reply SKIP to continue.");
+          } else {
+            await sendSms(from_phone, "Reply YES to see service options, or SKIP to continue with your quote.");
+          }
           scheduleAddonOfferTimeout(from_phone);
           break;
         }
